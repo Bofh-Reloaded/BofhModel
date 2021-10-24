@@ -9,10 +9,11 @@ namespace model {
 namespace test {
 
 
-TheGraph::ref  test_get_random_graph(  int how_many_known_tokens
-                                     , int how_many_possible_pair_swaps
-                                     , double random_pair_swap_rate_min
-                                     , double random_pair_swap_rate_max)
+
+TheGraph::ref  make_random_graph(  int how_many_known_tokens
+                                 , int how_many_possible_pair_swaps
+                                 , double random_pair_swap_rate_min
+                                 , double random_pair_swap_rate_max)
 {
     using namespace bofh::model;
 
