@@ -16,6 +16,11 @@ target_link_libraries(test_utils model)
 
 enable_testing()
 
-add_executable(0_graph_make_and_destroy test/0_graph_make_and_destroy.cpp)
-target_link_libraries(0_graph_make_and_destroy test_utils)
-add_test(0_graph_make_and_destroy 0_graph_make_and_destroy)
+function(create_test test_name)
+    add_executable(${test_name} ${ARGN})
+    target_link_libraries(${test_name} test_utils)
+    add_test(${test_name} ${test_name})
+endfunction()
+
+create_test(0_graph_make_and_destroy test/0_graph_make_and_destroy.cpp)
+create_test(1_elective_inverse_collimation test/1_elective_inverse_collimation.cpp)

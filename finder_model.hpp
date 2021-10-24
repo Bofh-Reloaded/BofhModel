@@ -232,33 +232,30 @@ struct TheGraph: Ref<TheGraph> {
      *       This type of lookup shouldn't be used in time-critical
      *       graph traversals anyway.
      */
-    struct NodeList: std::set<Node::ref, node_ordering>
-    {
-        std::shared_ptr<int> a;
-
-        /**
-         * @brief find a graph node by its token
-         *
-         * If the list does not contain a node for the said @p token, a new
-         * one is created, introduced and returned
-         *
-         * @return node reference
-         */
-        Node::ref node_for_token(Token::ref token)
-        {
-            auto res = find(Node::make(token)); // FIXME: pissing away almost half usec, oh my unconcerned me
-            if (res == cend())
-            {
-                auto res = Node::make(token);
-                insert(res);
-                return res;
-            }
-            return *res;
-        }
-    };
+    typedef std::set<Node::ref, node_ordering> NodeList;
 
 
     NodeList nodes;
+
+    /**
+     * @brief find a graph node by its token
+     *
+     * If the list does not contain a node for the said @p token, a new
+     * one is created, introduced and returned
+     *
+     * @return node reference
+     */
+    Node::ref node_for_token(Token::ref token)
+    {
+        auto res = nodes.find(Node::make(token)); // FIXME: pissing away almost half usec, oh my unconcerned me
+        if (res == nodes.end())
+        {
+            auto res = Node::make(token);
+            nodes.insert(res);
+            return res;
+        }
+        return *res;
+    }
 
 
     /**
@@ -273,12 +270,11 @@ struct TheGraph: Ref<TheGraph> {
     {
         assert(pair != nullptr);
 
-        auto from_node = nodes.node_for_token(pair->first);
-        auto to_node = nodes.node_for_token(pair->second);
-
-
+        auto from_node = node_for_token(pair->first);
+        auto to_node = node_for_token(pair->second);
         assert(from_node != nullptr);
         assert(to_node != nullptr);
+
         from_node->edges.emplace_back(Node::Edge::make(to_node, pair));
 
         return from_node;
