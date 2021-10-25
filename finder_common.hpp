@@ -53,3 +53,6 @@ template<typename T> struct Ref
 //    }
 
 };
+
+
+template<typename T> T& nonconst(const T& o) { return const_cast<T&>(o); }

@@ -23,4 +23,4 @@ function(create_test test_name)
 endfunction()
 
 create_test(0_graph_make_and_destroy test/0_graph_make_and_destroy.cpp)
-create_test(1_elective_inverse_collimation test/1_elective_inverse_collimation.cpp)
+#create_test(1_elective_inverse_collimation test/1_elective_inverse_collimation.cpp)

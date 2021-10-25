@@ -3,6 +3,7 @@
 #include "finder_common.hpp"
 #include <vector>
 #include <set>
+#include <map>
 
 
 namespace bofh {
@@ -147,6 +148,62 @@ struct SwapRequest: Ref<SwapRequest>
 
 
 /**
+ * @brief A collection of swap pairs.
+ *
+ * This container is intended to contain a list of redundant swap pairs:
+ * all pairs swap from token_a to token_b.
+ *
+ * It is used later to select the best available exchange rate in O(1).
+ *
+ * @warning An assumption is made here: updating of swap rates is less time
+ *          critical than determining the best swap route.
+ */
+struct PairList: Ref<PairList>, std::vector<Pair::ref>
+{
+    bool dirty = false; // if !dirty, front() gets the best known swap
+
+    bool contains(Pair::ref &ref)
+    {
+        return std::find(begin(), end(), ref) != end();
+    }
+
+    /**
+     * @brief update list sort by looking at current rates, marks the list clean
+     */
+    void cleanup(void)
+    {
+        std::sort(begin(), end(), [](auto &a, auto &b){ return a->rate < b->rate; });
+        dirty = false;
+    }
+
+    /**
+     * @brief adds a new pair to the known set
+     * @warning Adding the same pair multiple times is against the design. Hard error.
+     */
+    void add_pair(Pair::ref &p)
+    {
+        assert(! contains(p));
+        emplace_back(p);
+        dirty = true;
+    }
+
+    /**
+     * @brief get the best vailable rate
+     */
+    Pair::ref &get_best_rate(void)
+    {
+        assert(! empty());
+        if (dirty)
+        {
+            cleanup();
+        }
+        assert(! dirty);
+        return front();
+    }
+};
+
+
+/**
  * @brief Graph of possible swaps
  *
  * Let's approach the problem with a graph model.
@@ -188,26 +245,36 @@ struct TheGraph: Ref<TheGraph> {
     {
         Token::ref token; // for now let's just say that a graph node is 1:1 identified by token
 
-        // one moves walks the graph by executing token swaps. Therefore an Edge is 1:1 with possible token swaps
+        // one moves walks the graph by executing token swaps
+
         struct Edge: Ref<Edge>, std::vector<Pair::ref>
         {
             Node::ref landing; ///< next graph node we land to, if a swap is executed with using this pair
-            Pair::ref pair; ///< the token pair swap represented by this graph edge
 
-            Edge(Node::ref landing_, Pair::ref pair_):
-                landing(landing_),
-                pair(pair_)
+            // redundant swaps all leading from the same start and destination tokens.
+            // they are ranked against each other in order to pick the best one at the time of need:
+            PairList pairs;
+
+            Edge(Node::ref landing_):
+                landing(landing_)
             {
                 assert(landing != nullptr);
+            }
+
+            void add_pair(Pair::ref &pair)
+            {
                 assert(pair != nullptr);
-                assert(landing->token == pair->second);
+                assert(pair->second == landing->token);
+                pairs.add_pair(pair);
             }
         };
-        struct EdgeList: Ref<EdgeList>, std::vector<Edge::ref> {};
+
+        // a list of graph edges. It is indexed by destination token for faster access
+        // each edge describe N possible swaps from start token and destination token
+        typedef std::map<Node::ref, Edge::ref> EdgeList;
+        EdgeList edges;
 
         Node(Token::ref token_): token(token_) {}
-
-        EdgeList edges;
     };
 
     // this is used to instate a smarter than default RB-tree interal ordering for the NodeList set later
@@ -245,16 +312,11 @@ struct TheGraph: Ref<TheGraph> {
      *
      * @return node reference
      */
-    Node::ref node_for_token(Token::ref token)
+    Node::ref &node_for_token(Token::ref &token)
     {
-        auto res = nodes.find(Node::make(token)); // FIXME: pissing away almost half usec, oh my unconcerned me
-        if (res == nodes.end())
-        {
-            auto res = Node::make(token);
-            nodes.insert(res);
-            return res;
-        }
-        return *res;
+        auto node = Node::make(token);
+        auto res = nodes.emplace(std::move(node));
+        return nonconst(*res.first);
     }
 
 
@@ -270,13 +332,24 @@ struct TheGraph: Ref<TheGraph> {
     {
         assert(pair != nullptr);
 
-        auto from_node = node_for_token(pair->first);
-        auto to_node = node_for_token(pair->second);
+        auto &from_node = node_for_token(pair->first);
+        auto &to_node = node_for_token(pair->second);
         assert(from_node != nullptr);
         assert(to_node != nullptr);
 
-        from_node->edges.emplace_back(Node::Edge::make(to_node, pair));
-
+        auto i = from_node->edges.find(to_node);
+        Node::Edge *edgep;
+        if (i == from_node->edges.end())
+        {
+            // create a new edge
+            edgep = &(*from_node->edges.emplace(to_node, Node::Edge::make(to_node)).first->second);
+        }
+        else {
+            // edge already exists
+            edgep = &(*i->second);
+        }
+        auto &edge = *edgep;
+        edge.add_pair(pair);
         return from_node;
     }
 };
