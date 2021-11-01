@@ -7,6 +7,9 @@ This is a temporary script file.
 
 import networkx as nx
 
+from load_bsc_pools_graph import load_graph_from_json_coso
+
+the_graph = load_graph_from_json_coso()
 
 #Core function to find all possible 4-way exchanges in "graph" starting and coming back to "start node"
 def find_all_paths(graph, start_node, stable_list):
