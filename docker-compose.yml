@@ -1,0 +1,8 @@
+version: '3'
+
+services:
+  bsc:
+    build: .
+    image: bofh/finder
+    #    volumes:
+    #  - ./data:/data

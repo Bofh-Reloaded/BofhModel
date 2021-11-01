@@ -1,18 +1,13 @@
 #pragma once
 
 #include "finder_common.hpp"
+#include "finder_model_fwd.hpp"
+#include "main_index_fwd.hpp"
 #include <vector>
-#include <unordered_map>
-#include <set>
-#include <map>
 
 
 namespace bofh {
 namespace model {
-
-
-struct SwapPair;
-struct Token;
 
 
 typedef std::string address_t;
@@ -57,6 +52,7 @@ struct Balance: Ref<Balance>
         assert(token != nullptr);
     }
 };
+
 
 /**
  * @brief A swap between two tokens
@@ -147,11 +143,11 @@ struct TheGraph: Ref<TheGraph> {
 
     typedef std::vector<Node*> NodeList;
 
-
     NodeList nodes;
+    MainIndex *index;
+
+    TheGraph();
 };
-
-
 
 
 
