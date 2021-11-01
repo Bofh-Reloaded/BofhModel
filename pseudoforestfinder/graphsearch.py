@@ -9,18 +9,20 @@ import networkx as nx
 
 from load_bsc_pools_graph import load_graph_from_json_coso
 
-the_graph = load_graph_from_json_coso()
+#the_graph = load_graph_from_json_coso()
 
 #Core function to find all possible 4-way exchanges in "graph" starting and coming back to "start node"
 def find_all_paths(graph, start_node, stable_list):
     path_list = []
     for out_node in graph.successors(start_node): #list the nodes reached from starting node: starting direct tree
-        for in_node in graph.predecessors(start_node): #list of nodes arriving in starting nodes: starting inverse tree
-            if in_node in stable_list: #only consider stable tokens for inverse tree
+        for in_node in stable_list: #list of nodes arriving in starting nodes: starting inverse tree
+            #print("Predecessor of: ", in_node, " is ", out_node)
+            if (in_node in graph.predecessors(start_node)) & (in_node != out_node): #only consider stable tokens for inverse tree
                 for tc_node in graph.predecessors(in_node): #find nodes connecting the direct and inverse tree
                     if out_node in graph.predecessors(tc_node):
                         path = [start_node, out_node, tc_node, in_node, start_node] #make list of nodes
                         path_list.append(path)
+            #else: print("not in stable list")
     return path_list
 
 #Utility functions
@@ -57,27 +59,31 @@ edges = G.add_edge(5,6,weight=1)
 edges = G.add_edge(6,1,weight=1)
 
 
-#print(G.number_of_nodes())
-#print(G.number_of_edges())
-for line in nx.generate_edgelist(G):
-    print(line)
+print("number of nodes: ", the_graph.number_of_nodes())
+print("number of edges: ", the_graph.number_of_edges())
+#for line in nx.generate_edgelist(the_graph):
+#   if line[0] == 2:
+#       print(line)
     
-stable_nodes = [6]
-start_node = 1 
+stable_nodes = [3,4,6]
+start_node = 6 
 #print(nx.is_directed(G))
-#nx.draw(G, pos=nx.circular_layout(G), node_color='r', edge_color='b') #draw graph 
+#nx.draw(the_graph, pos=nx.circular_layout(the_graph), node_color='r', edge_color='b') #draw graph 
 #pred=G.predecessors(1)
-#for path in nx.all_simple_paths(G, source=1, target=6):
-#   if len(path)<5:
-#      print(path, " cost is:", G.subgraph(path).size(weight="weight"))
+#for x in range(1,506626):
+#    for path in nx.all_simple_paths(the_graph, source=x, target=6): 
+#        print(len(path))
+#        if len(path)<7:
+       #     print(path, " cost is:", the_graph.subgraph(path).size(weight="weight"))
 #nx.draw(G.subgraph(path), pos=nx.circular_layout(G.subgraph(path)), node_color='r', edge_color='b')
 
 
-possible_paths = find_all_paths(G, start_node, stable_nodes)
-print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths))
-print("Printing the list of possible paths and their cost:")
-for analyzed_path in possible_paths:
-    print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
+for x in range(1,7):
+    possible_paths = find_all_paths(G, x, stable_nodes)
+    print("The number of possible 4-way exchanges starting from node", x, " is: ", len(possible_paths))
+    print("Printing the list of possible paths and their cost:")
+    for analyzed_path in possible_paths:
+         print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
         
     
     
