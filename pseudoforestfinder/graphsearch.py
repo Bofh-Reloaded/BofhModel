@@ -59,8 +59,8 @@ edges = G.add_edge(5,6,weight=1)
 edges = G.add_edge(6,1,weight=1)
 
 
-print("number of nodes: ", the_graph.number_of_nodes())
-print("number of edges: ", the_graph.number_of_edges())
+print("number of nodes: ", G.number_of_nodes())
+print("number of edges: ", G.number_of_edges())
 #for line in nx.generate_edgelist(the_graph):
 #   if line[0] == 2:
 #       print(line)
