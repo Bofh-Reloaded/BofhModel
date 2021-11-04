@@ -9,7 +9,7 @@ import networkx as nx
 
 from load_bsc_pools_graph import load_graph_from_json_coso
 
-#the_graph = load_graph_from_json_coso()
+the_graph = load_graph_from_json_coso()
 
 #Core function to find all possible 4-way exchanges in "graph" starting and coming back to "start node"
 def find_all_paths(graph, start_node, stable_list):
@@ -25,6 +25,23 @@ def find_all_paths(graph, start_node, stable_list):
             #else: print("not in stable list")
     return path_list
 
+def find_all_paths_var(graph, start_node, stable_list):
+    path_list = []
+    successorslist = list(graph.successors(start_node))
+    predecessorslist = list(graph.predecessors(start_node))
+    print("number of successors: ", len(successorslist)) #green arrows
+    print("number of predecessors: ", len(predecessorslist)) #blue arrows
+    usable_nodes = list(set(stable_list) & set(predecessorslist))
+    for stable_node in usable_nodes:
+        for second_node in successorslist:
+            if stable_node != second_node:
+                tc_nodes = list(set(list(graph.successors(second_node))) & set(list(graph.predecessors(stable_node))))
+                print ("The list of tc nodes is: ", tc_nodes)
+                for tc_node in tc_nodes:
+                    path = [start_node, second_node, tc_node, stable_node, start_node]
+                    path_list.append(path)
+    return path_list
+
 #Utility functions
 def get_edge_weight(graph,start,end,key):
     dict = graph[start][end]
@@ -36,6 +53,7 @@ def compute_weights_in_path(path,graph):
     for x in range(0,len(path)-1):
        cost = cost + get_edge_weight(graph, path[x], path[x+1], "weight")
     return cost
+
 
 #Generating the graph of example on draw.io
 G = nx.MultiDiGraph()
@@ -66,7 +84,7 @@ print("number of edges: ", G.number_of_edges())
 #       print(line)
     
 stable_nodes = [3,4,6]
-start_node = 6 
+start_node = 2 
 #print(nx.is_directed(G))
 #nx.draw(the_graph, pos=nx.circular_layout(the_graph), node_color='r', edge_color='b') #draw graph 
 #pred=G.predecessors(1)
@@ -78,12 +96,19 @@ start_node = 6
 #nx.draw(G.subgraph(path), pos=nx.circular_layout(G.subgraph(path)), node_color='r', edge_color='b')
 
 
-for x in range(1,7):
-    possible_paths = find_all_paths(G, x, stable_nodes)
-    print("The number of possible 4-way exchanges starting from node", x, " is: ", len(possible_paths))
-    print("Printing the list of possible paths and their cost:")
-    for analyzed_path in possible_paths:
-         print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
+possible_paths = find_all_paths_var(the_graph, start_node, stable_nodes)
+print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths))
+print("Printing the list of possible paths and their cost:")
+for analyzed_path in possible_paths:
+    print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, the_graph))
+
+
+#for x in range(1,7):
+#    possible_paths = find_all_paths_var(G, x, stable_nodes)
+#    print("The number of possible 4-way exchanges starting from node", x, " is: ", len(possible_paths))
+#    print("Printing the list of possible paths and their cost:")
+#    for analyzed_path in possible_paths:
+#         print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
         
     
     
