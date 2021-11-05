@@ -1,25 +1,28 @@
 #pragma once
-#include "finder_model_fwd.hpp"
+#include "bofh_model_fwd.hpp"
 #include <unordered_map>
 
 namespace bofh {
 namespace model {
+namespace idx {
 
-
-enum class IndexEntity {
+enum class EntityType {
     TOKEN,
     SWAP_PAIR
 };
 
 struct IndexEntry {
-    IndexEntity type;
+    EntityType type;
     union {
         Token* token;
         SwapPair* swap_pair;
     };
+
+    IndexEntry(EntityType t): type(t) {}
 };
 
-struct MainIndex: std::unordered_map<address_t, IndexEntry> {};
+struct EntityIndex: std::unordered_map<address_t, IndexEntry> {};
 
+} // namespace idx
 } // namespace model
 } // namespace bofh

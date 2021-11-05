@@ -1,16 +1,14 @@
 #pragma once
 
-#include "finder_common.hpp"
-#include "finder_model_fwd.hpp"
-#include "main_index_fwd.hpp"
+#include "bofh_common.hpp"
+#include "bofh_model_fwd.hpp"
+#include "bofh_entity_idx_fwd.hpp"
 #include <vector>
 
 
 namespace bofh {
 namespace model {
 
-
-typedef std::string address_t;
 
 /**
  * @brief DeFi token identifier
@@ -24,7 +22,7 @@ struct Token: Ref<Token>
     const string name;
     const address_t address;
 
-    Token(const string &name_): name(name_) {}
+    Token(const string &name_, const address_t &address_): name(name_), address(address_) {}
 
     struct SwapList: std::vector<SwapPair*> {};
 
@@ -69,13 +67,11 @@ struct Balance: Ref<Balance>
  * @todo Missing defi exchange ref, contract id and stuff. All this to come later.
  */
 struct SwapPair: Ref<SwapPair> {
-    const address_t address;
-
-    Token::ref token0;
-    Token::ref token1;
-
     typedef double rate_t;
 
+    const address_t address;
+    const Token::ref token0;
+    const Token::ref token1;
     rate_t rate;
 
     void check()
@@ -85,7 +81,11 @@ struct SwapPair: Ref<SwapPair> {
         assert(rate != 0.0f);
     }
 
-    SwapPair(Token::ref token0_, Token::ref token1_, rate_t rate_):
+    SwapPair(const address_t &address_
+             , const Token::ref token0_
+             , const Token::ref token1_
+             , rate_t rate_):
+        address(address_),
         token0(token0_),
         token1(token1_),
         rate(rate_)
@@ -98,6 +98,8 @@ struct SwapPair: Ref<SwapPair> {
     {
         assert(src != nullptr);
         assert(src->token == token0);
+        enum { this_has_been_properly_investigated = false };
+        assert(this_has_been_properly_investigated);
 
         return Balance::make(token1, swap(src->amount));
     }
@@ -112,7 +114,7 @@ struct SwapPair: Ref<SwapPair> {
      */
     ref reciprocal(void) const
     {
-        return SwapPair::make(token1, token0, 1.0/rate);
+        return SwapPair::make(address, token1, token0, 1.0/rate);
     }
 };
 
@@ -144,9 +146,47 @@ struct TheGraph: Ref<TheGraph> {
     typedef std::vector<Node*> NodeList;
 
     NodeList nodes;
-    MainIndex *index;
+    idx::EntityIndex *index;
 
     TheGraph();
+
+    /**
+     * @brief Introduce a new token node into the graph, if not existing.
+     * If the token already exists, do nothing and return its reference.
+     * @param name
+     * @param address
+     * @return reference to the token graph node
+     */
+    const Token *add_token(const std::string &name, const address_t &address);
+
+    /**
+     * @brief Introduce a new swap pair edge into the graph, if not existing.
+     * If the pair already exists, do nothing and return its reference.
+     * @param address
+     * @param token0
+     * @param token1
+     * @param rate
+     * @return reference to the swap pair
+     */
+    const SwapPair *add_swap_pair(const address_t &address
+                            , const Token::ref token0
+                            , const Token::ref token1
+                            , SwapPair::rate_t rate);
+
+    /**
+     * @brief fetch a known token node
+     * @param address
+     * @return reference to the token node, if existing. Otherwise nullptr
+     */
+    const Token *lookup_token(const address_t &address);
+
+    /**
+     * @brief fetch a known swap pair edge
+     * @param address
+     * @return reference to the swap pair, if existing. Otherwise nullptr
+     */
+    const SwapPair *lookup_swap_pair(const address_t &address);
+
 };
 
 

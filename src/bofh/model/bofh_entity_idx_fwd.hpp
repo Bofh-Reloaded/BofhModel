@@ -2,11 +2,11 @@
 
 namespace bofh {
 namespace model {
+namespace idx {
 
+struct EntityIndex;
 
-struct MainIndex;
-
-
+} // namespace idx
 } // namespace model
 } // namespace bofh
 

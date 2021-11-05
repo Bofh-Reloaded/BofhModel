@@ -28,13 +28,13 @@ using std::string;
  */
 template<typename T> struct Ref
 {
-    // step 1 - slower, safe gc memory model:
-    typedef std::shared_ptr<T> ref;
-    template <typename ... Args>
-    static ref make(Args&& ... args)
-    {
-        return std::make_shared<T>(std::forward<Args>(args)...);
-    }
+//    // step 1 - slower, safe gc memory model:
+//    typedef std::shared_ptr<T> ref;
+//    template <typename ... Args>
+//    static ref make(Args&& ... args)
+//    {
+//        return std::make_shared<T>(std::forward<Args>(args)...);
+//    }
 
 //    // step 2 - unique_ptr. Not really convinced this is ideal.
 //    typedef std::unique_ptr<T> ptr;
@@ -44,15 +44,19 @@ template<typename T> struct Ref
 //        return std::make_unique<T>(std::forward<Args>(args)...);
 //    }
 
-//    // step 3 - using raw pointers. Might become necessary if moving
-//    // over to CUDA, ASIC or other silicon booster.
-//    typedef T *ref;
-//    template <typename ... Args> static ref make(Args&& ... args)
-//    {
-//        return new T(std::forward<Args>(args)...);
-//    }
+    // Screw it. More speed below.
+
+    // step 3 - using raw pointers. Might become necessary if moving
+    // over to CUDA, ASIC or other silicon booster.
+    typedef T *ref;
+    template <typename ... Args> static ref make(Args&& ... args)
+    {
+        return new T(std::forward<Args>(args)...);
+    }
 
 };
 
-
+/**
+ * Idiomatically cast constness away from stuff
+ */
 template<typename T> T& nonconst(const T& o) { return const_cast<T&>(o); }
