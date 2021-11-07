@@ -26,9 +26,12 @@ CREATE TABLE pools(
     token1_id INTEGER NOT NULL,
     reserve0 TEXT DEFAULT NULL, -- uint256 stored as TEXT representation
     reserve1 TEXT DEFAULT NULL, -- uint256 stored as TEXT representation
+    updated INTEGER NOT NULL DEFAULT 0, -- set this int > 0 to signal the nodes to reread this entry
     UNIQUE(address)
 );
 
 CREATE UNIQUE INDEX tokens_address_idx ON tokens(address);
 CREATE UNIQUE INDEX exchanges_name_idx ON exchanges(name);
 CREATE UNIQUE INDEX pools_address_idx ON pools(address);
+CREATE INDEX pools_updated_idx ON pools(updated);
+

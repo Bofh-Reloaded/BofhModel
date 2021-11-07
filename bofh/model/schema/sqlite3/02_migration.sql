@@ -5,3 +5,8 @@
 
 ALTER TABLE pools ADD COLUMN reserve0 TEXT DEFAULT NULL;
 ALTER TABLE pools ADD COLUMN reserve1 TEXT DEFAULT NULL;
+ALTER TABLE pools ADD COLUMN updated INTEGER NOT NULL DEFAULT 0;
+
+CREATE INDEX pools_updated_idx ON pools(updated);
+
+
