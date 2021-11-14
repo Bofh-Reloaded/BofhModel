@@ -1,2 +1,4 @@
 docopt
 networkx
+web3~=5.24.0
+websockets~=9.1

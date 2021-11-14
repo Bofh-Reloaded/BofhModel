@@ -15,8 +15,8 @@ INSERT INTO schema_version(version) VALUES (2);
 
 CREATE TABLE tokens(
     id INTEGER PRIMARY KEY,
-    address TEXT NOT NULL,
     name TEXT,
+    address TEXT NOT NULL,
     is_stabletoken INTEGER NOT NULL DEFAULT 0
 );
 
@@ -35,20 +35,13 @@ CREATE TABLE exchanges(
 --                                    IMPORTANT. Runtime should make sure that there are no two entries
 --                                    sharing the same exchange_id, token0_id and token1_id, and this must be
 --                                    held true even after swapping the two tokens. (Swaps are bidirectional)
--- reserve0, reserve1) Textual representation of the uint256 representing the balance of stored reserve for
---                     token0 and token1 in the liquidity pool.
--- updated) An external should take care to set updated=unix_time() (or updated=strftime('%s', 'now') in SQLite lingo)
---          in order to mark those records that need to be reread by the agent.
 
 CREATE TABLE pools(
     id INTEGER PRIMARY KEY,
     address TEXT NOT NULL,
     exchange_id INTEGER NOT NULL,
     token0_id INTEGER NOT NULL,
-    token1_id INTEGER NOT NULL,
-    reserve0 TEXT DEFAULT NULL, -- uint256 stored as TEXT representation
-    reserve1 TEXT DEFAULT NULL, -- uint256 stored as TEXT representation
-    updated INTEGER NOT NULL DEFAULT 0
+    token1_id INTEGER NOT NULL
 );
 
 
@@ -57,5 +50,4 @@ CREATE TABLE pools(
 CREATE UNIQUE INDEX tokens_address_idx ON tokens(address);
 CREATE UNIQUE INDEX exchanges_name_idx ON exchanges(name);
 CREATE UNIQUE INDEX pools_address_idx ON pools(address);
-CREATE INDEX pools_updated_idx ON pools(updated);
 

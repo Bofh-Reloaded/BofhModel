@@ -38,31 +38,44 @@ endif()
 include_directories(${Python_INCLUDE_DIR})
 
 
-# Build library as a Python module. (Using Boost.Python)
-add_library(bofh_model MODULE
+set(MODEL_SRC
     src/bofh/model/bofh_common.hpp
     src/bofh/model/bofh_entity_idx.hpp
     src/bofh/model/bofh_entity_idx_fwd.hpp
+    src/bofh/model/bofh_types.cpp
+    src/bofh/model/bofh_types.hpp
     src/bofh/model/bofh_model.cpp
     src/bofh/model/bofh_model.hpp
     src/bofh/model/bofh_model_fwd.hpp
+    )
+
+# # Build library as a Python module. (Using Boost.Python)
+# add_library(bofh_model SHARED
+#     )
+# target_include_directories(bofh_model PUBLIC src)
+# target_link_libraries(bofh_model ${Boost_LIBRARIES})
+#install(TARGETS bofh_model LIBRARY DESTINATION lib)
+
+# Build library as a Python module. (Using Boost.Python)
+add_library(bofh_model_ext MODULE
+    ${MODEL_SRC}
     src/bofh/model/bofh_model_py_ext.cpp
     )
-target_include_directories(bofh_model PUBLIC model)
-target_link_libraries(bofh_model ${Boost_LIBRARIES})
-target_include_directories(bofh_model PRIVATE ${Python_INCLUDE_DIRS})
-set_target_properties(bofh_model PROPERTIES PREFIX "") # build library without "lib{x}" name
-install(TARGETS bofh_model DESTINATION ${Python_SITELIB})
 
-
-
+#target_link_libraries(bofh_model_ext bofh_model)
+target_include_directories(bofh_model_ext PRIVATE ${Python_INCLUDE_DIRS})
+set_target_properties(bofh_model_ext PROPERTIES PREFIX "") # build library without "lib{x}" name
+target_link_libraries(bofh_model_ext ${Boost_LIBRARIES})
+install(TARGETS bofh_model_ext DESTINATION ${Python_SITELIB})
 
 
 enable_testing()
 
-#function(create_test test_name)
-#    add_executable(${test_name} ${ARGN})
-#    target_link_libraries(${test_name} test_utils)
-#    add_test(${test_name} ${test_name})
-#endfunction()
 
+function(create_test test_name)
+    add_executable(${test_name} EXCLUDE_FROM_ALL ${ARGN})
+    target_link_libraries(${test_name} bofh_model)
+    add_test(${test_name} ${test_name})
+endfunction()
+
+create_test(test_address test/test_address.cpp)

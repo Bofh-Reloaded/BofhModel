@@ -69,17 +69,36 @@ RUN apt-get -qq update && apt-get install -q -y software-properties-common && \
     add-apt-repository ppa:ubuntu-toolchain-r/test -y && \
     apt-get -qq update && apt-get install -qy ${DEB_PACKAGES}
 RUN echo ${TOOLCHAIN_ROOT}/lib>/etc/ld.so.conf.d/toolchain.conf && ldconfig
+RUN python3 -m pip install jupyterlab
 
 WORKDIR ${SRC_ROOT}
-COPY CMakeLists.txt ${SRC_ROOT}
+
+# preload Python requirements ^^"
+# It's unnecessary but avoids continuously rerunning this image step as I hack the sources
+COPY requirements.txt ${SRC_ROOT}
+COPY bofh.collector/requirements.txt ${SRC_ROOT}/requirements2.txt
+RUN pip3 install -r requirements.txt \
+    && pip3 install -r requirements2.txt
+
+# Now add the rest of the sources 'n stuff
+COPY \
+    CMakeLists.txt \
+    docker-compose.yml \
+    setup.py \
+    ${SRC_ROOT}
+COPY bofh ${SRC_ROOT}/bofh
+COPY test ${SRC_ROOT}/test
+COPY support ${SRC_ROOT}/support
+COPY bofh.collector ${SRC_ROOT}/bofh.collector
 COPY src ${SRC_ROOT}/src
+
+
 
 ENV BUILD_ROOT=/build
 WORKDIR ${BUILD_ROOT}
-RUN cmake ${SRC_ROOT} \
-    -DBOOST_ROOT=${TOOLCHAIN_ROOT} \
-    -DPYTHON_ROOT=${TOOLCHAIN_ROOT} \
-    -DCMAKE_INSTALL_PREFIX=${TOOLCHAIN_ROOT} \
-    -DCMAKE_BUILD_TYPE=Debug
+EXPOSE 8888
+RUN bash ${SRC_ROOT}/support/launch_cmake.sh
+
 ENTRYPOINT /bin/bash
+CMD  ["jupyter-lab", "--allow-root", "--ip", "0.0.0.0"]
 

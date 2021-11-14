@@ -1,14 +1,14 @@
 """Import BSC pools from legacy bsc_pools.json datafile.
 
-Usage: bofh.model.import_bsc_pools [options] <dbfile> <bsc_pools_json_file>
+Usage: bofh.model.import_bsc_pools [options] <bsc_pools_json_file>
 
 Options:
   -h  --help
-  -d, --driver=<name> sqlapi driver name [default: sqlite3]
-  -v, --verbose       debug output
-  --skip_duplicates   skip token and swap duplicates
+  -d, --dsn=<connection_str>    DB dsn connection string [default: sqlite3://status.db]
+  -v, --verbose                 debug output
+  --skip_duplicates             skip token and swap duplicates
 """
-from logging import basicConfig, getLogger
+from logging import basicConfig
 
 from docopt import docopt
 
@@ -59,8 +59,8 @@ def import_pools_and_tokens_from_json_coso(filepath, db: ModelDB, ignore_duplica
 def main():
     arguments = docopt(__doc__)
     basicConfig(level=arguments["--verbose"] and "DEBUG" or "INFO")
-    db = ModelDB(fpath=arguments["<dbfile>"], driver_name=arguments["--driver"])
-    db.open()
+    db = ModelDB(arguments["--dsn"])
+    db.open_and_priming()
     import_pools_and_tokens_from_json_coso(arguments["<bsc_pools_json_file>"]
                                            , db
                                            , ignore_duplicates=arguments["--skip_duplicates"])

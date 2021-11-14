@@ -5,4 +5,8 @@ services:
     build: .
     image: bofh/finder
     volumes:
-    - .:/src
+        - .:/src
+    #network_mode: "host"
+    ports:
+    - "8888:8888"
+

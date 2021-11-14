@@ -20,6 +20,7 @@ CLASSIFIERS = [
 ]
 ENTRY_POINTS={'console_scripts':[
     'bofh.model.initdb = bofh.model.initdb:main',
+    'bofh.model.runner1 = bofh.model.runner1:main',
     'bofh.model.import_bsc_pools = bofh.model.import_bsc_pools:main',
 ] }
 
