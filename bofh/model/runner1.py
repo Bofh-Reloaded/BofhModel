@@ -1,3 +1,9 @@
+from asyncio import get_event_loop, Event
+from threading import Thread
+from time import sleep
+
+from jsonrpc_websocket import Server
+
 from bofh.utils.contract_abis import ContractABIs
 from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, Web3RequestExecutor
 
@@ -13,6 +19,7 @@ Options:
   -j <n>                        number of RPC data ingest workers, default one per hardware thread. Only used during initialization phase
   -v, --verbose                 debug output
   --chunk_size=<n>              preloaded work chunk size per each worker [default: 100]
+  --pred_polling_interval=<n>   Web3 prediction polling internal in millisecs [default: 1000]
 """ % Web3Connector.DEFAULT_URI_WSRPC
 
 from dataclasses import dataclass
@@ -20,6 +27,9 @@ from logging import getLogger, basicConfig
 
 from bofh.model.database import ModelDB
 from bofh_model_ext import TheGraph
+
+
+PREDICTION_LOG_TOPIC0 = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"  # Keccak256("Swap(address,uint256,uint256,uint256,uint256,address)")
 
 
 @dataclass
@@ -30,6 +40,7 @@ class Args:
     web3_rpc_url: str = None
     max_workers: int = 0
     chunk_size: int = 0
+    pred_polling_interval: int = 0
 
     @staticmethod
     def default(arg, d):
@@ -47,6 +58,7 @@ class Args:
             , web3_rpc_url=cls.default(args["--connection_url"], 0)
             , max_workers=int(cls.default(args["-j"], 0))
             , chunk_size=int(cls.default(args["--chunk_size"], 100))
+            , pred_polling_interval=int(cls.default(args["--pred_polling_interval"], 1000))
         )
 
 
@@ -75,6 +87,8 @@ class Runner:
         self.pools_map = dict()
         self.skip = 0
         self.tot = 0
+        self.ioloop = get_event_loop()
+        # self.polling_started = Event()
 
     @property
     def pools_ctr(self):
@@ -132,6 +146,29 @@ class Runner:
             print(list(executor.map(getReserves, self.pools_iterator(), chunksize=self.args.chunk_size)))
             executor.shutdown(wait=True)
 
+    async def prediction_polling_task(self):
+        # await self.polling_started.wait()
+        server = Server(self.args.web3_rpc_url)
+        self.latestBlockNumber = 0
+        try:
+            await server.ws_connect()
+            while True:  # self.polling_started.is_set():
+                result = await server.eth_consPredictLogs(0, 0, PREDICTION_LOG_TOPIC0)
+                if result and result.get("logs"):
+                    blockNumber = result["blockNumber"]
+                    if blockNumber > self.latestBlockNumber:
+                        self.latestBlockNumber = blockNumber
+                        self.log.info("block %r, found %r log predictions" % (self.latestBlockNumber, len(result["logs"])))
+                        for log in result["logs"]:
+                            self.log.info("log %r@tx %s data: %s", int(log["logIndex"], 16), log["tx"], log["data"], )
+                sleep(self.args.pred_polling_interval * 0.001)
+        except:
+            self.log.exception("Error in prediction polling thread")
+        finally:
+            await server.close()
+
+    def poll_prediction(self):
+        self.ioloop.run_until_complete(self.prediction_polling_task())
 
     """
     def list_pools_db(self):
@@ -217,6 +254,7 @@ def main():
     runner.preload_tokens()
     runner.preload_pools()
     runner.preload_balances()
+    runner.poll_prediction()
 
 
 if __name__ == '__main__':
