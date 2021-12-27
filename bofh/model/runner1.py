@@ -1,4 +1,5 @@
-from bofh.utils.web3 import Web3Connector
+from bofh.utils.contract_abis import ContractABIs
+from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, Web3RequestExecutor
 
 __doc__="""Start model runner.
 
@@ -49,6 +50,18 @@ class Args:
         )
 
 
+def getReserves(pool_address):
+    try:
+        exe = getReserves.exe
+    except AttributeError:
+        exe = getReserves.exe = Web3RequestExecutor()
+    reserves = exe.get_contract(pool_address, ContractABIs.swapPair).functions.getReserves().call()
+    return (pool_address
+            , reserves[0]
+            , reserves[1]
+            )
+
+
 class Runner:
     log = getLogger(__name__)
 
@@ -60,8 +73,15 @@ class Runner:
         self.exchanges_map = dict()
         self.tokens_map = dict()
         self.pools_map = dict()
+        self.skip = 0
+        self.tot = 0
+
+    @property
+    def pools_ctr(self):
+        return len(self.pools_map)
 
     def preload_exchanges(self):
+        self.log.info("preloading exchanges...")
         with self.db as curs:
             for id, *args in curs.list_exchanges():
                 addr = self.graph.add_exchange(*args)
@@ -69,6 +89,7 @@ class Runner:
                 self.exchanges_map[id] = addr
 
     def preload_tokens(self):
+        self.log.info("preloading tokens...")
         with self.db as curs:
             for id, *args, is_stabletoken in curs.list_tokens():
                 addr = self.graph.add_token(*args, bool(is_stabletoken))
@@ -76,19 +97,41 @@ class Runner:
                     raise RuntimeError("integrity error: token address is already not of a token: id=%r, %r" % (id, args))
                 self.tokens_map[id] = addr
 
-    skip = 0
-    tot = 0
     def preload_pools(self):
-
+        self.log.info("preloading pools...")
         with self.db as curs:
             for id, address, exchange_id, token0_id, token1_id in curs.list_pools():
                 addr = self.graph.add_swap_pair(address, self.tokens_map[token0_id], self.tokens_map[token1_id])
                 self.tot += 1
                 if addr is None:
                     self.skip += 1
-                    print ("integrity error: token address is already not of a pool: id=%r, %r -- skip %r over %r" % (id,address, self.skip, self.tot))
-                    #raise RuntimeError("integrity error: token address is already not of a pool: id=%r, %r" % (id,address))
-                #self.pools_map[id] = addr
+                    self.log.warning("integrity error: token address is already not of a pool: id=%r, %r -- skip %r over %r", id, address, self.skip, self.tot)
+                else:
+                    self.pools_map[id] = addr
+                if self.args.pools_limit and self.pools_ctr >= self.args.pools_limit:
+                    self.log.info("stopping after loading %r pools, as per effect of -n cli parameter", self.pools_ctr)
+                    break
+
+    def pools_iterator(self):
+        for pool in self.pools_map.values():
+            yield str(pool.get_address())
+
+    def preload_balances(self):
+        self.log.info("fetching balances via Web3...")
+        with Web3PoolExecutor(connection_uri=self.args.web3_rpc_url, max_workers=self.args.max_workers) as executor:
+            self.log.info("fetching balances via Web3:"
+                     "\n\t- %r pool getReserve requests"
+                     "\n\t- on Web3 servant at %s"
+                     "\n\t- using %d workers"
+                     "\n\t- each with a %d preload queue"
+                      , self.pools_ctr
+                      , self.args.web3_rpc_url
+                      , self.args.max_workers
+                      , self.args.chunk_size
+                      )
+            print(list(executor.map(getReserves, self.pools_iterator(), chunksize=self.args.chunk_size)))
+            executor.shutdown(wait=True)
+
 
     """
     def list_pools_db(self):
@@ -173,6 +216,7 @@ def main():
     runner.preload_exchanges()
     runner.preload_tokens()
     runner.preload_pools()
+    runner.preload_balances()
 
 
 if __name__ == '__main__':
