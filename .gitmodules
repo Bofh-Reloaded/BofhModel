@@ -1,3 +1,0 @@
-[submodule "bofh.collector"]
-	path = bofh.collector
-	url = git@github.com:Bofh-Reloaded/pyBofhCollector.git
