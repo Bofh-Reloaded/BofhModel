@@ -21,6 +21,7 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     class_<Token, dont_make_copies>("Token", no_init)
             .def_readonly("name"   , &Token::name)
             .def_readonly("address", &Token::address)
+            .def("get_address" , &Token::get_address    , dont_manage_returned_pointer())
             ;
 
     class_<Exchange, dont_make_copies>("Exchange", no_init)
@@ -31,6 +32,7 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def_readonly("address", &SwapPair::address)
             .def_readonly("token0" , &SwapPair::token0)
             .def_readonly("token1" , &SwapPair::token1)
+            .def("get_address" , &SwapPair::get_address    , dont_manage_returned_pointer())
             ;
 
     class_<TheGraph, dont_make_copies>("TheGraph")

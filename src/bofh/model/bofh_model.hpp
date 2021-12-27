@@ -51,6 +51,8 @@ struct Token: Ref<Token>
 
     struct SwapList: std::vector<SwapPair*> {};
 
+    const address_t &get_address(void) const { return *address; }
+
     SwapList swaps;
 };
 
@@ -95,6 +97,9 @@ struct SwapPair: Ref<SwapPair> {
     {
         check();
     }
+
+    const address_t &get_address(void) const { return *address; }
+
 };
 
 
