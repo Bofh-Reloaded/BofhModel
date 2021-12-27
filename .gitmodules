@@ -1,0 +1,3 @@
+[submodule "bofh.utils"]
+	path = bofh.utils
+	url = git@github.com:Bofh-Reloaded/BofhUtils.git
