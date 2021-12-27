@@ -18,6 +18,12 @@ then
         exit 1
 fi
 
+# Look for actual boost directory
+
+echo "**** build SOURCES at $SRC_ROOT "
+echo "**** using TOOLCHAIN at $TOOLCHAIN_ROOT"
+echo "**** in BUILD directory $BUILD_ROOT "
+
 mkdir -p $BUILD_ROOT
 cd $BUILD_ROOT \
     && cmake ${SRC_ROOT} \
@@ -26,4 +32,3 @@ cd $BUILD_ROOT \
         -DCMAKE_INSTALL_PREFIX=${TOOLCHAIN_ROOT} \
         -DCMAKE_BUILD_TYPE=Debug \
         -DCMAKE_INSTALL_PREFIX=${TOOLCHAIN_ROOT}
-

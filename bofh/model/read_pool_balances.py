@@ -1,3 +1,14 @@
+"""
+#### DEPRECATED ####
+#### DO NOT USE ####
+
+Superseded by bofh.collector, at https://github.com/Bofh-Reloaded/BofhCollector
+"""
+raise RuntimeError(__doc__)
+
+## TODO: remove file
+
+
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor

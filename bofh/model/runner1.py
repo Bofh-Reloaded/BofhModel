@@ -1,16 +1,19 @@
-"""Start model runner.
+from bofh.utils.web3 import Web3Connector
+
+__doc__="""Start model runner.
 
 Usage: bofh.model.runner1 [options]
 
 Options:
   -h  --help
   -d, --dsn=<connection_str>    DB dsn connection string [default: sqlite3://status.db]
-  -c, --connection_url=<url>    Web3 RPC connection URL [default: ws://localhost:8546]
+  -c, --connection_url=<url>    Web3 RPC connection URL [default: %s]
   -n <n>                        number of pools to query before exit (benchmark mode)
   -j <n>                        number of RPC data ingest workers, default one per hardware thread. Only used during initialization phase
   -v, --verbose                 debug output
   --chunk_size=<n>              preloaded work chunk size per each worker [default: 100]
-"""
+""" % Web3Connector.DEFAULT_URI_WSRPC
+
 from dataclasses import dataclass
 from logging import getLogger, basicConfig
 

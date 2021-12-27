@@ -80,25 +80,26 @@ COPY bofh.collector/requirements.txt ${SRC_ROOT}/requirements2.txt
 RUN pip3 install -r requirements.txt \
     && pip3 install -r requirements2.txt
 
-# Now add the rest of the sources 'n stuff
-COPY \
-    CMakeLists.txt \
-    docker-compose.yml \
-    setup.py \
-    ${SRC_ROOT}
-COPY bofh ${SRC_ROOT}/bofh
-COPY test ${SRC_ROOT}/test
-COPY support ${SRC_ROOT}/support
-COPY bofh.collector ${SRC_ROOT}/bofh.collector
-COPY src ${SRC_ROOT}/src
+## Now add the rest of the sources 'n stuff
+#COPY \
+#    CMakeLists.txt \
+#    docker-compose.yml \
+#    setup.py \
+#    ${SRC_ROOT}
+#COPY bofh ${SRC_ROOT}/bofh
+#COPY test ${SRC_ROOT}/test
+#COPY support ${SRC_ROOT}/support
+#COPY bofh.collector ${SRC_ROOT}/bofh.collector
+#COPY src ${SRC_ROOT}/src
 
 
 
 ENV BUILD_ROOT=/build
 WORKDIR ${BUILD_ROOT}
 EXPOSE 8888
-RUN bash ${SRC_ROOT}/support/launch_cmake.sh
+#RUN bash ${SRC_ROOT}/support/launch_cmake.sh
 
 ENTRYPOINT /bin/bash
-CMD  ["jupyter-lab", "--allow-root", "--ip", "0.0.0.0"]
+#CMD  ["jupyter-lab", "--allow-root", "--ip", "0.0.0.0"]
+CMD  ["sleep", "1000000"]
 
