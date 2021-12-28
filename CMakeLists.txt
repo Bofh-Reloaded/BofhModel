@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.17)
 
 project(finder LANGUAGES C CXX)
 
@@ -9,70 +9,73 @@ endif()
 
 set(CMAKE_CXX_STANDARD 20)
 
-if (NOT DEVELOPMENT)
-    # This is production: all dependencies are available. Look for them
-
-    # Find libboost
-    if(NOT BOOST_ROOT)
-        set(Boost_NO_SYSTEM_PATHS ON)
-        set(BOOST_ROOT boost)
-    endif()
-    find_package(Boost REQUIRED)
-    message("Using boost headers at ${Boost_INCLUDE_DIRS}")
-    include_directories(${Boost_INCLUDE_DIRS})
-
-    # find CPython interpreter and libs
-    find_package(Python COMPONENTS Interpreter Development)
-    if (NOT Python_Development_FOUND)
-        message(FATAL_ERROR "Python headers and lib not found")
-    endif()
-    if (Python_VERSION_MAJOR LESS 3 OR Python_VERSION_MINOR LESS 8)
-    #    message(FATAL_ERROR "At least Python3.8+ is required (found: ${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}.${Python_VERSION_PATCH})")
-    endif()
-    message("Targeting Python ${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}.${Python_VERSION_PATCH} at ${Python_EXECUTABLE} (headers ${Python_INCLUDE_DIR}, libs ${Python_LIBRARY})")
-    if(Python_INCLUDE_DIR)
-        include_directories(${Python_INCLUDE_DIR})
-    endif()
-
-else()
-    # This branch is only here to appease CLion/QTCreator/VStudio or other editor
-    # that look into CMake project metadata.
-    # Otherwise the missing dependencies would drive me mad.
-
-    include_directories(${CMAKE_CURRENT_PROJECT_DIR}/boost)
+# Find libboost
+if(BOOST_ROOT)
+    set(Boost_NO_SYSTEM_PATHS ON)
 endif()
+find_package(Boost COMPONENTS python REQUIRED)
+message("Using boost headers at ${Boost_INCLUDE_DIRS}")
+include_directories(${Boost_INCLUDE_DIRS})
 
 
+# find CPython interpreter and libs
+if(PYTHON_ROOT)
+    set(Python_ROOT_DIR "${PYTHON_ROOT}")
+    set(Python_FIND_STRATEGY LOCATION)
+endif()
+find_package(Python 3.8 COMPONENTS Interpreter Development REQUIRED)
+message("**** Targeting Python ${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}.${Python_VERSION_PATCH} at ${Python_EXECUTABLE}")
+message("**** Python_Development_FOUND=${Python_Development_FOUND}")
+message("**** Python_INCLUDE_DIRS=${Python_INCLUDE_DIRS}")
+message("**** Python_LIBRARIES=${Python_LIBRARIES}")
+message("**** Python_EXECUTABLE=${Python_EXECUTABLE}")
+message("**** Python_LINK_OPTIONS=${Python_LINK_OPTIONS}")
+message("**** Python_RUNTIME_LIBRARY_DIRS=${Python_RUNTIME_LIBRARY_DIRS}")
+message("**** Python_SITELIB=${Python_SITELIB}")
+if (NOT Python_Development_FOUND OR NOT Python_LIBRARIES OR NOT Python_EXECUTABLE OR NOT Python_INCLUDE_DIRS OR NOT Python_SITELIB)
+    message(FATAL_ERROR "Necessary Python headers and/or lib not found")
+endif()
+include_directories(${Python_INCLUDE_DIR})
 
-add_library(model
-    model/finder_model.cpp
-    model/finder_model.hpp
-    model/finder_model_python.cpp
-    model/finder_model_python.hpp
-    model/finder_model_fwd.hpp
-    model/finder_common.hpp
-    model/main_index.cpp
-    model/main_index.hpp
-    model/main_index_fwd.hpp
+
+set(MODEL_SRC
+    src/bofh/model/bofh_common.hpp
+    src/bofh/model/bofh_entity_idx.hpp
+    src/bofh/model/bofh_entity_idx_fwd.hpp
+    src/bofh/model/bofh_types.cpp
+    src/bofh/model/bofh_types.hpp
+    src/bofh/model/bofh_model.cpp
+    src/bofh/model/bofh_model.hpp
+    src/bofh/model/bofh_model_fwd.hpp
     )
-target_include_directories(model PUBLIC model)
 
+# # Build library as a Python module. (Using Boost.Python)
+# add_library(bofh_model SHARED
+#     )
+# target_include_directories(bofh_model PUBLIC src)
+# target_link_libraries(bofh_model ${Boost_LIBRARIES})
+#install(TARGETS bofh_model LIBRARY DESTINATION lib)
 
-add_library(test_utils test/test_utils.cpp test/test_utils.hpp)
-target_link_libraries(test_utils model)
-target_include_directories(test_utils PUBLIC test)
+# Build library as a Python module. (Using Boost.Python)
+add_library(bofh_model_ext MODULE
+    ${MODEL_SRC}
+    src/bofh/model/bofh_model_py_ext.cpp
+    )
+
+#target_link_libraries(bofh_model_ext bofh_model)
+target_include_directories(bofh_model_ext PRIVATE ${Python_INCLUDE_DIRS})
+set_target_properties(bofh_model_ext PROPERTIES PREFIX "") # build library without "lib{x}" name
+target_link_libraries(bofh_model_ext ${Boost_LIBRARIES})
+install(TARGETS bofh_model_ext DESTINATION ${Python_SITELIB})
+
 
 enable_testing()
 
+
 function(create_test test_name)
-    add_executable(${test_name} ${ARGN})
-    target_link_libraries(${test_name} test_utils)
+    add_executable(${test_name} EXCLUDE_FROM_ALL ${ARGN})
+    target_link_libraries(${test_name} bofh_model)
     add_test(${test_name} ${test_name})
 endfunction()
 
-create_test(0_graph_make_and_destroy test/0_graph_make_and_destroy.cpp)
-
-#create_test(1_elective_inverse_collimation test/1_elective_inverse_collimation.cpp)
-#set_target_properties(1_elective_inverse_collimation PROPERTIES EXCLUDE_FROM_ALL 1 EXCLUDE_FROM_DEFAULT_BUILD 1)
-
-#create_test(2_balance_estimator test/2_balance_estimator.cpp)
+create_test(test_address test/test_address.cpp)

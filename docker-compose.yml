@@ -1,8 +1,12 @@
 version: '3'
 
 services:
-  bsc:
+  bofh_model:
     build: .
     image: bofh/finder
-    #    volumes:
-    #  - ./data:/data
+    volumes:
+        - .:/src
+    network_mode: "host"
+    #ports:
+    #- "8888:8888"
+

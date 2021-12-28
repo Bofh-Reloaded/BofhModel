@@ -2,11 +2,12 @@
 
 namespace bofh {
 namespace model {
+namespace idx {
 
-struct Token;
-struct Balance;
-struct SwapPair;
-struct TheGraph;
+struct EntityIndex;
 
+} // namespace idx
 } // namespace model
 } // namespace bofh
+
+
