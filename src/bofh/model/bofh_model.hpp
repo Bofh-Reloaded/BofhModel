@@ -51,8 +51,6 @@ struct Token: Ref<Token>
 
     struct SwapList: std::vector<SwapPair*> {};
 
-    const address_t &get_address(void) const { return *address; }
-
     SwapList swaps;
 };
 
@@ -97,9 +95,6 @@ struct SwapPair: Ref<SwapPair> {
     {
         check();
     }
-
-    const address_t &get_address(void) const { return *address; }
-
 };
 
 
@@ -183,6 +178,7 @@ struct TheGraph: Ref<TheGraph> {
      * @return reference to the swap pair, if existing. Otherwise nullptr
      */
     const SwapPair *lookup_swap_pair(const address_t &address);
+    const SwapPair *lookup_swap_pair(const char *address) { return lookup_swap_pair(address_t(address)); }
 
 };
 

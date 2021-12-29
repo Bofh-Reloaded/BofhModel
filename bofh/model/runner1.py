@@ -5,7 +5,7 @@ from time import sleep
 from jsonrpc_websocket import Server
 
 from bofh.utils.contract_abis import ContractABIs
-from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, Web3RequestExecutor
+from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, Web3RequestExecutor, JSONRPCConnector
 
 __doc__="""Start model runner.
 
@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from logging import getLogger, basicConfig
 
 from bofh.model.database import ModelDB
-from bofh_model_ext import TheGraph
+from bofh_model_ext import TheGraph, balance_t
 
 
 PREDICTION_LOG_TOPIC0 = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"  # Keccak256("Swap(address,uint256,uint256,uint256,uint256,address)")
@@ -65,13 +65,27 @@ class Args:
 def getReserves(pool_address):
     try:
         exe = getReserves.exe
+        ioloop = getReserves.ioloop
     except AttributeError:
-        exe = getReserves.exe = Web3RequestExecutor()
-    reserves = exe.get_contract(pool_address, ContractABIs.swapPair).functions.getReserves().call()
-    return (pool_address
-            , reserves[0]
-            , reserves[1]
-            )
+        exe = getReserves.exe = JSONRPCConnector.get_connection()
+        ioloop = getReserves.ioloop = get_event_loop()
+    getReserves_function_id = "0x0902f1ac"
+    fut = exe.eth_call({"to": pool_address, "data": getReserves_function_id}, "latest")
+    res = ioloop.run_until_complete(fut)
+    try:
+        if not res or not res.startswith("0x") or not len(res) != 66:
+            raise ValueError
+        ofs = 2
+        reserve0 = int(res[ofs:ofs + 64], 16)
+        ofs += 64
+        reserve1 = int(res[ofs:ofs + 64], 16)
+        return (pool_address
+                , reserve0
+                , reserve1
+                )
+    except:
+        print("invalid response (expected 96-byte hexstring):", res)
+        return pool_address, None, None
 
 
 class Runner:
@@ -128,7 +142,7 @@ class Runner:
 
     def pools_iterator(self):
         for pool in self.pools_map.values():
-            yield str(pool.get_address())
+            yield str(pool.address)
 
     def preload_balances(self):
         self.log.info("fetching balances via Web3...")
@@ -143,7 +157,13 @@ class Runner:
                       , self.args.max_workers
                       , self.args.chunk_size
                       )
-            print(list(executor.map(getReserves, self.pools_iterator(), chunksize=self.args.chunk_size)))
+            for pool_addr, reserve0, reserve1 in executor.map(getReserves, self.pools_iterator(), chunksize=self.args.chunk_size):
+                pair = self.graph.lookup_swap_pair(pool_addr)
+                if not pair:
+                    raise IndexError("unknown pool: %s" % pool_addr)
+                # reset pool reserves
+                pair.reserve0, pair.reserve1 = reserve0, reserve1
+
             executor.shutdown(wait=True)
 
     async def prediction_polling_task(self):
@@ -161,6 +181,12 @@ class Runner:
                         self.log.info("block %r, found %r log predictions" % (self.latestBlockNumber, len(result["logs"])))
                         for log in result["logs"]:
                             self.log.info("log %r@tx %s data: %s", int(log["logIndex"], 16), log["tx"], log["data"], )
+                            tx = await server.eth_getTransactionByHash(log["tx"])
+                            if tx:
+                                pool_addr = tx["to"]
+                                pool = self.graph.lookup_swap_pair(pool_addr)
+                                if pool:
+                                    print("known pool", pool_addr)
                 sleep(self.args.pred_polling_interval * 0.001)
         except:
             self.log.exception("Error in prediction polling thread")

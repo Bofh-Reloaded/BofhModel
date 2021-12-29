@@ -26,6 +26,9 @@ struct balance_t: bignum::uint256_t
 {
     using bignum::uint256_t::uint256_t;
     balance_t(const char *txtrepr);
+    const balance_t &operator=(const char *txtrepr);
+    using bignum::uint256_t::operator=;
+    using bignum::uint256_t::operator|=;
 };
 
 
