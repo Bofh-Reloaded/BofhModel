@@ -1,11 +1,9 @@
-from asyncio import get_event_loop, Event
-from threading import Thread
+from asyncio import get_event_loop
 from time import sleep
 
 from jsonrpc_websocket import Server
 
-from bofh.utils.contract_abis import ContractABIs
-from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, Web3RequestExecutor, JSONRPCConnector
+from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id
 
 __doc__="""Start model runner.
 
@@ -26,7 +24,7 @@ from dataclasses import dataclass
 from logging import getLogger, basicConfig
 
 from bofh.model.database import ModelDB
-from bofh_model_ext import TheGraph, balance_t
+from bofh_model_ext import TheGraph
 
 
 PREDICTION_LOG_TOPIC0 = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"  # Keccak256("Swap(address,uint256,uint256,uint256,uint256,address)")
@@ -63,15 +61,30 @@ class Args:
 
 
 def getReserves(pool_address):
+    """Invoke local execution of PoolContract.getReserves() on the EVM for the specified pool.
+       Returns a tuple of (pool_address, reserve0, reserve1).
+
+       This function is meant to be executed across an IPC multiprocess turk for massive parallelism.
+
+       It reuses its web3 connection and assets to improve batch performance.
+
+       It also avoids usage of the web3 framework which has shown flaky performances in the past. It does
+       the dirty handling inline, and calls a remote RPC at the lowest possible level."""
     try:
         exe = getReserves.exe
         ioloop = getReserves.ioloop
+        mid = getReserves.mid
     except AttributeError:
         exe = getReserves.exe = JSONRPCConnector.get_connection()
         ioloop = getReserves.ioloop = get_event_loop()
-    getReserves_function_id = "0x0902f1ac"
-    fut = exe.eth_call({"to": pool_address, "data": getReserves_function_id}, "latest")
+        mid = getReserves.mid = method_id("getReserves()")
+    fut = exe.eth_call({"to": pool_address, "data": mid}, "latest")
     res = ioloop.run_until_complete(fut)
+    # at this point "res" should be a long 0xhhhhh... byte hexstring.
+    # it should be composed of 3 32-bytes big-endian values. In sequence:
+    # - reserve0
+    # - reserve1
+    # - blockTimestampLast (mod 2**32) of the last block during which an interaction occured for the pair.
     try:
         if not res or not res.startswith("0x") or not len(res) != 66:
             raise ValueError
@@ -79,9 +92,12 @@ def getReserves(pool_address):
         reserve0 = int(res[ofs:ofs + 64], 16)
         ofs += 64
         reserve1 = int(res[ofs:ofs + 64], 16)
+        ofs += 64
+        blockTimestampLast = int(res[ofs:ofs + 64], 16)
         return (pool_address
                 , reserve0
                 , reserve1
+                , blockTimestampLast
                 )
     except:
         print("invalid response (expected 96-byte hexstring):", res)
@@ -157,7 +173,7 @@ class Runner:
                       , self.args.max_workers
                       , self.args.chunk_size
                       )
-            for pool_addr, reserve0, reserve1 in executor.map(getReserves, self.pools_iterator(), chunksize=self.args.chunk_size):
+            for pool_addr, reserve0, reserve1, blockTimestampLast in executor.map(getReserves, self.pools_iterator(), chunksize=self.args.chunk_size):
                 pair = self.graph.lookup_swap_pair(pool_addr)
                 if not pair:
                     raise IndexError("unknown pool: %s" % pool_addr)
