@@ -1,9 +1,11 @@
+import json
 from asyncio import get_event_loop
 from time import sleep
 
 from jsonrpc_websocket import Server
 
-from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id
+from bofh.utils.misc import progress_printer
+from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, parse_data_parameters
 
 __doc__="""Start model runner.
 
@@ -86,14 +88,7 @@ def getReserves(pool_address):
     # - reserve1
     # - blockTimestampLast (mod 2**32) of the last block during which an interaction occured for the pair.
     try:
-        if not res or not res.startswith("0x") or not len(res) != 66:
-            raise ValueError
-        ofs = 2
-        reserve0 = int(res[ofs:ofs + 64], 16)
-        ofs += 64
-        reserve1 = int(res[ofs:ofs + 64], 16)
-        ofs += 64
-        blockTimestampLast = int(res[ofs:ofs + 64], 16)
+        reserve0, reserve1, blockTimestampLast = parse_data_parameters(res)
         return (pool_address
                 , reserve0
                 , reserve1
@@ -149,7 +144,7 @@ class Runner:
                 self.tot += 1
                 if addr is None:
                     self.skip += 1
-                    self.log.warning("integrity error: token address is already not of a pool: id=%r, %r -- skip %r over %r", id, address, self.skip, self.tot)
+                    self.log.warning("integrity error: pool address is already not of a pool: id=%r, %r -- skip %r over %r", id, address, self.skip, self.tot)
                 else:
                     self.pools_map[id] = addr
                 if self.args.pools_limit and self.pools_ctr >= self.args.pools_limit:
@@ -162,6 +157,12 @@ class Runner:
 
     def preload_balances(self):
         self.log.info("fetching balances via Web3...")
+        print_progress = progress_printer(len(self.pools_map)
+                                          , "fetching pool reserves {percent}% ({count} of {tot}"
+                                            " eta={expected_secs:.0f}s at {rate:.0f} items/s) ..."
+                                          , print_every=10000
+                                          , print_every_percent=1
+                                          , on_same_line=True)
         with Web3PoolExecutor(connection_uri=self.args.web3_rpc_url, max_workers=self.args.max_workers) as executor:
             self.log.info("fetching balances via Web3:"
                      "\n\t- %r pool getReserve requests"
@@ -178,6 +179,7 @@ class Runner:
                 if not pair:
                     raise IndexError("unknown pool: %s" % pool_addr)
                 # reset pool reserves
+                print_progress()
                 pair.reserve0, pair.reserve1 = reserve0, reserve1
 
             executor.shutdown(wait=True)
@@ -186,6 +188,7 @@ class Runner:
         # await self.polling_started.wait()
         server = Server(self.args.web3_rpc_url)
         self.latestBlockNumber = 0
+        ctr = 0
         try:
             await server.ws_connect()
             while True:  # self.polling_started.is_set():
@@ -196,13 +199,74 @@ class Runner:
                         self.latestBlockNumber = blockNumber
                         self.log.info("block %r, found %r log predictions" % (self.latestBlockNumber, len(result["logs"])))
                         for log in result["logs"]:
-                            self.log.info("log %r@tx %s data: %s", int(log["logIndex"], 16), log["tx"], log["data"], )
-                            tx = await server.eth_getTransactionByHash(log["tx"])
-                            if tx:
-                                pool_addr = tx["to"]
-                                pool = self.graph.lookup_swap_pair(pool_addr)
-                                if pool:
-                                    print("known pool", pool_addr)
+                            pool_addr = log["address"]
+                            if not pool_addr:
+                                continue
+                            pool = self.graph.lookup_swap_pair(pool_addr)
+                            self.log.info("pool of interest: %s (%s)", pool_addr, pool and "KNOWN" or "unknown")
+                            if pool:
+                                try:
+                                    amount0In, amount1In, amount0Out, amount1Out = parse_data_parameters(log["data"])
+                                except:
+                                    self.log.exception("unable to decode swap log data")
+                                    continue
+                                try:
+                                    if amount0In > 0 and amount1In > 0:
+                                        raise RuntimeError("inconsistent swap. Should not be possible: "
+                                                           "amount0In > 0 and amount1In > 0 (%r, %r)" %
+                                                           (amount0In, amount1In))
+                                    if amount0Out > 0 and amount1Out > 0:
+                                        raise RuntimeError(
+                                            "inconsistent swap. Should not be possible: amount0Out > 0 and amount1Out > 0 (%r, %r)" %
+                                            (amount0Out, amount1Out))
+                                    checks_out = False
+                                    if amount0In > 0:
+                                        if amount1Out == 0:
+                                            raise RuntimeError(
+                                                "inconsistent swap. amount0In > 0 but amount1Out == 0 (%r, %r)" %
+                                                (amount0In, amount1Out))
+                                        tokenIn = "token0"
+                                        tokenOut = "token1"
+                                        balanceIn = amount0In
+                                        balanceOut = amount1Out
+                                        reserveInBefore = int(str(pool.reserve0))
+                                        reserveOutBefore = int(str(pool.reserve1))
+                                        checks_out = True
+
+                                    if amount1In > 0:
+                                        if amount0Out == 0:
+                                            raise RuntimeError(
+                                                "inconsistent swap. amount1In > 0 but amount0Out == 0 (%r, %r)" %
+                                                (amount1In, amount0Out))
+                                        tokenIn = "token1"
+                                        tokenOut = "token0"
+                                        balanceIn = amount1In
+                                        balanceOut = amount0Out
+                                        reserveInBefore = int(str(pool.reserve1))
+                                        reserveOutBefore = int(str(pool.reserve0))
+                                        checks_out = True
+                                    if checks_out:
+                                        reserveInAfter = reserveInBefore + balanceIn
+                                        reserveOutAfter = reserveOutBefore - balanceOut
+                                        reserveInPctGain = (100 * balanceIn) / reserveInBefore
+                                        reserveOutPctLoss = (100 * balanceOut) / reserveOutBefore
+                                        rate = balanceOut / balanceIn
+                                        self.log.info("pool %s swaps %r %s toward %r %s, "
+                                                      "effective %s/%s swap rate is %02.05f, "
+                                                      "reserves changed from %r/%r to %r/%r, "
+                                                      "this swap affects %02.10f%% of the stored liquidity"
+                                                      , pool_addr, balanceIn, tokenIn, balanceOut, tokenOut
+                                                      , tokenIn, tokenOut, rate
+                                                      , reserveInBefore, reserveOutBefore, reserveInAfter, reserveOutAfter
+                                                      , reserveInPctGain)
+                                    else:
+                                        self.log.warning("swap parameters don't check out. ignored")
+
+                                except:
+                                    self.log.exception("unexpected swap data. check this out")
+                                    continue
+
+
                 sleep(self.args.pred_polling_interval * 0.001)
         except:
             self.log.exception("Error in prediction polling thread")
@@ -211,82 +275,6 @@ class Runner:
 
     def poll_prediction(self):
         self.ioloop.run_until_complete(self.prediction_polling_task())
-
-    """
-    def list_pools_db(self):
-        if self.args.verbose:
-            self.log.info("loading pool data from %s", self.args.status_db_dsn)
-        with self.db as curs:
-            for k, v in pools.items():
-                for ex_name, exchange in v.items():
-                    for pool in exchange["pools"]:
-                        if i and (i % 5000) == 0:
-                            if self.args.verbose:
-                                self.log.info("fetch %r pools ...", i)
-                        yield pool["address"]
-                        i += 1
-                        if self.args.pools_limit and i >= self.args.pools_limit:
-                            self.log.info("stopping at pool #%d, before the end", self.args.pools_limit)
-                            return
-
-    def priming_status_from_blockchain(self):
-        with Web3PoolExecutor(connection_uri=self.args.web3_rpc_url, max_workers=self.args.max_workers) as executor:
-            self.log.info("Preloading pool %s status from %s"
-                     "\n\t- using %d workers"
-                     "\n\t- each with a %d preload queue"
-                     , Args.default(self.args.pools_limit, "unbound")
-                     , Args.default(self.args.web3_rpc_url, "default")
-                     , executor.max_workers
-                     , self.args.chunk_size
-                     )
-            list(executor.map(getReserves, pools_iterator(), chunksize=chunk_size))
-            executor.shutdown(wait=True)
-            total = how_many_pools
-        exec_time = time.process_time()
-        return load_time - t, exec_time - load_time, total
-
-    def load_pools(self, filename, conn_url, how_many_pools, max_workers, verbose, chunk_size):
-        log = getLogger(__name__)
-        opener = open
-        if filename.endswith(".gz"):
-            import gzip
-            opener = gzip.open
-
-        if verbose:
-            log.info("loading pool data from %s", filename)
-        with opener('bsc_pools.data') as pool_data:
-            pools = json.load(pool_data)
-
-        def pools_iterator(): # really super lazy
-            i = 0
-            for k, v in pools.items():
-                for ex_name, exchange in v.items():
-                    for pool in exchange["pools"]:
-                        if i and (i % 5000) == 0:
-                            if verbose:
-                                log.info("fetch %r pools ...", i)
-                        yield pool["address"]
-                        i += 1
-                        if i >= how_many_pools:
-                            return
-
-        with Web3PoolExecutor(connection_uri=conn_url, max_workers=max_workers) as executor:
-            log.info("performing benchmark:"
-                     "\n\t- %r pool getReserve requests"
-                     "\n\t- on Web3 servant at %s"
-                     "\n\t- using %d workers"
-                     "\n\t- each with a %d preload queue"
-                      , default(how_many_pools, "unbound")
-                      , default(conn_url, "default")
-                      , executor._max_workers
-                      , chunk_size
-                      )
-            list(executor.map(getReserves, pools_iterator(), chunksize=chunk_size))
-            executor.shutdown(wait=True)
-            total = how_many_pools
-        exec_time = time.process_time()
-        return load_time - t, exec_time - load_time, total
-    """
 
 
 def main():

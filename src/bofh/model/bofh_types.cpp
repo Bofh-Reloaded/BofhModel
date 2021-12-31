@@ -83,7 +83,11 @@ address_t::address_t(const char *s):
     address_t()
 {
     auto s_start = s;
-    assert(s_start != nullptr);
+    if (s_start == nullptr)
+    {
+        fill(0);
+        return;
+    }
 
     // skip leading "0x0.." prequel, if any
     if (*s_start == '0') ++s_start;
