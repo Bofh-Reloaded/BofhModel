@@ -281,7 +281,7 @@ class Runner:
                                                       "reserves changed from %r/%r to %r/%r, "
                                                       "this swap affects %02.10f%% of the stored liquidity"
                                                       , pool_addr, balanceIn, tokenIn.address, balanceOut, tokenOut.address
-                                                      , tokenIn, tokenOut, rate
+                                                      , tokenIn.address, tokenOut.address, rate
                                                       , reserveInBefore, reserveOutBefore, reserveInAfter, reserveOutAfter
                                                       , reserveInPctGain)
                                         if self.swap_log_db:
