@@ -119,20 +119,32 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def(self_ns::str(self_ns::self))
             ;
     register_ptr_to_python<const address_t*>();
+    register_ptr_to_python<address_t*>();
 
-    class_<Token, dont_make_copies>("Token", no_init)
+    class_<IndexedObject, dont_make_copies>("IndexedObject", no_init)
+            .def_readwrite("tag" , &IndexedObject::tag)
+            .def_readonly("address", &IndexedObject::address);
+    register_ptr_to_python<const IndexedObject*>();
+    register_ptr_to_python<IndexedObject*>();
+
+    class_<Token, bases<IndexedObject>, dont_make_copies>("Token", no_init)
+            //.def_readwrite("tag" , &Token::tag)
+            //.def_readonly("address", &Token::address)
             .def_readonly("name"   , &Token::name)
-            .def_readonly("address", &Token::address)
             ;
     register_ptr_to_python<const Token*>();
+    register_ptr_to_python<Token*>();
 
-    class_<Exchange, dont_make_copies>("Exchange", no_init)
+    class_<Exchange, bases<IndexedObject>, dont_make_copies>("Exchange", no_init)
+            //.def_readwrite("tag"   , &Exchange::tag)
             .def_readonly("name"   , &Exchange::name)
             ;
     register_ptr_to_python<const Exchange*>();
+    register_ptr_to_python<Exchange*>();
 
-    class_<SwapPair, dont_make_copies>("SwapPair", no_init)
-            .def_readonly("address", &SwapPair::address)
+    class_<SwapPair, bases<IndexedObject>, dont_make_copies>("SwapPair", no_init)
+            //.def_readwrite("tag"   , &SwapPair::tag)
+            //.def_readonly("address", &SwapPair::address)
             .def_readonly("token0" , &SwapPair::token0)
             .def_readonly("token1" , &SwapPair::token1)
             .def_readwrite("reserve0" , &SwapPair::reserve0)
@@ -145,9 +157,13 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def("add_exchange"    , &TheGraph::add_exchange    , dont_manage_returned_pointer())
             .def("add_token"       , &TheGraph::add_token       , dont_manage_returned_pointer())
             .def("add_swap_pair"   , &TheGraph::add_swap_pair   , dont_manage_returned_pointer())
-            .def("lookup_token"    , &TheGraph::lookup_token    , dont_manage_returned_pointer())
-            .def("lookup_swap_pair", static_cast<const SwapPair *(TheGraph::*)(const address_t &)>(&TheGraph::lookup_swap_pair), dont_manage_returned_pointer())
-            .def("lookup_swap_pair", static_cast<const SwapPair *(TheGraph::*)(const char *     )>(&TheGraph::lookup_swap_pair), dont_manage_returned_pointer())
+            .def("lookup_token"    , static_cast<const Token    *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
+            .def("lookup_token"    , static_cast<const Token    *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
+            .def("lookup_swap_pair", static_cast<const SwapPair *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_swap_pair), dont_manage_returned_pointer())
+            .def("lookup_swap_pair", static_cast<const SwapPair *(TheGraph::*)(const char *         )>(&TheGraph::lookup_swap_pair), dont_manage_returned_pointer())
+            .def("lookup_swap_pair", static_cast<const SwapPair *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_swap_pair), dont_manage_returned_pointer())
+            .def("lookup"          , &TheGraph::lookup          , dont_manage_returned_pointer())
+            .def("reindex_tags"    , &TheGraph::reindex_tags)
             ;
 }
 

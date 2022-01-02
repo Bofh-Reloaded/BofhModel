@@ -13,19 +13,20 @@ Usage: bofh.model.runner1 [options]
 
 Options:
   -h  --help
-  -d, --dsn=<connection_str>    DB dsn connection string [default: sqlite3://status.db]
-  -c, --connection_url=<url>    Web3 RPC connection URL [default: %s]
-  -n <n>                        number of pools to query before exit (benchmark mode)
-  -j <n>                        number of RPC data ingest workers, default one per hardware thread. Only used during initialization phase
-  -v, --verbose                 debug output
-  --chunk_size=<n>              preloaded work chunk size per each worker [default: 100]
-  --pred_polling_interval=<n>   Web3 prediction polling internal in millisecs [default: 1000]
+  -d, --dsn=<connection_str>            DB dsn connection string [default: sqlite3://status.db]
+  -c, --connection_url=<url>            Web3 RPC connection URL [default: %s]
+  -n <n>                                number of pools to query before exit (benchmark mode)
+  -j <n>                                number of RPC data ingest workers, default one per hardware thread. Only used during initialization phase
+  -v, --verbose                         debug output
+  --chunk_size=<n>                      preloaded work chunk size per each worker [default: 100]
+  --pred_polling_interval=<n>           Web3 prediction polling internal in millisecs [default: 1000]
+  --swap_log_db_dsn=<connection_str>    Prediction log swaps DB dsn connection string [default: none]
 """ % Web3Connector.DEFAULT_URI_WSRPC
 
 from dataclasses import dataclass
 from logging import getLogger, basicConfig
 
-from bofh.model.database import ModelDB, StatusScopedCursor
+from bofh.model.database import ModelDB, StatusScopedCursor, SwapLogScopedCursor
 from bofh_model_ext import TheGraph
 
 
@@ -41,9 +42,12 @@ class Args:
     max_workers: int = 0
     chunk_size: int = 0
     pred_polling_interval: int = 0
+    swap_log_db_dsn: str = None
 
     @staticmethod
-    def default(arg, d):
+    def default(arg, d, suppress_list=None):
+        if suppress_list and arg in suppress_list:
+            arg = None
         if arg: return arg
         return d
 
@@ -59,6 +63,7 @@ class Args:
             , max_workers=int(cls.default(args["-j"], 0))
             , chunk_size=int(cls.default(args["--chunk_size"], 100))
             , pred_polling_interval=int(cls.default(args["--pred_polling_interval"], 1000))
+            , swap_log_db_dsn=cls.default(args["--swap_log_db_dsn"], None, suppress_list=["none"])
         )
 
 
@@ -107,9 +112,11 @@ class Runner:
         self.args = args
         self.db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=self.args.status_db_dsn)
         self.db.open_and_priming()
-        self.exchanges_map = dict()
-        self.tokens_map = dict()
-        self.pools_map = dict()
+        self.swap_log_db = None
+        if self.args.swap_log_db_dsn:
+            self.swap_log_db = ModelDB(schema_name="swap_log", cursor_factory=SwapLogScopedCursor, db_dsn=self.args.swap_log_db_dsn)
+            self.swap_log_db.open_and_priming()
+        self.pools = set()
         self.skip = 0
         self.tot = 0
         self.ioloop = get_event_loop()
@@ -117,47 +124,50 @@ class Runner:
 
     @property
     def pools_ctr(self):
-        return len(self.pools_map)
+        return len(self.pools)
 
     def preload_exchanges(self):
         self.log.info("preloading exchanges...")
         with self.db as curs:
             for id, *args in curs.list_exchanges():
-                addr = self.graph.add_exchange(*args)
-                assert addr is not None
-                self.exchanges_map[id] = addr
+                exc = self.graph.add_exchange(*args)
+                assert exc is not None
+                exc.tag = id
 
     def preload_tokens(self):
         self.log.info("preloading tokens...")
         with self.db as curs:
             for id, *args, is_stabletoken in curs.list_tokens():
-                addr = self.graph.add_token(*args, bool(is_stabletoken))
-                if addr is None:
+                tok = self.graph.add_token(*args, bool(is_stabletoken))
+                if tok is None:
                     raise RuntimeError("integrity error: token address is already not of a token: id=%r, %r" % (id, args))
-                self.tokens_map[id] = addr
+                tok.tag = id
+        self.graph.reindex_tags()
 
     def preload_pools(self):
         self.log.info("preloading pools...")
         with self.db as curs:
             for id, address, exchange_id, token0_id, token1_id in curs.list_pools():
-                addr = self.graph.add_swap_pair(address, self.tokens_map[token0_id], self.tokens_map[token1_id])
+                t0 = self.graph.lookup_token(token0_id)
+                assert t0
+                t1 = self.graph.lookup_token(token1_id)
+                assert t1
+                pool = self.graph.add_swap_pair(address, t0, t1)
                 self.tot += 1
-                if addr is None:
+                if pool is None:
                     self.skip += 1
                     self.log.warning("integrity error: pool address is already not of a pool: id=%r, %r -- skip %r over %r", id, address, self.skip, self.tot)
                 else:
-                    self.pools_map[id] = addr
+                    pool.tag = id
+                    self.pools.add(pool)
                 if self.args.pools_limit and self.pools_ctr >= self.args.pools_limit:
                     self.log.info("stopping after loading %r pools, as per effect of -n cli parameter", self.pools_ctr)
                     break
-
-    def pools_iterator(self):
-        for pool in self.pools_map.values():
-            yield str(pool.address)
+        self.graph.reindex_tags()
 
     def preload_balances(self):
         self.log.info("fetching balances via Web3...")
-        print_progress = progress_printer(len(self.pools_map)
+        print_progress = progress_printer(self.pools_ctr
                                           , "fetching pool reserves {percent}% ({count} of {tot}"
                                             " eta={expected_secs:.0f}s at {rate:.0f} items/s) ..."
                                           , print_every=10000
@@ -174,14 +184,29 @@ class Runner:
                       , self.args.max_workers
                       , self.args.chunk_size
                       )
-            for pool_addr, reserve0, reserve1, blockTimestampLast in executor.map(getReserves, self.pools_iterator(), chunksize=self.args.chunk_size):
-                pair = self.graph.lookup_swap_pair(pool_addr)
-                if not pair:
-                    raise IndexError("unknown pool: %s" % pool_addr)
-                # reset pool reserves
-                print_progress()
-                pair.reserve0, pair.reserve1 = reserve0, reserve1
-
+            curs = None
+            if self.swap_log_db:
+                curs = self.swap_log_db.cursor()
+            try:
+                def pool_addresses_iter():
+                    for p in self.pools:
+                        yield str(p.address)
+                for pool_addr, reserve0, reserve1, blockTimestampLast in executor.map(getReserves,
+                                                                                      pool_addresses_iter(),
+                                                                                      chunksize=self.args.chunk_size):
+                    pair = self.graph.lookup_swap_pair(pool_addr)
+                    if not pair:
+                        raise IndexError("unknown pool: %s" % pool_addr)
+                    # reset pool reserves
+                    print_progress()
+                    pair.reserve0, pair.reserve1 = reserve0, reserve1
+                    if curs:
+                        pool = self.graph.lookup_swap_pair(pool_addr)
+                        assert pool
+                        curs.add_pool_reserve(pool.tag, reserve0, reserve1)
+            finally:
+                if self.swap_log_db:
+                    self.swap_log_db.commit()
             executor.shutdown(wait=True)
 
     async def prediction_polling_task(self):
@@ -225,8 +250,8 @@ class Runner:
                                             raise RuntimeError(
                                                 "inconsistent swap. amount0In > 0 but amount1Out == 0 (%r, %r)" %
                                                 (amount0In, amount1Out))
-                                        tokenIn = "token0"
-                                        tokenOut = "token1"
+                                        tokenIn = pool.token0
+                                        tokenOut = pool.token1
                                         balanceIn = amount0In
                                         balanceOut = amount1Out
                                         reserveInBefore = int(str(pool.reserve0))
@@ -238,8 +263,8 @@ class Runner:
                                             raise RuntimeError(
                                                 "inconsistent swap. amount1In > 0 but amount0Out == 0 (%r, %r)" %
                                                 (amount1In, amount0Out))
-                                        tokenIn = "token1"
-                                        tokenOut = "token0"
+                                        tokenIn = pool.token1
+                                        tokenOut = pool.token0
                                         balanceIn = amount1In
                                         balanceOut = amount0Out
                                         reserveInBefore = int(str(pool.reserve1))
@@ -255,10 +280,26 @@ class Runner:
                                                       "effective %s/%s swap rate is %02.05f, "
                                                       "reserves changed from %r/%r to %r/%r, "
                                                       "this swap affects %02.10f%% of the stored liquidity"
-                                                      , pool_addr, balanceIn, tokenIn, balanceOut, tokenOut
+                                                      , pool_addr, balanceIn, tokenIn.address, balanceOut, tokenOut.address
                                                       , tokenIn, tokenOut, rate
                                                       , reserveInBefore, reserveOutBefore, reserveInAfter, reserveOutAfter
                                                       , reserveInPctGain)
+                                        if self.swap_log_db:
+                                            with self.swap_log_db as curs:
+                                                curs.add_swap_log(
+                                                    block_nr=self.latestBlockNumber
+                                                    , json_data=log
+                                                    , pool_id=pool.tag
+                                                    , tokenIn=tokenIn.tag
+                                                    , tokenOut=tokenIn.tag
+                                                    , poolAddr=str(pool.address)
+                                                    , tokenInAddr=str(tokenIn.address)
+                                                    , tokenOutAddr=str(tokenOut.address)
+                                                    , balanceIn=balanceIn
+                                                    , balanceOut=balanceOut
+                                                    , reserveInBefore=reserveInBefore
+                                                    , reserveOutBefore=reserveOutBefore
+                                                )
                                     else:
                                         self.log.warning("swap parameters don't check out. ignored")
 

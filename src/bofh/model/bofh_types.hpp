@@ -67,6 +67,9 @@ struct address_t: address_base, address_size
 std::ostream& operator<< (std::ostream& stream, const address_t& o);
 
 
+typedef unsigned long int datatag_t;
+
+
 } // namespace model
 } // namespace bofh
 

@@ -11,7 +11,11 @@
 namespace bofh {
 namespace model {
 
-
+struct IndexedObject {
+    datatag_t tag;
+    const address_t *address;
+    IndexedObject(const address_t *address_): address(address_) {}
+};
 
 /**
  * @brief DeFi token identifier
@@ -20,10 +24,9 @@ namespace model {
  *
  * @todo extend me.
  */
-struct Token: Ref<Token>
+struct Token: Ref<Token>, IndexedObject
 {
     const string *name = nullptr;
-    const address_t *address;
     const bool is_stablecoin;
 
     /**
@@ -35,7 +38,7 @@ struct Token: Ref<Token>
     Token(const string *name_
           , const address_t *address_
           , bool is_stablecoin_)
-        : address(address_)
+        : IndexedObject(address_)
         , is_stablecoin(is_stablecoin_)
     {
         if (name_ != nullptr && !name_->empty())
@@ -71,10 +74,10 @@ struct Token: Ref<Token>
  *
  * @todo Missing defi exchange ref, contract id and stuff. All this to come later.
  */
-struct SwapPair: Ref<SwapPair> {
+struct SwapPair: Ref<SwapPair>, IndexedObject
+{
     typedef double rate_t;
 
-    const address_t *address;
     Token::ref token0;
     Token::ref token1;
     balance_t reserve0;
@@ -89,7 +92,7 @@ struct SwapPair: Ref<SwapPair> {
     SwapPair(const address_t *address_
              , Token::ref token0_
              , Token::ref token1_)
-      : address(address_),
+      : IndexedObject(address_),
         token0(token0_),
         token1(token1_)
     {
@@ -98,9 +101,10 @@ struct SwapPair: Ref<SwapPair> {
 };
 
 
-struct Exchange: Ref<Exchange> {
+struct Exchange: Ref<Exchange>, IndexedObject {
     typedef std::string name_t;
     const name_t *name;
+    Exchange(): IndexedObject(nullptr) {}
 };
 
 
@@ -166,11 +170,16 @@ struct TheGraph: Ref<TheGraph> {
                                   , Token *token1);
 
     /**
-     * @brief fetch a known token node
+     * @brief fetch a known token node by address
      * @param address
      * @return reference to the token node, if existing. Otherwise nullptr
      */
     const Token *lookup_token(const address_t &address);
+    /**
+     * @brief fetch a known token node by tag id
+     * @warning This takes O(n) time
+     */
+    const Token *lookup_token(datatag_t tag);
 
     /**
      * @brief fetch a known swap pair edge
@@ -179,7 +188,23 @@ struct TheGraph: Ref<TheGraph> {
      */
     const SwapPair *lookup_swap_pair(const address_t &address);
     const SwapPair *lookup_swap_pair(const char *address) { return lookup_swap_pair(address_t(address)); }
+    /**
+     * @brief fetch a known swap pair node by tag id
+     * @warning This takes O(n) time
+     */
+    const SwapPair *lookup_swap_pair(datatag_t tag);
 
+    /**
+     * @brief retrieve an address-indexed object from the graph knowledge
+     * @param address
+     * @return reference to the object, if found. NULL otherwise
+     */
+    const IndexedObject *lookup(const address_t &address);
+
+    /**
+     * @brief reindexes graph knowledge also for datatag id resolution
+     */
+    void reindex_tags(void);
 };
 
 

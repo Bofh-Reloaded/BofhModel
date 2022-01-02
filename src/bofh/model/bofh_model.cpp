@@ -98,6 +98,17 @@ const Token *TheGraph::lookup_token(const address_t &address)
     return res->second.token;
 }
 
+const Token *TheGraph::lookup_token(datatag_t tag)
+{
+    auto entity_type = EntityType::TOKEN;
+    auto res = index->tag_index.find(tag);
+    if (res == index->tag_index.end() || res->second.type != entity_type)
+    {
+        return nullptr;
+    }
+    return res->second.token;
+}
+
 const SwapPair *TheGraph::lookup_swap_pair(const address_t &address)
 {
     auto entity_type = EntityType::SWAP_PAIR;
@@ -108,6 +119,37 @@ const SwapPair *TheGraph::lookup_swap_pair(const address_t &address)
     }
     return res->second.swap_pair;
 }
+
+const SwapPair *TheGraph::lookup_swap_pair(datatag_t tag)
+{
+    auto entity_type = EntityType::SWAP_PAIR;
+    auto res = index->tag_index.find(tag);
+    if (res == index->tag_index.end() || res->second.type != entity_type)
+    {
+        return nullptr;
+    }
+    return res->second.swap_pair;
+}
+
+const IndexedObject *TheGraph::lookup(const address_t &address)
+{
+    auto res = index->find(address);
+    if (res == index->end())
+    {
+        return nullptr;
+    }
+    return res->second.swap_pair;
+}
+
+void TheGraph::reindex_tags(void)
+{
+    index->tag_index.clear();
+    for (auto &i: *index)
+    {
+        index->tag_index.emplace(i.second.indexed_object->tag, i.second);
+    }
+}
+
 
 
 } // namespace model

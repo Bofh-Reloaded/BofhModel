@@ -19,9 +19,11 @@ struct IndexEntry {
     union {
         Token* token;
         SwapPair* swap_pair;
+        IndexedObject *indexed_object;
     };
 
     IndexEntry(EntityType t): type(t) {}
+    IndexEntry(const IndexEntry &t) = default;
 };
 
 struct address_sort
@@ -32,7 +34,9 @@ struct address_sort
     }
 };
 
-struct EntityIndex: std::unordered_map<address_t, IndexEntry, address_sort> {};
+struct EntityIndex: std::unordered_map<address_t, IndexEntry, address_sort> {
+    std::unordered_map<datatag_t, IndexEntry> tag_index;
+};
 
 } // namespace idx
 } // namespace model

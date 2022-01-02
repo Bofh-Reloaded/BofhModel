@@ -5,6 +5,7 @@
 namespace bofh {
 namespace model {
 
+struct IndexedObject;
 struct Token;
 struct Balance;
 struct SwapPair;

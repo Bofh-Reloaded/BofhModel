@@ -1,3 +1,4 @@
+import json
 from functools import cached_property
 from logging import getLogger
 from sqlite3 import IntegrityError
@@ -65,7 +66,7 @@ class ModelDB:
                 self.open()
                 curs = self.conn.cursor()
                 curs.execute("SELECT * FROM schema_version ORDER BY version DESC LIMIT 1 ")
-                return curs.fetchone()[0]
+                return curs.fetchone()[0] is not None
             except:
                 return False
         return True
@@ -148,14 +149,23 @@ class ModelDB:
         self.log.info("successfully bumped schema version up to version %r", latest)
 
     def __enter__(self):
-        assert self.conn is not None
-        return self.cursor_factory(self.conn)
+        return self.cursor()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_val:
             self.conn.rollback()
         else:
             self.conn.commit()
+
+    def cursor(self):
+        assert self.conn is not None
+        return self.cursor_factory(self.conn)
+
+    def commit(self):
+        self.conn.commit()
+
+    def rollback(self):
+        self.conn.rollback()
 
 
 class StatusScopedCursor:
@@ -241,3 +251,75 @@ class StatusScopedCursor:
                 return
             for i in seq:
                 yield i
+
+
+class SwapLogScopedCursor:
+    BLOCK_FETCH_SIZE=1000
+
+    def __init__(self, conn):
+        self.conn = conn
+        self.curs = self.conn.cursor()
+        self.curs.arraysize = self.BLOCK_FETCH_SIZE
+
+    def execute(self, *a, **ka):
+        self.curs.execute(*a, **ka)
+        return self
+
+    def get_int(self):
+        return self.curs.fetchone()[0]
+
+    def add_swap_log(self
+                     , block_nr: int
+                     , json_data
+                     , pool_id: int
+                     , tokenIn: int
+                     , tokenOut: int
+                     , poolAddr: str
+                     , tokenInAddr: str
+                     , tokenOutAddr: str
+                     , balanceIn: int
+                     , balanceOut: int
+                     , reserveInBefore: int
+                     , reserveOutBefore: int
+                     ):
+
+        assert self.conn is not None
+        if not isinstance(json_data, str): json_data = json.dumps(json_data)
+        if isinstance(balanceIn, int): balanceIn = str(balanceIn)
+        if isinstance(balanceOut, int): balanceOut = str(balanceOut)
+        if isinstance(reserveInBefore, int): reserveInBefore = str(reserveInBefore)
+        if isinstance(reserveOutBefore, int): reserveOutBefore = str(reserveOutBefore)
+
+        self.execute("INSERT INTO swap_logs ("
+                         "block_nr, json_data, pool, "
+                         "tokenIn, tokenOut, poolAddr, "
+                         "tokenInAddr, tokenOutAddr, "
+                         "balanceIn, balanceOut, "
+                         "reserveInBefore, reserveOutBefore"
+                     ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                     , (block_nr
+                        , json_data
+                        , pool_id
+                        , tokenIn
+                        , tokenOut
+                        , poolAddr
+                        , tokenInAddr
+                        , tokenOutAddr
+                        , balanceIn
+                        , balanceOut
+                        , reserveInBefore
+                        , reserveOutBefore
+                        ))
+        self.execute("SELECT last_insert_rowid()")
+        return self.get_int()
+
+    def add_pool_reserve(self, pool_id, reserve0, reserve1):
+        assert self.conn is not None
+        if isinstance(reserve0, int): reserve0 = str(reserve0)
+        if isinstance(reserve1, int): reserve1 = str(reserve1)
+        try:
+            self.execute("INSERT INTO pool_reserves (pool, reserve0, reserve1) VALUES (?, ?, ?)", (pool_id, reserve0, reserve1))
+            self.execute("SELECT last_insert_rowid()")
+        except IntegrityError:
+            # already existing
+            self.execute("UPDATE pool_reserves SET reserve0 = ?, reserve1 = ? WHERE pool = ?", (reserve0, reserve1, pool_id))
