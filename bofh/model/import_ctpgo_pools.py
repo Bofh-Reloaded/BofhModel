@@ -1,6 +1,6 @@
 """Import BSC pools from CTPGO pools.json datafile.
 
-Usage: bofh.model.import_ctpgo_pools [options] <ctpgo_pools_json_file>
+Usage: bofh.model.import_ctpgo_pools [options] <exchange_name> <ctpgo_pools_json_file>
 
 Options:
   -h  --help
@@ -16,7 +16,7 @@ from bofh.model.database import ModelDB
 import json
 
 
-def import_pools_and_tokens_from_json_coso(filepath, db: ModelDB, ignore_duplicates=False):
+def import_pools_and_tokens_from_json_coso(exchange_name, filepath, db: ModelDB, ignore_duplicates=False):
     opener = open
     if filepath.endswith(".gz"):
         import gzip
@@ -26,7 +26,7 @@ def import_pools_and_tokens_from_json_coso(filepath, db: ModelDB, ignore_duplica
         data = json.load(fd)
     known_tokens = dict()  # address -> int(id)
     with db as curs:
-        exchange_id = curs.add_exchange("__DUMMY_EXCHAGE_DO_NOT_USE__")
+        exchange_id = curs.add_exchange(exchange_name, ignore_duplicates=True)
         for pool in data:
             token0 = pool["Token0"]
             token1 = pool["Token1"]
@@ -58,7 +58,8 @@ def main():
     basicConfig(level=arguments["--verbose"] and "DEBUG" or "INFO")
     db = ModelDB(arguments["--dsn"])
     db.open_and_priming()
-    import_pools_and_tokens_from_json_coso(arguments["<ctpgo_pools_json_file>"]
+    import_pools_and_tokens_from_json_coso(arguments["<exchange_name>"]
+                                           , arguments["<ctpgo_pools_json_file>"]
                                            , db
                                            , ignore_duplicates=arguments["--skip_duplicates"])
 
