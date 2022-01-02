@@ -12,13 +12,13 @@ from logging import basicConfig
 
 from docopt import docopt
 
-from bofh.model.database import ModelDB
+from bofh.model.database import ModelDB, StatusScopedCursor
 
 
 def main():
     arguments = docopt(__doc__)
     basicConfig(level=arguments["--verbose"] and "DEBUG" or "INFO")
-    db = ModelDB(arguments["--dsn"])
+    db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=arguments["--dsn"])
     if not db.exists:
         db.initialize()
     else:

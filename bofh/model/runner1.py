@@ -25,7 +25,7 @@ Options:
 from dataclasses import dataclass
 from logging import getLogger, basicConfig
 
-from bofh.model.database import ModelDB
+from bofh.model.database import ModelDB, StatusScopedCursor
 from bofh_model_ext import TheGraph
 
 
@@ -105,7 +105,7 @@ class Runner:
     def __init__(self, args: Args):
         self.graph = TheGraph()
         self.args = args
-        self.db = ModelDB(self.args.status_db_dsn)
+        self.db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=self.args.status_db_dsn)
         self.db.open_and_priming()
         self.exchanges_map = dict()
         self.tokens_map = dict()

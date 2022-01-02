@@ -12,7 +12,7 @@ from logging import basicConfig
 
 from docopt import docopt
 
-from bofh.model.database import ModelDB
+from bofh.model.database import ModelDB, StatusScopedCursor
 import json
 
 
@@ -59,7 +59,7 @@ def import_pools_and_tokens_from_json_coso(filepath, db: ModelDB, ignore_duplica
 def main():
     arguments = docopt(__doc__)
     basicConfig(level=arguments["--verbose"] and "DEBUG" or "INFO")
-    db = ModelDB(arguments["--dsn"])
+    db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=arguments["--dsn"])
     db.open_and_priming()
     import_pools_and_tokens_from_json_coso(arguments["<bsc_pools_json_file>"]
                                            , db

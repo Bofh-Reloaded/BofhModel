@@ -43,7 +43,9 @@ class ModelDB:
             return "sqlite3", db_dsn
         return db_dsn[0:ofs], db_dsn[ofs+3:]
 
-    def __init__(self, db_dsn):
+    def __init__(self, schema_name, cursor_factory, db_dsn):
+        self.schema_name = schema_name
+        self.cursor_factory = cursor_factory
         self.conn = None
         self.driver_name, self.db_dsn = self._split_dsn(db_dsn)
         self.driver = __import__(self.driver_name)
@@ -69,7 +71,7 @@ class ModelDB:
         return True
 
     def __list_schemafiles(self, glob_pattern): # iter[nn, filepath]
-        for i in glob(join(schemadir, self.driver_name, glob_pattern)):
+        for i in glob(join(schemadir, self.schema_name, self.driver_name, glob_pattern)):
             fn = basename(i)
             ofs = fn.find("_")
             if ofs < 1:
@@ -147,7 +149,7 @@ class ModelDB:
 
     def __enter__(self):
         assert self.conn is not None
-        return ScopedCursor(self.conn)
+        return self.cursor_factory(self.conn)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_val:
@@ -156,7 +158,7 @@ class ModelDB:
             self.conn.commit()
 
 
-class ScopedCursor:
+class StatusScopedCursor:
     BLOCK_FETCH_SIZE=1000
 
     def __init__(self, conn):
