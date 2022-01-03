@@ -49,7 +49,7 @@ def load_graph_from_db_directory(dp_dump_directory=None):
             if not rec: break
             pool = pools.get(rec[0])
             if not pool: continue
-            pool.update(reserve0=int(rec[1]), reserve1=(rec[2]))
+            pool.update(reserve0=int(rec[1]), reserve1=int(rec[2]))
 
     for id, pool in pools.items():
         token0 = pool.pop("token0")
@@ -71,7 +71,7 @@ def load_predicted_swap_events(dp_dump_directory=None, start_from_blocknr=0):
     while True:
         rec = curs.fetchone()
         if not rec: break
-        yield dict(tokenIn=rec[0], tokenOut=rec[1], balanceIn=rec[2], balanceOut=rec[3])
+        yield dict(tokenIn=rec[0], tokenOut=rec[1], balanceIn=int(rec[2]), balanceOut=int(rec[3]))
 
 
 if __name__ == '__main__':
