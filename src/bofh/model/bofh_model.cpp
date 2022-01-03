@@ -19,16 +19,29 @@ struct bad_argument: public std::runtime_error
 TheGraph::TheGraph(): index(new EntityIndex()) {};
 
 
-const Exchange *TheGraph::add_exchange(const Exchange::name_t &name)
+const Exchange *TheGraph::add_exchange(const Exchange::name_t &name
+                                       , const char *address)
 {
-    auto i = exchanges.find(name);
-    if (i != exchanges.end())
+    auto entity_type = EntityType::EXCHANGE;
+
+    auto res = index->emplace(address, entity_type);
+    auto has_been_added = res.second;
+    auto &entry = res.first->second;
+    if (has_been_added)
     {
-        return i->second;
+        auto address_ptr = &res.first->first;
+        entry.exchange = Exchange::make(name, address_ptr);
     }
-    auto entry = exchanges.emplace(name, Exchange::make());
-    entry.first->second->name = &entry.first->first;
-    return entry.first->second;
+    else {
+        // already known to the index. Check it it's of the correct type
+        if (entry.type != entity_type)
+        {
+            // it's not. sorry
+            return nullptr;
+        }
+    }
+
+    return entry.exchange;
 }
 
 
@@ -58,7 +71,8 @@ const Token *TheGraph::add_token(const std::string &name
 }
 
 
-const SwapPair *TheGraph::add_swap_pair(const char *address
+const SwapPair *TheGraph::add_swap_pair(const Exchange *exchange
+                                        , const char *address
                                         , Token *token0
                                         , Token *token1)
 {
@@ -72,7 +86,7 @@ const SwapPair *TheGraph::add_swap_pair(const char *address
     if (has_been_added)
     {
         auto address_ptr = &res.first->first;
-        entry.swap_pair = SwapPair::make(address_ptr, token0, token1);
+        entry.swap_pair = SwapPair::make(exchange, address_ptr, token0, token1);
     }
     else {
         // already known to the index. Check it it's of the correct type

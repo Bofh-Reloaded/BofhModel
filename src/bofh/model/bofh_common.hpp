@@ -48,8 +48,8 @@ template<typename T> struct Ref
 
     // step 3 - using raw pointers. Might become necessary if moving
     // over to CUDA, ASIC or other silicon booster.
-    typedef T *ref;
-    template <typename ... Args> static ref make(Args&& ... args)
+    //typedef T *ref;
+    template <typename ... Args> static T *make(Args&& ... args)
     {
         return new T(std::forward<Args>(args)...);
     }

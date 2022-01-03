@@ -52,9 +52,24 @@ struct Token: Ref<Token>, IndexedObject
         if (name != nullptr) delete name;
     }
 
-    struct SwapList: std::vector<SwapPair*> {};
+    struct SwapList: std::vector<SwapPair*>
+    {
+        typedef std::vector<SwapPair*> base_t;
+        using base_t::vector;
+    };
 
     SwapList swaps;
+};
+
+
+struct Exchange: Ref<Exchange>, IndexedObject {
+    typedef std::string name_t;
+    const name_t name;
+    Exchange(const name_t &name_
+             , const address_t *address_)
+        : IndexedObject(address_)
+        , name(name_)
+        {}
 };
 
 
@@ -78,21 +93,25 @@ struct SwapPair: Ref<SwapPair>, IndexedObject
 {
     typedef double rate_t;
 
-    Token::ref token0;
-    Token::ref token1;
+    const Exchange* exchange;
+    Token* token0;
+    Token* token1;
     balance_t reserve0;
     balance_t reserve1;
 
     void check()
     {
+        assert(exchange != nullptr);
         assert(token0 != nullptr);
         assert(token1 != nullptr);
     }
 
-    SwapPair(const address_t *address_
-             , Token::ref token0_
-             , Token::ref token1_)
+    SwapPair(const Exchange* exchange_
+             , const address_t *address_
+             , Token* token0_
+             , Token* token1_)
       : IndexedObject(address_),
+        exchange(exchange_),
         token0(token0_),
         token1(token1_)
     {
@@ -100,12 +119,6 @@ struct SwapPair: Ref<SwapPair>, IndexedObject
     }
 };
 
-
-struct Exchange: Ref<Exchange>, IndexedObject {
-    typedef std::string name_t;
-    const name_t *name;
-    Exchange(): IndexedObject(nullptr) {}
-};
 
 
 /**
@@ -135,13 +148,14 @@ struct TheGraph: Ref<TheGraph> {
     idx::EntityIndex *index;
 
 
-    typedef std::unordered_map<Exchange::name_t, Exchange::ref> ExchangeList;
+    typedef std::unordered_map<Exchange::name_t, Exchange*> ExchangeList;
     ExchangeList exchanges;
 
     TheGraph();
 
 
-    const Exchange *add_exchange(const Exchange::name_t &name);
+    const Exchange *add_exchange(const Exchange::name_t &name
+                                 , const char *address);
 
 
     /**
@@ -159,13 +173,15 @@ struct TheGraph: Ref<TheGraph> {
     /**
      * @brief Introduce a new swap pair edge into the graph, if not existing.
      * If the pair already exists, do nothing and return its reference.
+     * @param exchange
      * @param address
      * @param token0
      * @param token1
      * @param rate
      * @return reference to the swap pair
      */
-    const SwapPair *add_swap_pair(const char *address
+    const SwapPair *add_swap_pair(const Exchange *exchange
+                                  , const char *address
                                   , Token *token0
                                   , Token *token1);
 

@@ -11,14 +11,16 @@ namespace idx {
 
 enum class EntityType {
     TOKEN,
-    SWAP_PAIR
+    SWAP_PAIR,
+    EXCHANGE
 };
 
 struct IndexEntry {
     EntityType type;
     union {
         Token* token;
-        SwapPair* swap_pair;
+        SwapPair *swap_pair;
+        Exchange *exchange;
         IndexedObject *indexed_object;
     };
 

@@ -1,6 +1,7 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations" // Silencing GCC nagging me about std::auto_ptr somewhere in boost legacy snippets
 
 #include <boost/python.hpp>
+#include <boost/python/suite/indexing/vector_indexing_suite.hpp>
 #include "longobject.h"
 #include "bofh_model.hpp"
 
@@ -127,24 +128,21 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     register_ptr_to_python<const IndexedObject*>();
     register_ptr_to_python<IndexedObject*>();
 
+    class_<Token::SwapList>("SwapList").def(vector_indexing_suite<Token::SwapList>());
     class_<Token, bases<IndexedObject>, dont_make_copies>("Token", no_init)
-            //.def_readwrite("tag" , &Token::tag)
-            //.def_readonly("address", &Token::address)
             .def_readonly("name"   , &Token::name)
+            .def_readonly("swaps"  , &Token::swaps)
             ;
     register_ptr_to_python<const Token*>();
     register_ptr_to_python<Token*>();
 
     class_<Exchange, bases<IndexedObject>, dont_make_copies>("Exchange", no_init)
-            //.def_readwrite("tag"   , &Exchange::tag)
             .def_readonly("name"   , &Exchange::name)
             ;
     register_ptr_to_python<const Exchange*>();
     register_ptr_to_python<Exchange*>();
 
     class_<SwapPair, bases<IndexedObject>, dont_make_copies>("SwapPair", no_init)
-            //.def_readwrite("tag"   , &SwapPair::tag)
-            //.def_readonly("address", &SwapPair::address)
             .def_readonly("token0" , &SwapPair::token0)
             .def_readonly("token1" , &SwapPair::token1)
             .def_readwrite("reserve0" , &SwapPair::reserve0)
@@ -152,6 +150,8 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             ;
     register_ptr_to_python<const SwapPair*>();
     register_ptr_to_python<SwapPair*>();
+
+
 
     class_<TheGraph, dont_make_copies>("TheGraph")
             .def("add_exchange"    , &TheGraph::add_exchange    , dont_manage_returned_pointer())

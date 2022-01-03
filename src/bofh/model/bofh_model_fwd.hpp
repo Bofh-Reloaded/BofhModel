@@ -10,6 +10,7 @@ struct Token;
 struct Balance;
 struct SwapPair;
 struct TheGraph;
+struct Exchange;
 
 } // namespace model
 } // namespace bofh
