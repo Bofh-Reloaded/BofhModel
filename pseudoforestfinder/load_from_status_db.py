@@ -52,8 +52,13 @@ def load_graph_from_db_directory(dp_dump_directory=None):
             pool.update(reserve0=int(rec[1]), reserve1=int(rec[2]))
 
     for id, pool in pools.items():
-        token0 = pool.pop("token0")
-        token1 = pool.pop("token1")
+        token0 = pool["token0"]
+        token1 = pool["token1"]
+        # Produce a bidirectional edge with the following attributes:
+        # - token0=<node_id>
+        # - token1=<node_id>
+        # - reserve0=<int>
+        # - reserve1=<int>
         G.add_edge(token0, token1, **pool)
 
     return G
