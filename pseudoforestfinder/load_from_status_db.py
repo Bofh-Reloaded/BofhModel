@@ -60,6 +60,7 @@ def load_graph_from_db_directory(dp_dump_directory=None):
         # - reserve0=<int>
         # - reserve1=<int>
         G.add_edge(token0, token1, **pool)
+        G.add_edge(token1, token0, **pool) #da rigirare
 
     return G
 

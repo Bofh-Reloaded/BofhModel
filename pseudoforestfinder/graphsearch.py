@@ -4,7 +4,7 @@ Spyder Editor
 
 """
 
-import networkx as nx
+#import networkx as nx
 
 ##uncomment if using loaded matrix
 #from load_bsc_pools_graph import load_graph_from_json_coso 
@@ -57,12 +57,12 @@ def find_all_paths_3way_var(graph, start_node, stable_list):
     print("number of predecessors: ", len(predecessorslist)) #blue arrows - reverese path
     usable_nodes = (set(stable_list) & (predecessorslist)) #filter blue arrows on stable nodes
     for stable_node in usable_nodes:
-        tc_nodes = set(set(graph.predecessors(stable_node)) & set(successorslist))
+        tc_nodes = set(graph.predecessors(stable_node)) & set(successorslist)
         for tc_node in tc_nodes:
             path = [start_node, tc_node, stable_node, start_node]
             path_list.append(path)
     return path_list
-
+#Function to find all possible 2-way exchanges passing through stable nodes. (Same as GO code.)
 def find_all_paths_2way_var(graph, start_node, stable_list):
     path_list = []
     successorslist = set(graph.successors(start_node))
@@ -89,38 +89,37 @@ def compute_weights_in_path(path,graph):
 
 
 #Generating the graph of example on draw.io
-G = nx.MultiDiGraph()
+#G = nx.MultiDiGraph()
 
-G.add_nodes_from([1,2,3,4,5,6])
+#G.add_nodes_from([1,2,3,4,5,6])
 
 
 
-edges = G.add_edge(1,2,weight=1)
-edges = G.add_edge(1,4,weight=1)
-edges = G.add_edge(2,4,weight=1)
-edges = G.add_edge(3,1,weight=1)
-edges = G.add_edge(3,5,weight=1)
-edges = G.add_edge(3,6,weight=1)
-edges = G.add_edge(4,1,weight=1)
-edges = G.add_edge(4,2,weight=1)
-edges = G.add_edge(4,3,weight=1)
-edges = G.add_edge(4,5,weight=1)
-edges = G.add_edge(4,6,weight=1)
-edges = G.add_edge(5,3,weight=1)
-edges = G.add_edge(5,6,weight=1)
-edges = G.add_edge(6,1,weight=1)
+#edges = G.add_edge(1,2,weight=1)
+#edges = G.add_edge(1,4,weight=1)
+#edges = G.add_edge(2,4,weight=1)
+#edges = G.add_edge(3,1,weight=1)
+#edges = G.add_edge(3,5,weight=1)
+#edges = G.add_edge(3,6,weight=1)
+#edges = G.add_edge(4,1,weight=1)
+#edges = G.add_edge(4,2,weight=1)
+#edges = G.add_edge(4,3,weight=1)
+#edges = G.add_edge(4,5,weight=1)
+#edges = G.add_edge(4,6,weight=1)
+#edges = G.add_edge(5,3,weight=1)
+#edges = G.add_edge(5,6,weight=1)
+#edges = G.add_edge(6,1,weight=1)
 
 ##Uncomment if using the loaded matrix
 G = the_graph
 
 print("number of nodes: ", G.number_of_nodes())
 print("number of edges: ", G.number_of_edges())
-#for line in nx.generate_edgelist(the_graph):
-#   if line[0] == 2:
-#       print(line)
-    
-stable_nodes = [420608,4,377192,5, 489332, 451609]
-start_node = 2 
+
+#stable_nodes = [i for i in range(1, 626199)]    
+stable_nodes = [420608,4, 377192, 2, 5, 489332, 451609, 611173, 604407, 538538, 623880, 374437, 3, 13, 515506, 31, 34, 29]
+start_node = 4
+#print("List of predecessors is", set(G.predecessors(1)))
 #print(nx.is_directed(G))
 #nx.draw(the_graph, pos=nx.circular_layout(the_graph), node_color='r', edge_color='b') #draw graph 
 #pred=G.predecessors(1)
@@ -134,7 +133,7 @@ start_node = 2
 
 possible_paths_2 = find_all_paths_2way_var(G, start_node, stable_nodes)
 possible_paths_3 = find_all_paths_3way_var(G, start_node, stable_nodes)
-possible_paths_4 = find_all_paths_4way_var(G, start_node, stable_nodes)
+#possible_paths_4 = find_all_paths_4way_var(G, start_node, stable_nodes)
 print("The number of possible 2-way exchanges starting from node", start_node, " is: ", len(possible_paths_2))
 print("Printing the list of possible paths and their cost:")
 for analyzed_path in possible_paths_2:
@@ -145,18 +144,14 @@ print("Printing the list of possible paths and their cost:")
 for analyzed_path in possible_paths_3:
     #print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
     print(analyzed_path)
-print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths_4))
-print("Printing the list of possible paths and their cost:")
-for analyzed_path in possible_paths_4:
-    #print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
-    print(analyzed_path)
 
-#for x in range(1,7):
-#    possible_paths = find_all_paths_var(G, x, stable_nodes)
-#    print("The number of possible 4-way exchanges starting from node", x, " is: ", len(possible_paths))
-#    print("Printing the list of possible paths and their cost:")
-#    for analyzed_path in possible_paths:
-#         print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
+#print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths_4))
+#print("Printing the list of possible paths and their cost:")
+#for analyzed_path in possible_paths_4:
+    #print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
+    #print(analyzed_path)
+
+
         
     
     
