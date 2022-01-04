@@ -27,12 +27,17 @@ def load_graph_from_db_directory(dp_dump_directory=None):
         if not rec: break
         G.add_node(rec[0], address=rec[1])
 
-    curs.execute("SELECT id, token0_id, token1_id, address FROM pools")
+    threshold = 2
+    f = f"token0_id IN (SELECT token0_id FROM pools GROUP BY token0_id HAVING COUNT(token1_id) > {threshold})"
+
+    curs.execute(f"SELECT id, token0_id, token1_id, address FROM pools WHERE {f}")
     pools = dict()
     while True:
         rec = curs.fetchone()
         if not rec: break
         pools[rec[0]] = dict(token0=rec[1], token1=rec[2], address=rec[3])
+
+    print(f"pools {len(pools)}")
 
     # 2. open the prediction_swaps db, if available. load balances from there
     conn.close()
