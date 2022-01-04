@@ -1,13 +1,58 @@
-from os.path import dirname, realpath, join, isdir, isfile
-
-dir_path = dirname(dirname(realpath(__file__)))
-bsc_pools_dat = join(dir_path, "test", "bsc_pools.data.gz")
+from os.path import join, isdir, isfile
 
 import networkx as nx
 import sqlite3
 
 STATUS_DB = "status.db"
 SWAPS_DB = "prediction_swaps.db"
+
+
+class IdealPool:
+    """Represents an ideal pool. It has a swap() function which hopefully mimics what would happen in a real AMM LP"""
+
+    DEFAULT_SWAP_FEE_PERCENT = 0.3
+    __slots__ = ("token0", "token1", "reserve0", "reserve1", "swapFeePct")
+
+    def __init__(self, token0: int, token1: int, reserve0: int, reserve1: int, swapFeePct=DEFAULT_SWAP_FEE_PERCENT, **discard_kwargs):
+        assert isinstance(token0, int)
+        assert isinstance(token1, int)
+        assert isinstance(reserve0, int)
+        assert isinstance(reserve1, int)
+        self.token0 = token0
+        self.token1 = token1
+        self.reserve0 = reserve0
+        self.reserve1 = reserve1
+        self.swapFeePct = swapFeePct
+
+    def swap(self, requestedToken, requestedAmountOut, update_reserves=False) -> int:
+        """Attempts to replicate AMM behavior.
+           Call using the requested OUT token (the one which you want to receive from the swap), and its desired amount.
+           The call returns the prospected amount of token IN which has to be deposited in order to perform the swap.
+           The update_reserves parameter controls whether the reserves of the swap are actually updated or not.
+
+           All balances are expressed in Wei. DON'T USE FLOAT."""
+        assert requestedToken in (self.token0, self.token1)
+        assert isinstance(requestedAmountOut, int)
+        if requestedToken == self.token0:
+            tokenOutReserveBefore = self.reserve0
+            tokenInReserveBefore = self.reserve1
+        else:
+            tokenOutReserveBefore = self.reserve1
+            tokenInReserveBefore = self.reserve0
+
+        assert requestedAmountOut <= tokenOutReserveBefore
+        tokenOutReserveMidpoint = tokenOutReserveBefore - (requestedAmountOut // 2)
+        tokenOutAppliedPrice = (tokenInReserveBefore / tokenOutReserveMidpoint) * (100.0 + self.swapFeePct) / 100.0
+        tokenInNecessaryAmount = int(tokenOutAppliedPrice * requestedAmountOut)
+        if update_reserves:
+            tokenOutReserveAfter = tokenOutReserveBefore - requestedAmountOut
+            if requestedToken == self.token0:
+                self.reserve0 = tokenOutReserveAfter
+                self.reserve1 = tokenInReserveBefore + tokenInNecessaryAmount
+            else:
+                self.reserve1 = tokenOutReserveAfter
+                self.reserve0 = tokenInReserveBefore + tokenInNecessaryAmount
+        return tokenInNecessaryAmount
 
 
 def load_graph_from_db_directory(dp_dump_directory=None):
@@ -59,13 +104,13 @@ def load_graph_from_db_directory(dp_dump_directory=None):
     for id, pool in pools.items():
         token0 = pool["token0"]
         token1 = pool["token1"]
-        # Produce a bidirectional edge with the following attributes:
-        # - token0=<node_id>
-        # - token1=<node_id>
-        # - reserve0=<int>
-        # - reserve1=<int>
-        G.add_edge(token0, token1, **pool)
-        G.add_edge(token1, token0, **pool) #da rigirare
+        if "reserve0" not in pool:
+            # Do not bless the arches with a pool object. Reserves db is not available
+            pool = None
+        else:
+            pool = IdealPool(**pool)
+        G.add_edge(token0, token1, pool=pool)  # Note that both edges share the same pool object
+        G.add_edge(token1, token0, pool=pool)
 
     return G
 
