@@ -80,11 +80,22 @@ def get_edge_weight(graph,start,end,key):
     dict = graph[start][end]
     return dict[0][key]
 
+def get_edge_pool(graph,start,end,key):
+    dict = graph[start][end]
+    mypool = dict[0][key]
+    print(mypool.address)
+    if mypool.reserve1 == 0 :
+        return -1
+    ratio = mypool.reserve0/mypool.reserve1
+    return ratio
 
 def compute_weights_in_path(path,graph):
-    cost = 0
+    cost = 1
     for x in range(0,len(path)-1):
-       cost = cost + get_edge_weight(graph, path[x], path[x+1], "weight")
+        pool_cost = get_edge_pool(graph, path[x], path[x+1], "pool")
+        if pool_cost == -1:
+            return -1
+        cost = cost * pool_cost
     return cost
 
 
@@ -117,7 +128,7 @@ print("number of nodes: ", G.number_of_nodes())
 print("number of edges: ", G.number_of_edges())
 
 #stable_nodes = [i for i in range(1, 626199)]    
-stable_nodes = [420608,4, 377192, 2, 5, 489332, 451609, 611173, 604407, 538538, 623880, 374437, 3, 13, 515506, 31, 34, 29]
+stable_nodes = [420608,4, 377192, 2, 5, 258, 489332, 451609, 611173, 604407, 538538, 623880, 374437, 3, 13, 515506, 31, 34, 29]
 start_node = 4
 #print("List of predecessors is", set(G.predecessors(1)))
 #print(nx.is_directed(G))
@@ -130,7 +141,7 @@ start_node = 4
        #     print(path, " cost is:", the_graph.subgraph(path).size(weight="weight"))
 #nx.draw(G.subgraph(path), pos=nx.circular_layout(G.subgraph(path)), node_color='r', edge_color='b')
 
-
+#print(get_edge_pool(G, 13, 4, "pool").reserve0)
 possible_paths_2 = find_all_paths_2way_var(G, start_node, stable_nodes)
 possible_paths_3 = find_all_paths_3way_var(G, start_node, stable_nodes)
 #possible_paths_4 = find_all_paths_4way_var(G, start_node, stable_nodes)
@@ -141,9 +152,12 @@ for analyzed_path in possible_paths_2:
     print(analyzed_path)
 print("The number of possible 3-way exchanges starting from node", start_node, " is: ", len(possible_paths_3))
 print("Printing the list of possible paths and their cost:")
+file = open ('3ways.txt','w')
 for analyzed_path in possible_paths_3:
     #print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
-    print(analyzed_path)
+    #print(analyzed_path)
+    file.write(repr(analyzed_path) + " total unbalance: " + repr(compute_weights_in_path(analyzed_path, G)) + '\n')
+file.close()
 
 #print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths_4))
 #print("Printing the list of possible paths and their cost:")

@@ -11,18 +11,24 @@ class IdealPool:
     """Represents an ideal pool. It has a swap() function which hopefully mimics what would happen in a real AMM LP"""
 
     DEFAULT_SWAP_FEE_PERCENT = 0.3
-    __slots__ = ("token0", "token1", "reserve0", "reserve1", "swapFeePct")
+    __slots__ = ("token0", "token1", "reserve0", "reserve1", "swapFeePct","address")
 
-    def __init__(self, token0: int, token1: int, reserve0: int, reserve1: int, swapFeePct=DEFAULT_SWAP_FEE_PERCENT, **discard_kwargs):
+    def __init__(self, token0: int, token1: int, reserve0: int, reserve1: int, address: str, swapFeePct=DEFAULT_SWAP_FEE_PERCENT, **discard_kwargs):
         assert isinstance(token0, int)
         assert isinstance(token1, int)
         assert isinstance(reserve0, int)
         assert isinstance(reserve1, int)
+        assert isinstance(address, str)
         self.token0 = token0
         self.token1 = token1
         self.reserve0 = reserve0
-        self.reserve1 = reserve1
+        self.reserve1 = reserve1   
         self.swapFeePct = swapFeePct
+        self.address = address
+        
+    def flip(self) : 
+        return self.__class__(self.token1, self.token0, self.reserve1, self.reserve0, self.address)
+        
 
     def swap(self, requestedToken, requestedAmountOut, update_reserves=False) -> int:
         """Attempts to replicate AMM behavior.
@@ -109,8 +115,8 @@ def load_graph_from_db_directory(dp_dump_directory=None):
             pool = None
         else:
             pool = IdealPool(**pool)
-        G.add_edge(token0, token1, pool=pool)  # Note that both edges share the same pool object
-        G.add_edge(token1, token0, pool=pool)
+            G.add_edge(token0, token1, pool=pool)  # Note that both edges share the same pool object
+            G.add_edge(token1, token0, pool=pool.flip())
 
     return G
 
