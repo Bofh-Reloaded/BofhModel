@@ -71,7 +71,7 @@ const Token *TheGraph::add_token(const std::string &name
 }
 
 
-const SwapPair *TheGraph::add_swap_pair(const Exchange *exchange
+const LiquidityPool *TheGraph::add_lp(const Exchange *exchange
                                         , const char *address
                                         , Token *token0
                                         , Token *token1)
@@ -79,14 +79,14 @@ const SwapPair *TheGraph::add_swap_pair(const Exchange *exchange
     check_not_null_arg(address);
     check_not_null_arg(token0);
     check_not_null_arg(token1);
-    auto entity_type = EntityType::SWAP_PAIR;
+    auto entity_type = EntityType::LP;
     auto res = index->emplace(address, entity_type);
     auto has_been_added = res.second;
     auto &entry = res.first->second;
     if (has_been_added)
     {
         auto address_ptr = &res.first->first;
-        entry.swap_pair = SwapPair::make(exchange, address_ptr, token0, token1);
+        entry.lp = LiquidityPool::make(exchange, address_ptr, token0, token1);
     }
     else {
         // already known to the index. Check it it's of the correct type
@@ -98,7 +98,7 @@ const SwapPair *TheGraph::add_swap_pair(const Exchange *exchange
 
     }
 
-    return entry.swap_pair;
+    return entry.lp;
 }
 
 const Token *TheGraph::lookup_token(const address_t &address)
@@ -123,26 +123,26 @@ const Token *TheGraph::lookup_token(datatag_t tag)
     return res->second.token;
 }
 
-const SwapPair *TheGraph::lookup_swap_pair(const address_t &address)
+const LiquidityPool *TheGraph::lookup_lp(const address_t &address)
 {
-    auto entity_type = EntityType::SWAP_PAIR;
+    auto entity_type = EntityType::LP;
     auto res = index->find(address);
     if (res == index->end() || res->second.type != entity_type)
     {
         return nullptr;
     }
-    return res->second.swap_pair;
+    return res->second.lp;
 }
 
-const SwapPair *TheGraph::lookup_swap_pair(datatag_t tag)
+const LiquidityPool *TheGraph::lookup_lp(datatag_t tag)
 {
-    auto entity_type = EntityType::SWAP_PAIR;
+    auto entity_type = EntityType::LP;
     auto res = index->tag_index.find(tag);
     if (res == index->tag_index.end() || res->second.type != entity_type)
     {
         return nullptr;
     }
-    return res->second.swap_pair;
+    return res->second.lp;
 }
 
 const IndexedObject *TheGraph::lookup(const address_t &address)
@@ -152,7 +152,7 @@ const IndexedObject *TheGraph::lookup(const address_t &address)
     {
         return nullptr;
     }
-    return res->second.swap_pair;
+    return res->second.lp;
 }
 
 void TheGraph::reindex_tags(void)

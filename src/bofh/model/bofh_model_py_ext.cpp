@@ -128,10 +128,10 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     register_ptr_to_python<const IndexedObject*>();
     register_ptr_to_python<IndexedObject*>();
 
-    class_<Token::SwapList>("SwapList").def(vector_indexing_suite<Token::SwapList>());
+    class_<Token::LPoolList>("SwapList").def(vector_indexing_suite<Token::LPoolList>());
     class_<Token, bases<IndexedObject>, dont_make_copies>("Token", no_init)
             .def_readonly("name"   , &Token::name)
-            .def_readonly("swaps"  , &Token::swaps)
+            .def_readonly("pools"  , &Token::pools)
             ;
     register_ptr_to_python<const Token*>();
     register_ptr_to_python<Token*>();
@@ -142,28 +142,26 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     register_ptr_to_python<const Exchange*>();
     register_ptr_to_python<Exchange*>();
 
-    class_<SwapPair, bases<IndexedObject>, dont_make_copies>("SwapPair", no_init)
-            .def_readonly("token0" , &SwapPair::token0)
-            .def_readonly("token1" , &SwapPair::token1)
-            .def_readwrite("reserve0" , &SwapPair::reserve0)
-            .def_readwrite("reserve1" , &SwapPair::reserve1)
+    class_<LiquidityPool, bases<IndexedObject>, dont_make_copies>("LiquidityPool", no_init)
+            .def_readonly("token0" , &LiquidityPool::token0)
+            .def_readonly("token1" , &LiquidityPool::token1)
+            .def_readwrite("reserve0" , &LiquidityPool::reserve0)
+            .def_readwrite("reserve1" , &LiquidityPool::reserve1)
             ;
-    register_ptr_to_python<const SwapPair*>();
-    register_ptr_to_python<SwapPair*>();
-
-
+    register_ptr_to_python<const LiquidityPool*>();
+    register_ptr_to_python<LiquidityPool*>();
 
     class_<TheGraph, dont_make_copies>("TheGraph")
-            .def("add_exchange"    , &TheGraph::add_exchange    , dont_manage_returned_pointer())
-            .def("add_token"       , &TheGraph::add_token       , dont_manage_returned_pointer())
-            .def("add_swap_pair"   , &TheGraph::add_swap_pair   , dont_manage_returned_pointer())
-            .def("lookup_token"    , static_cast<const Token    *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
-            .def("lookup_token"    , static_cast<const Token    *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
-            .def("lookup_swap_pair", static_cast<const SwapPair *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_swap_pair), dont_manage_returned_pointer())
-            .def("lookup_swap_pair", static_cast<const SwapPair *(TheGraph::*)(const char *         )>(&TheGraph::lookup_swap_pair), dont_manage_returned_pointer())
-            .def("lookup_swap_pair", static_cast<const SwapPair *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_swap_pair), dont_manage_returned_pointer())
-            .def("lookup"          , &TheGraph::lookup          , dont_manage_returned_pointer())
-            .def("reindex_tags"    , &TheGraph::reindex_tags)
+            .def("add_exchange" , &TheGraph::add_exchange    , dont_manage_returned_pointer())
+            .def("add_token"    , &TheGraph::add_token       , dont_manage_returned_pointer())
+            .def("add_swap_pair", &TheGraph::add_lp          , dont_manage_returned_pointer())
+            .def("lookup_token" , static_cast<const Token    *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
+            .def("lookup_token" , static_cast<const Token    *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
+            .def("lookup_lp"    , static_cast<const LiquidityPool *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
+            .def("lookup_lp"    , static_cast<const LiquidityPool *(TheGraph::*)(const char *         )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
+            .def("lookup_lp"    , static_cast<const LiquidityPool *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
+            .def("lookup"       , &TheGraph::lookup          , dont_manage_returned_pointer())
+            .def("reindex_tags" , &TheGraph::reindex_tags)
             ;
 }
 

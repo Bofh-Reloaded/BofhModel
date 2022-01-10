@@ -8,7 +8,7 @@ namespace model {
 struct IndexedObject;
 struct Token;
 struct Balance;
-struct SwapPair;
+struct LiquidityPool;
 struct TheGraph;
 struct Exchange;
 

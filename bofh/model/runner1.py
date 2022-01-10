@@ -152,7 +152,7 @@ class Runner:
                 assert t0
                 t1 = self.graph.lookup_token(token1_id)
                 assert t1
-                pool = self.graph.add_swap_pair(address, t0, t1)
+                pool = self.graph.add_lp(address, t0, t1)
                 self.tot += 1
                 if pool is None:
                     self.skip += 1
@@ -194,14 +194,14 @@ class Runner:
                 for pool_addr, reserve0, reserve1, blockTimestampLast in executor.map(getReserves,
                                                                                       pool_addresses_iter(),
                                                                                       chunksize=self.args.chunk_size):
-                    pair = self.graph.lookup_swap_pair(pool_addr)
+                    pair = self.graph.lookup_lp(pool_addr)
                     if not pair:
                         raise IndexError("unknown pool: %s" % pool_addr)
                     # reset pool reserves
                     print_progress()
                     pair.reserve0, pair.reserve1 = reserve0, reserve1
                     if curs:
-                        pool = self.graph.lookup_swap_pair(pool_addr)
+                        pool = self.graph.lookup_lp(pool_addr)
                         assert pool
                         curs.add_pool_reserve(pool.tag, reserve0, reserve1)
             finally:
@@ -227,7 +227,7 @@ class Runner:
                             pool_addr = log["address"]
                             if not pool_addr:
                                 continue
-                            pool = self.graph.lookup_swap_pair(pool_addr)
+                            pool = self.graph.lookup_lp(pool_addr)
                             self.log.info("pool of interest: %s (%s)", pool_addr, pool and "KNOWN" or "unknown")
                             if pool:
                                 try:

@@ -52,16 +52,23 @@ struct Token: Ref<Token>, IndexedObject
         if (name != nullptr) delete name;
     }
 
-    struct SwapList: std::vector<SwapPair*>
+    struct LPoolList: std::vector<LiquidityPool*>
     {
-        typedef std::vector<SwapPair*> base_t;
+        typedef std::vector<LiquidityPool*> base_t;
         using base_t::vector;
     };
 
-    SwapList swaps;
+    LPoolList pools;
 };
 
 
+/**
+ * @brief Models the identity of an Exchange entity, which is
+ * basically relatable to a subset of Liquidity Pools.
+ *
+ * LP objects have an outgoing relation toward the exchange they
+ * are part of.
+ */
 struct Exchange: Ref<Exchange>, IndexedObject {
     typedef std::string name_t;
     const name_t name;
@@ -76,10 +83,13 @@ struct Exchange: Ref<Exchange>, IndexedObject {
 
 
 /**
- * @brief A swap between two tokens
+ * @brief A facility which swaps between two tokens.
  *
- * A SwapPair represents a possibility to execute a swap
+ * A LiquidityPool represents a possibility to execute a swap
  * between two tokens. It corresponds to a liquidity pool in the blockchain.
+ *
+ * For each affering token (token0, token1), it stores a certain amount
+ * of balance (reserve0, reserve1).
  *
  * @todo This is of course ideal and needs to consider commissions and other costs.
  *       There's lots of real world stuff that belongs here.
@@ -89,7 +99,7 @@ struct Exchange: Ref<Exchange>, IndexedObject {
  *
  * @todo Missing defi exchange ref, contract id and stuff. All this to come later.
  */
-struct SwapPair: Ref<SwapPair>, IndexedObject
+struct LiquidityPool: Ref<LiquidityPool>, IndexedObject
 {
     typedef double rate_t;
 
@@ -106,7 +116,7 @@ struct SwapPair: Ref<SwapPair>, IndexedObject
         assert(token1 != nullptr);
     }
 
-    SwapPair(const Exchange* exchange_
+    LiquidityPool(const Exchange* exchange_
              , const address_t *address_
              , Token* token0_
              , Token* token1_)
@@ -122,7 +132,7 @@ struct SwapPair: Ref<SwapPair>, IndexedObject
 
 
 /**
- * @brief Graph of known tokens and swaps paths
+ * @brief Graph of known tokens and liquidity pools
  *
  * Let's approach the problem with a graph model.
  * All possible swaps between tokens are modeled as edges of a graph.
@@ -137,10 +147,7 @@ struct TheGraph: Ref<TheGraph> {
 
     // This is to clarify what in this graph is a node and and edge:
     typedef Token Node;
-    typedef SwapPair Edge;
-    // ... nodes are tokens, edges connecting them are swap pairs. Note that
-    //     swaps are not bidirectional at the moment. Therefore this is
-    //     a directed graph.
+    typedef LiquidityPool Edge;
 
     typedef std::vector<Node*> NodeList;
 
@@ -171,19 +178,19 @@ struct TheGraph: Ref<TheGraph> {
                            , bool is_stablecoin);
 
     /**
-     * @brief Introduce a new swap pair edge into the graph, if not existing.
+     * @brief Introduce a new LP edge into the graph, if not existing.
      * If the pair already exists, do nothing and return its reference.
      * @param exchange
      * @param address
      * @param token0
      * @param token1
      * @param rate
-     * @return reference to the swap pair
+     * @return reference to the LP
      */
-    const SwapPair *add_swap_pair(const Exchange *exchange
-                                  , const char *address
-                                  , Token *token0
-                                  , Token *token1);
+    const LiquidityPool *add_lp(const Exchange *exchange
+                                , const char *address
+                                , Token *token0
+                                , Token *token1);
 
     /**
      * @brief fetch a known token node by address
@@ -198,17 +205,17 @@ struct TheGraph: Ref<TheGraph> {
     const Token *lookup_token(datatag_t tag);
 
     /**
-     * @brief fetch a known swap pair edge
+     * @brief fetch a known LP edge
      * @param address
-     * @return reference to the swap pair, if existing. Otherwise nullptr
+     * @return reference to the LP, if existing. Otherwise nullptr
      */
-    const SwapPair *lookup_swap_pair(const address_t &address);
-    const SwapPair *lookup_swap_pair(const char *address) { return lookup_swap_pair(address_t(address)); }
+    const LiquidityPool *lookup_lp(const address_t &address);
+    const LiquidityPool *lookup_lp(const char *address) { return lookup_lp(address_t(address)); }
     /**
-     * @brief fetch a known swap pair node by tag id
+     * @brief fetch a known LP node by tag id
      * @warning This takes O(n) time
      */
-    const SwapPair *lookup_swap_pair(datatag_t tag);
+    const LiquidityPool *lookup_lp(datatag_t tag);
 
     /**
      * @brief retrieve an address-indexed object from the graph knowledge
