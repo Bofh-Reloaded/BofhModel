@@ -168,7 +168,7 @@ class ModelDB:
         self.conn.rollback()
 
 
-class StatusScopedCursor:
+class BasicScopedCursor:
     BLOCK_FETCH_SIZE=1000
 
     def __init__(self, conn):
@@ -183,6 +183,16 @@ class StatusScopedCursor:
     def get_int(self):
         return self.curs.fetchone()[0]
 
+    def get_all(self):
+        while True:
+            seq = self.curs.fetchmany()
+            if not seq:
+                return
+            for i in seq:
+                yield i
+
+
+class StatusScopedCursor(BasicScopedCursor):
     def add_token(self, address, name=None, ignore_duplicates=False):
         assert self.conn is not None
         try:
@@ -253,21 +263,7 @@ class StatusScopedCursor:
                 yield i
 
 
-class SwapLogScopedCursor:
-    BLOCK_FETCH_SIZE=1000
-
-    def __init__(self, conn):
-        self.conn = conn
-        self.curs = self.conn.cursor()
-        self.curs.arraysize = self.BLOCK_FETCH_SIZE
-
-    def execute(self, *a, **ka):
-        self.curs.execute(*a, **ka)
-        return self
-
-    def get_int(self):
-        return self.curs.fetchone()[0]
-
+class SwapLogScopedCursor(BasicScopedCursor):
     def add_swap_log(self
                      , block_nr: int
                      , json_data

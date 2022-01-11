@@ -1,4 +1,3 @@
-import json
 from asyncio import get_event_loop
 from time import sleep
 

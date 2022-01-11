@@ -21,6 +21,7 @@ CLASSIFIERS = [
 ENTRY_POINTS={'console_scripts':[
     'bofh.model.initdb = bofh.model.initdb:main',
     'bofh.model.runner1 = bofh.model.runner1:main',
+    'bofh.model.read_token_data = bofh.model.read_token_data:main',
     'bofh.model.import_bsc_pools = bofh.model.import_bsc_pools:main',
     'bofh.model.import_ctpgo_pools = bofh.model.import_ctpgo_pools:main',
 ] }
@@ -34,6 +35,7 @@ from distutils.core import Command
 here = os.path.dirname(os.path.realpath(__file__))
 
 INSTALL_REQUIRES = list(open(os.path.join(here, "requirements.txt")))
+
 
 class CleanCommand(Command):
     description = "Clean leftovers of previous builds, tox and test runs"
