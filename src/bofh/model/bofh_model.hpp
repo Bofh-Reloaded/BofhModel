@@ -71,8 +71,10 @@ struct OperableSwap: Ref<OperableSwap> {
  */
 struct Token: Ref<Token>, IndexedObject
 {
-    const string *name = nullptr;
+    const string name;
     const bool is_stable;
+    const string symbol;
+    const unsigned int decimals;
 
     /**
      * @brief Token ctor
@@ -80,22 +82,17 @@ struct Token: Ref<Token>, IndexedObject
      * @param address_
      * @param is_stablecoin_
      */
-    Token(const string *name_
+    Token(const string &name_
           , const address_t *address_
+          , const std::string &symbol_
+          , unsigned int decimals_
           , bool is_stable_)
         : IndexedObject(address_)
+        , name(name_)
         , is_stable(is_stable_)
-    {
-        if (name_ != nullptr && !name_->empty())
-        {
-            name = new string(*name_);
-        }
-    }
-
-    ~Token()
-    {
-        if (name != nullptr) delete name;
-    }
+        , symbol(symbol_)
+        , decimals(decimals_)
+    { }
 
     struct OperableSwaps: std::vector<OperableSwap*>
     {
@@ -216,8 +213,10 @@ struct TheGraph: Ref<TheGraph> {
      * @param is_stablecoin
      * @return reference to the token graph node
      */
-    const Token *add_token(const std::string &name
+    const Token *add_token(const char *name
                            , const char *address
+                           , const char *symbol
+                           , unsigned int decimals
                            , bool is_stablecoin);
 
     /**

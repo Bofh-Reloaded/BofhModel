@@ -139,6 +139,8 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     class_<Token::OperableSwaps>("OperableSwaps").def(vector_indexing_suite<Token::OperableSwaps>());
     class_<Token, bases<IndexedObject>, dont_make_copies>("Token", no_init)
             .def_readonly("name"        , &Token::name)
+            .def_readonly("symbol"     , &Token::symbol)
+            .def_readonly("decimals"   , &Token::decimals)
             .def_readonly("predecessors", &Token::predecessors)
             .def_readonly("successors"  , &Token::successors)
             ;

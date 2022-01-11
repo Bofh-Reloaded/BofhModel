@@ -1,6 +1,8 @@
 from asyncio import get_event_loop
 from functools import lru_cache
 
+from jsonrpc_base import ProtocolError
+
 from bofh.utils.misc import progress_printer
 from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, parse_data_parameters, \
     parse_string_return
@@ -54,6 +56,7 @@ class Args:
             , chunk_size=int(cls.default(args["--chunk_size"], 100))
         )
 
+
 def read_token_data(token_address):
     try:
         exe = read_token_data.exe
@@ -64,25 +67,19 @@ def read_token_data(token_address):
         ioloop = read_token_data.ioloop = get_event_loop()
         read_token_data.mid = (method_id("decimals()"), method_id("name()"), method_id("symbol()"))
         mid_decimals, mid_name, mid_symbol = read_token_data.mid
-    # read decimals
-    fut = exe.eth_call({"to": token_address, "data": mid_decimals}, "latest")
-    res_decimals = parse_data_parameters(ioloop.run_until_complete(fut), cast=lambda x: x[0])
-    # read name
-    fut = exe.eth_call({"to": token_address, "data": mid_name}, "latest")
-    res_name = parse_string_return(ioloop.run_until_complete(fut)).decode("utf-8")
-    # read symbol
-    fut = exe.eth_call({"to": token_address, "data": mid_symbol}, "latest")
-    res_symbol = parse_string_return(ioloop.run_until_complete(fut)).decode("utf-8")
-    # at this point "res" should be a long 0xhhhhh... byte hexstring.
-    # it should be composed of 3 32-bytes big-endian values. In sequence:
-    # - reserve0
-    # - reserve1
-    # - blockTimestampLast (mod 2**32) of the last block during which an interaction occured for the pair.
     try:
-        return (token_address, res_name, res_symbol, res_decimals)
+        # read symbol
+        fut = exe.eth_call({"to": token_address, "data": mid_symbol}, "latest")
+        res_symbol = parse_string_return(ioloop.run_until_complete(fut)).decode("utf-8").strip()
+        # read decimals
+        fut = exe.eth_call({"to": token_address, "data": mid_decimals}, "latest")
+        res_decimals = parse_data_parameters(ioloop.run_until_complete(fut), cast=lambda x: x[0])
+        # read name
+        fut = exe.eth_call({"to": token_address, "data": mid_name}, "latest")
+        res_name = parse_string_return(ioloop.run_until_complete(fut)).decode("utf-8").strip()
+        return True, token_address, res_name, res_symbol, res_decimals
     except:
-        print("invalid response while querying token", token_address)
-        return (token_address, None, None, None)
+        return False, token_address, None, None, None
 
 
 class Runner:
@@ -105,9 +102,10 @@ class Runner:
     def tokens_requiring_update(self):
         with self.db as curs:
             for i in curs.execute("SELECT address FROM tokens "
-                                  "WHERE symbol IS NULL "
+                                  "WHERE NOT disabled AND ("
+                                  "      symbol IS NULL "
                                   "   OR name IS NULL "
-                                  "   OR decimals IS NULL").get_all():
+                                  "   OR decimals IS NULL)").get_all():
                 yield i[0]
 
     def read_token_names(self):
@@ -115,7 +113,6 @@ class Runner:
         print_progress = progress_printer(self.tokens_requiring_update_ctr()
                                           , "fetching token data {percent}% ({count} of {tot}"
                                             " eta={expected_secs:.0f}s at {rate:.0f} items/s) ..."
-                                          , print_every=10000
                                           , print_every_percent=1
                                           , on_same_line=True)
         with Web3PoolExecutor(connection_uri=self.args.web3_rpc_url, max_workers=self.args.max_workers) as executor:
@@ -132,11 +129,16 @@ class Runner:
             tokens_requiring_update = list(self.tokens_requiring_update())
             curs = self.db.cursor()
             try:
-                for token_addr, name, symbol, decimals in executor.map(read_token_data,
+                for success, token_addr, name, symbol, decimals in executor.map(read_token_data,
                                                                        tokens_requiring_update,
                                                                        chunksize=self.args.chunk_size):
-                    curs.execute("UPDATE tokens SET (name, symbol, decimals) VALUES (?, ?, ?) WHERE address = ?", (name, symbol, decimals, token_addr))
-                    print_progress()
+                    if success:
+                        curs.execute("UPDATE tokens SET name=?, symbol=?, decimals=? WHERE NOT address = ?", (name, symbol, decimals, token_addr))
+                    else:
+                        curs.execute("UPDATE tokens SET disabled=1 WHERE address  = ?", (token_addr, ))
+                        self.log.warning("token %s seems to be broken. marking it with disabled=1", token_addr)
+                    if print_progress():
+                        self.db.commit()
             finally:
                 self.db.commit()
             executor.shutdown(wait=True)

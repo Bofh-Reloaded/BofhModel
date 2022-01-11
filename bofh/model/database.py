@@ -193,6 +193,9 @@ class BasicScopedCursor:
 
 
 class StatusScopedCursor(BasicScopedCursor):
+    MAX_TOKEN_NAME_LEN = 64
+    MAX_TOKEN_SYMBOL_LEN = 64
+
     def add_token(self, address, name=None, ignore_duplicates=False):
         assert self.conn is not None
         try:
@@ -242,7 +245,12 @@ class StatusScopedCursor(BasicScopedCursor):
 
     def list_tokens(self):
         assert self.conn is not None
-        self.execute("SELECT id,COALESCE(name, ''),address,is_stabletoken FROM tokens")
+        self.execute("SELECT id"
+                     ", SUBSTR(COALESCE(name, ''), 0, ?)"
+                     ", address"
+                     ", SUBSTR(COALESCE(symbol, ''), 0, ?)"
+                     ", decimals"
+                     ", is_stabletoken FROM tokens WHERE NOT disabled", (self.MAX_TOKEN_NAME_LEN, self.MAX_TOKEN_SYMBOL_LEN))
             # note: using COALESCE() bc many tokens simply does not have, nor will have, a known name
             # The token name is just used for logging purposes though. It's just a human label attribute.
         while True:

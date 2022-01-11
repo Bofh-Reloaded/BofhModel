@@ -45,8 +45,10 @@ const Exchange *TheGraph::add_exchange(const Exchange::name_t &name
 }
 
 
-const Token *TheGraph::add_token(const std::string &name
+const Token *TheGraph::add_token(const char *name
                                  , const char *address
+                                 , const char *symbol
+                                 , unsigned int decimals
                                  , bool is_stablecoin)
 {
     auto entity_type = EntityType::TOKEN;
@@ -56,7 +58,7 @@ const Token *TheGraph::add_token(const std::string &name
     if (has_been_added)
     {
         auto address_ptr = &res.first->first;
-        entry.token = Token::make(&name, address_ptr, is_stablecoin);
+        entry.token = Token::make(name, address_ptr, symbol, decimals, is_stablecoin);
     }
     else {
         // already known to the index. Check it it's of the correct type
@@ -87,7 +89,6 @@ const LiquidityPool *TheGraph::add_lp(const Exchange *exchange
     {
         auto address_ptr = &res.first->first;
         entry.lp = LiquidityPool::make(exchange, address_ptr, token0, token1);
-        auto os = OperableSwap::make(token0, token1, entry.lp);
         token0->successors.emplace_back(OperableSwap::make(token0, token1, entry.lp));
         token0->predecessors.emplace_back(OperableSwap::make(token1, token0, entry.lp));
     }

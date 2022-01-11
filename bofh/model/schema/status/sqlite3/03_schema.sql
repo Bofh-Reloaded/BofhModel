@@ -20,7 +20,8 @@ CREATE TABLE tokens(
     address TEXT NOT NULL,
     is_stabletoken INTEGER NOT NULL DEFAULT 0,
     decimals INT DEFAULT NULL,
-    symbol TEXT DEFAULT NULL
+    symbol TEXT DEFAULT NULL,
+    disabled INT NOT NULL DEFAULT 0
 );
 
 
