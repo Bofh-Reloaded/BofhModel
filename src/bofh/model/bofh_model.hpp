@@ -5,7 +5,9 @@
 #include "bofh_types.hpp"
 #include "bofh_entity_idx_fwd.hpp"
 #include <vector>
+#include <functional>
 #include <boost/multiprecision/cpp_int.hpp>
+#include <boost/functional/hash.hpp>
 
 
 namespace bofh {
@@ -17,6 +19,49 @@ struct IndexedObject {
     IndexedObject(const address_t *address_): address(address_) {}
 };
 
+
+/**
+ * @brief Define a potential swap from a token to another.
+ *
+ * The swap is operatoed via the referred pool.
+ * This object is only necessary in order to clearly define graph
+ * edge connectivity in an uni-directional way. This allows
+ * nodes (tokens) to have a set of predecessors and successors.
+ */
+struct OperableSwap: Ref<OperableSwap> {
+    const Token* tokenFrom;
+    const Token* tokenTo;
+    const LiquidityPool *pool;
+    const std::size_t hashValue; // pre-computed on init for performance reasons
+
+    std::size_t m_calcHash() const
+    {
+        std::size_t res = 0;
+        boost::hash_combine(res, tokenFrom);
+        boost::hash_combine(res, tokenTo);
+        boost::hash_combine(res, pool);
+        return res;
+    }
+
+    OperableSwap(const Token *tokenFrom_
+                 , const Token *tokenTo_
+                 , const LiquidityPool *pool_):
+        tokenFrom(tokenFrom_),
+        tokenTo(tokenTo_),
+        pool(pool_),
+        hashValue(m_calcHash())
+    { }
+    OperableSwap(const OperableSwap &) = default;
+
+    bool operator==(const OperableSwap &o) const noexcept {
+        return hashValue == o.hashValue;
+    }
+    bool operator<(const OperableSwap &o) const noexcept {
+        return hashValue < o.hashValue;
+    }
+};
+
+
 /**
  * @brief DeFi token identifier
  *
@@ -27,7 +72,7 @@ struct IndexedObject {
 struct Token: Ref<Token>, IndexedObject
 {
     const string *name = nullptr;
-    const bool is_stablecoin;
+    const bool is_stable;
 
     /**
      * @brief Token ctor
@@ -37,9 +82,9 @@ struct Token: Ref<Token>, IndexedObject
      */
     Token(const string *name_
           , const address_t *address_
-          , bool is_stablecoin_)
+          , bool is_stable_)
         : IndexedObject(address_)
-        , is_stablecoin(is_stablecoin_)
+        , is_stable(is_stable_)
     {
         if (name_ != nullptr && !name_->empty())
         {
@@ -52,13 +97,14 @@ struct Token: Ref<Token>, IndexedObject
         if (name != nullptr) delete name;
     }
 
-    struct LPoolList: std::vector<LiquidityPool*>
+    struct OperableSwaps: std::vector<OperableSwap*>
     {
-        typedef std::vector<LiquidityPool*> base_t;
+        typedef std::vector<OperableSwap*> base_t;
         using base_t::vector;
     };
 
-    LPoolList pools;
+    OperableSwaps predecessors;
+    OperableSwaps successors;
 };
 
 
@@ -78,8 +124,6 @@ struct Exchange: Ref<Exchange>, IndexedObject {
         , name(name_)
         {}
 };
-
-
 
 
 /**
@@ -128,7 +172,6 @@ struct LiquidityPool: Ref<LiquidityPool>, IndexedObject
         check();
     }
 };
-
 
 
 /**
@@ -227,10 +270,11 @@ struct TheGraph: Ref<TheGraph> {
     /**
      * @brief reindexes graph knowledge also for datatag id resolution
      */
-    void reindex_tags(void);
+    void reindex(void);
 };
 
 
 
 } // namespace model
 } // namespace bofh
+

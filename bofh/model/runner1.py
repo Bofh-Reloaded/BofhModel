@@ -142,7 +142,7 @@ class Runner:
                 if tok is None:
                     raise RuntimeError("integrity error: token address is already not of a token: id=%r, %r" % (id, args))
                 tok.tag = id
-        self.graph.reindex_tags()
+        self.graph.reindex()
 
     def preload_pools(self):
         self.log.info("preloading pools...")
@@ -163,7 +163,7 @@ class Runner:
                 if self.args.pools_limit and self.pools_ctr >= self.args.pools_limit:
                     self.log.info("stopping after loading %r pools, as per effect of -n cli parameter", self.pools_ctr)
                     break
-        self.graph.reindex_tags()
+        self.graph.reindex()
 
     def preload_balances(self):
         self.log.info("fetching balances via Web3...")

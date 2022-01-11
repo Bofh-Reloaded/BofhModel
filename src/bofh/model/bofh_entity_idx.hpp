@@ -2,6 +2,7 @@
 #include "bofh_model_fwd.hpp"
 #include "bofh_types.hpp"
 #include <unordered_map>
+#include <set>
 #include <hash_fun.h>
 #include <boost/functional/hash.hpp>
 
@@ -38,6 +39,7 @@ struct address_sort
 
 struct EntityIndex: std::unordered_map<address_t, IndexEntry, address_sort> {
     std::unordered_map<datatag_t, IndexEntry> tag_index;
+    std::set<Token*> stable_tokens;
 };
 
 } // namespace idx

@@ -9,6 +9,7 @@ struct IndexedObject;
 struct Token;
 struct Balance;
 struct LiquidityPool;
+struct OperableSwap;
 struct TheGraph;
 struct Exchange;
 

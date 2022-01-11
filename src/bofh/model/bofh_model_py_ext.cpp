@@ -2,6 +2,7 @@
 
 #include <boost/python.hpp>
 #include <boost/python/suite/indexing/vector_indexing_suite.hpp>
+#include <boost/python/suite/indexing/map_indexing_suite.hpp>
 #include "longobject.h"
 #include "bofh_model.hpp"
 
@@ -128,10 +129,18 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     register_ptr_to_python<const IndexedObject*>();
     register_ptr_to_python<IndexedObject*>();
 
-    class_<Token::LPoolList>("SwapList").def(vector_indexing_suite<Token::LPoolList>());
+    class_<OperableSwap, dont_make_copies>("OperableSwap", no_init)
+            .def_readonly("tokenFrom", &OperableSwap::tokenFrom)
+            .def_readonly("tokenTo", &OperableSwap::tokenTo)
+            .def_readonly("pool", &OperableSwap::pool);
+    register_ptr_to_python<const OperableSwap*>();
+    register_ptr_to_python<OperableSwap*>();
+
+    class_<Token::OperableSwaps>("OperableSwaps").def(vector_indexing_suite<Token::OperableSwaps>());
     class_<Token, bases<IndexedObject>, dont_make_copies>("Token", no_init)
-            .def_readonly("name"   , &Token::name)
-            .def_readonly("pools"  , &Token::pools)
+            .def_readonly("name"        , &Token::name)
+            .def_readonly("predecessors", &Token::predecessors)
+            .def_readonly("successors"  , &Token::successors)
             ;
     register_ptr_to_python<const Token*>();
     register_ptr_to_python<Token*>();
@@ -154,14 +163,14 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     class_<TheGraph, dont_make_copies>("TheGraph")
             .def("add_exchange" , &TheGraph::add_exchange    , dont_manage_returned_pointer())
             .def("add_token"    , &TheGraph::add_token       , dont_manage_returned_pointer())
-            .def("add_swap_pair", &TheGraph::add_lp          , dont_manage_returned_pointer())
+            .def("add_lp"       , &TheGraph::add_lp          , dont_manage_returned_pointer())
             .def("lookup_token" , static_cast<const Token    *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
             .def("lookup_token" , static_cast<const Token    *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
             .def("lookup_lp"    , static_cast<const LiquidityPool *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
             .def("lookup_lp"    , static_cast<const LiquidityPool *(TheGraph::*)(const char *         )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
             .def("lookup_lp"    , static_cast<const LiquidityPool *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
             .def("lookup"       , &TheGraph::lookup          , dont_manage_returned_pointer())
-            .def("reindex_tags" , &TheGraph::reindex_tags)
+            .def("reindex"      , &TheGraph::reindex)
             ;
 }
 

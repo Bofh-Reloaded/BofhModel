@@ -87,6 +87,9 @@ const LiquidityPool *TheGraph::add_lp(const Exchange *exchange
     {
         auto address_ptr = &res.first->first;
         entry.lp = LiquidityPool::make(exchange, address_ptr, token0, token1);
+        auto os = OperableSwap::make(token0, token1, entry.lp);
+        token0->successors.emplace_back(OperableSwap::make(token0, token1, entry.lp));
+        token0->predecessors.emplace_back(OperableSwap::make(token1, token0, entry.lp));
     }
     else {
         // already known to the index. Check it it's of the correct type
@@ -155,12 +158,18 @@ const IndexedObject *TheGraph::lookup(const address_t &address)
     return res->second.lp;
 }
 
-void TheGraph::reindex_tags(void)
+void TheGraph::reindex(void)
 {
     index->tag_index.clear();
+    index->stable_tokens.clear();
     for (auto &i: *index)
     {
         index->tag_index.emplace(i.second.indexed_object->tag, i.second);
+        if (i.second.type == EntityType::TOKEN
+            && i.second.token->is_stable)
+        {
+            index->stable_tokens.emplace(i.second.token);
+        }
     }
 }
 
