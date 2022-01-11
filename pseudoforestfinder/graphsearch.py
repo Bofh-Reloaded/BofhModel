@@ -10,7 +10,7 @@ Spyder Editor
 #from load_bsc_pools_graph import load_graph_from_json_coso 
 
 #the_graph = load_graph_from_json_coso()
-
+import sys
 from load_from_status_db import load_graph_from_db_directory
 from load_from_status_db import load_predicted_swap_events
 
@@ -85,19 +85,62 @@ def get_edge_pool(graph,start,end,key):
     mypool = dict[0][key]
     print(mypool.address)
     if mypool.reserve1 == 0 :
-        return -1
-    ratio = mypool.reserve0/mypool.reserve1
+        raise Exception ('Found empty reserve in liquidity pool') 
+    #ratio = mypool.reserve0/mypool.reserve1
+    ratio = mypool
+    #if ratio >= mypool.reserve0:
+        #exchange for next swap my pool.reserve0
+    #else #exchange ratio 
     return ratio
 
-def compute_weights_in_path(path,graph):
-    cost = 1
-    for x in range(0,len(path)-1):
-        pool_cost = get_edge_pool(graph, path[x], path[x+1], "pool")
-        if pool_cost == -1:
-            return -1
-        cost = cost * pool_cost
-    return cost
+#Computes the revenue for a triangular exchange
+def compute_weights_in_path(path,graph,fee):
+    amount = sys.maxsize
+    
+    try:
+        start_pool = get_edge_pool(graph, path[0], path[1], 'pool')
+        start_amount = max_flux(start_pool)
+        if start_amount == 0:
+            return (-2,0,0)
+        for x in range(0,len(path)-1):
+         
+            pool = get_edge_pool(graph, path[x], path[x+1], "pool")
+        #if pool_cost == -1:
+         #   return -1
+        #cost = cost * pool_cost
+            amount = min(amount,max_flux(pool))            
+            amount = gain_per_edge(pool, amount, fee)
+    except:
+        return (-1,0,0)
+    return ((amount/start_amount), amount, start_amount)
 
+
+def gain_per_edge(pool,amount,fee):
+    return amount * pool.reserve1/pool.reserve0 * (1-fee)
+
+def max_flux(pool):
+    return abs(pool.reserve1 - pool.reserve0)/3
+    
+#not used for now - to be debugged
+def automagical_formula_3_way (r1,r2,path, graph, delta):
+    dict = graph[path[0]][path[1]]
+    mypool = dict[0]['pool']
+    a1 = mypool.reserve0
+    b1 = mypool.reserve1
+    dict = graph[path[1]][path[2]]
+    mypool = dict[0]['pool']
+    b2 = mypool.reserve0
+    c2 = mypool.reserve1
+    dict = graph[path[2]][path[3]]
+    mypool = dict[0]['pool']
+    c3 = mypool.reserve0
+    a3 = mypool.reserve1
+    checksum = a1*b1*b2*c2*c3*a3
+    if checksum == 0:
+        return -1
+    gain = (r1 * r2 * ((r1**2 * r2**2 * b1 * c2 * a3)/(b2*c3+r1*r2*b1*c3*r1**2*r2**2*b1*c2)/((a1*b2*c3))/(b2*c3+r1*r2*b1*c3+r1**2*r2**2*b1*c2)+r1*delta)-1)*delta
+    return gain
+    
 
 #Generating the graph of example on draw.io
 #G = nx.MultiDiGraph()
@@ -152,11 +195,17 @@ for analyzed_path in possible_paths_2:
     print(analyzed_path)
 print("The number of possible 3-way exchanges starting from node", start_node, " is: ", len(possible_paths_3))
 print("Printing the list of possible paths and their cost:")
-file = open ('3ways.txt','w')
+arbitrage_opportunity = []
+file = open ('3waystest.txt','w')
 for analyzed_path in possible_paths_3:
+    weight,amount,start_amount = compute_weights_in_path(analyzed_path, G,0.003)
     #print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
     #print(analyzed_path)
-    file.write(repr(analyzed_path) + " total unbalance: " + repr(compute_weights_in_path(analyzed_path, G)) + '\n')
+    #file.write(repr(analyzed_path) + " total unbalance: " + repr(compute_weights_in_path(analyzed_path, G)) + '\n')
+    #file.write(repr(analyzed_path) + " total unbalance: " + repr(compute_weights_in_path(analyzed_path, G,0.003)) + '\n')
+    if weight >= 1:
+        file.write(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:.3} -> {amount:.3} \n")
+        arbitrage_opportunity.append(analyzed_path)
 file.close()
 
 #print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths_4))
