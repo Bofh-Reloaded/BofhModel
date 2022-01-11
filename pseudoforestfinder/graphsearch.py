@@ -93,6 +93,7 @@ def get_edge_pool(graph,start,end,key):
     #else #exchange ratio 
     return ratio
 
+#Computes the revenue for a triangular exchange
 def compute_weights_in_path(path,graph,fee):
     amount = sys.maxsize
     
@@ -120,7 +121,7 @@ def gain_per_edge(pool,amount,fee):
 def max_flux(pool):
     return abs(pool.reserve1 - pool.reserve0)/3
     
-
+#not used for now - to be debugged
 def automagical_formula_3_way (r1,r2,path, graph, delta):
     dict = graph[path[0]][path[1]]
     mypool = dict[0]['pool']
@@ -194,6 +195,7 @@ for analyzed_path in possible_paths_2:
     print(analyzed_path)
 print("The number of possible 3-way exchanges starting from node", start_node, " is: ", len(possible_paths_3))
 print("Printing the list of possible paths and their cost:")
+arbitrage_opportunity = []
 file = open ('3waystest.txt','w')
 for analyzed_path in possible_paths_3:
     weight,amount,start_amount = compute_weights_in_path(analyzed_path, G,0.003)
@@ -203,6 +205,7 @@ for analyzed_path in possible_paths_3:
     #file.write(repr(analyzed_path) + " total unbalance: " + repr(compute_weights_in_path(analyzed_path, G,0.003)) + '\n')
     if weight >= 1:
         file.write(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:.3} -> {amount:.3} \n")
+        arbitrage_opportunity.append(analyzed_path)
 file.close()
 
 #print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths_4))
