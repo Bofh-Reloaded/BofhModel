@@ -1,8 +1,5 @@
 from asyncio import get_event_loop
 from functools import lru_cache
-
-from jsonrpc_base import ProtocolError
-
 from bofh.utils.misc import progress_printer
 from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, parse_data_parameters, \
     parse_string_return
@@ -95,26 +92,29 @@ class Runner:
     def tokens_requiring_update_ctr(self):
         with self.db as curs:
             return curs.execute("SELECT COUNT(1) FROM tokens "
-                                "WHERE symbol IS NULL "
-                                "   OR name IS NULL "
-                                "   OR decimals IS NULL").get_int()
+                                "WHERE NOT disabled AND ("
+                                "      symbol   IS NULL "
+                                "   OR name     IS NULL "
+                                "   OR decimals IS NULL )").get_int()
 
     def tokens_requiring_update(self):
         with self.db as curs:
             for i in curs.execute("SELECT address FROM tokens "
                                   "WHERE NOT disabled AND ("
-                                  "      symbol IS NULL "
-                                  "   OR name IS NULL "
-                                  "   OR decimals IS NULL)").get_all():
+                                  "      symbol   IS NULL "
+                                  "   OR name     IS NULL "
+                                  "   OR decimals IS NULL )").get_all():
                 yield i[0]
 
     def read_token_names(self):
         self.log.info("fetching token names...")
-        print_progress = progress_printer(self.tokens_requiring_update_ctr()
+        progress = progress_printer(self.tokens_requiring_update_ctr()
                                           , "fetching token data {percent}% ({count} of {tot}"
                                             " eta={expected_secs:.0f}s at {rate:.0f} items/s) ..."
-                                          , print_every_percent=1
                                           , on_same_line=True)
+        progress.updates = 0
+        progress.broken = 0
+        progress.total = 0
         with Web3PoolExecutor(connection_uri=self.args.web3_rpc_url, max_workers=self.args.max_workers) as executor:
             self.log.info("fetching token data via Web3:"
                           "\n\t- %r requests"
@@ -132,13 +132,23 @@ class Runner:
                 for success, token_addr, name, symbol, decimals in executor.map(read_token_data,
                                                                        tokens_requiring_update,
                                                                        chunksize=self.args.chunk_size):
+                    progress.total += 1
                     if success:
-                        curs.execute("UPDATE tokens SET name=?, symbol=?, decimals=? WHERE NOT address = ?", (name, symbol, decimals, token_addr))
+                        curs.execute("UPDATE tokens SET name=?, symbol=?, decimals=? WHERE address = ?", (name, symbol, decimals, token_addr))
+                        progress.updates += 1
                     else:
                         curs.execute("UPDATE tokens SET disabled=1 WHERE address  = ?", (token_addr, ))
-                        self.log.warning("token %s seems to be broken. marking it with disabled=1", token_addr)
-                    if print_progress():
+                        progress.broken += 1
+                        if self.args.verbose:
+                            self.log.warning("token %s seems to be broken. marking it with disabled=1", token_addr)
+                    if progress():
                         self.db.commit()
+                self.log.info("batch completed for a total of %r tokens."
+                              " %r tokens correctly updated, "
+                              "while %r were found broken and marked as disabled=1"
+                              , progress.total
+                              , progress.updates
+                              , progress.broken)
             finally:
                 self.db.commit()
             executor.shutdown(wait=True)
