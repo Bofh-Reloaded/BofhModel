@@ -44,6 +44,17 @@ const Exchange *TheGraph::add_exchange(const Exchange::name_t &name
     return entry.exchange;
 }
 
+const Exchange *TheGraph::lookup_exchange(datatag_t tag)
+{
+    auto res = index->tag_index.find(idx::datatag_indexed_key(EntityType::EXCHANGE, tag));
+    if (res == index->tag_index.end())
+    {
+        return nullptr;
+    }
+    return res->second.exchange;
+}
+
+
 
 const Token *TheGraph::add_token(const char *name
                                  , const char *address
@@ -118,9 +129,8 @@ const Token *TheGraph::lookup_token(const address_t &address)
 
 const Token *TheGraph::lookup_token(datatag_t tag)
 {
-    auto entity_type = EntityType::TOKEN;
-    auto res = index->tag_index.find(tag);
-    if (res == index->tag_index.end() || res->second.type != entity_type)
+    auto res = index->tag_index.find(idx::datatag_indexed_key(EntityType::TOKEN, tag));
+    if (res == index->tag_index.end())
     {
         return nullptr;
     }
@@ -140,9 +150,9 @@ const LiquidityPool *TheGraph::lookup_lp(const address_t &address)
 
 const LiquidityPool *TheGraph::lookup_lp(datatag_t tag)
 {
-    auto entity_type = EntityType::LP;
-    auto res = index->tag_index.find(tag);
-    if (res == index->tag_index.end() || res->second.type != entity_type)
+    ;
+    auto res = index->tag_index.find(idx::datatag_indexed_key(EntityType::LP, tag));
+    if (res == index->tag_index.end())
     {
         return nullptr;
     }
@@ -165,7 +175,8 @@ void TheGraph::reindex(void)
     index->stable_tokens.clear();
     for (auto &i: *index)
     {
-        index->tag_index.emplace(i.second.indexed_object->tag, i.second);
+        auto obj = i.second;
+        index->tag_index.emplace(idx::datatag_indexed_key(obj.type, obj.indexed_object->tag), i.second);
         if (i.second.type == EntityType::TOKEN
             && i.second.token->is_stable)
         {

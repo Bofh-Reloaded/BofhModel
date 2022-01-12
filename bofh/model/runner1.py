@@ -125,11 +125,13 @@ class Runner:
     def pools_ctr(self):
         return len(self.pools)
 
+    NULL_ADDRESS = "0x0000000000000000000000000000000000000000"
+
     def preload_exchanges(self):
         self.log.info("preloading exchanges...")
         with self.db as curs:
             for id, *args in curs.list_exchanges():
-                exc = self.graph.add_exchange(*args)
+                exc = self.graph.add_exchange(*args, self.NULL_ADDRESS)
                 assert exc is not None
                 exc.tag = id
 
@@ -153,7 +155,9 @@ class Runner:
                     self.log.warning("disabling pool %s due to missing or disabled affering token "
                                      "(token0=%r, token1=%r)", address, token0_id, token1_id)
                     continue
-                pool = self.graph.add_lp(address, t0, t1)
+                exchange = self.graph.lookup_exchange(exchange_id)
+                assert exchange is not None
+                pool = self.graph.add_lp(exchange, address, t0, t1)
                 self.tot += 1
                 if pool is None:
                     self.skip += 1

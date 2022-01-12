@@ -37,11 +37,44 @@ struct address_sort
     }
 };
 
+struct datatag_indexed_key {
+    EntityType type;
+    datatag_t tag;
+    std::size_t hashValue;
+
+    datatag_indexed_key(EntityType type_, datatag_t tag_)
+        : type(type_)
+        , tag(tag_)
+        , hashValue(0)
+    {
+        boost::hash_combine(hashValue, type);
+        boost::hash_combine(hashValue, tag);
+    }
+
+    bool operator==(const datatag_indexed_key&o) const noexcept {
+        return hashValue == o.hashValue;
+    }
+    bool operator<(const datatag_indexed_key&o) const noexcept {
+        return hashValue < o.hashValue;
+    }
+
+    struct hasher {
+        std::size_t operator()(datatag_indexed_key const& s) const noexcept {
+            return s.hashValue;
+        }
+    };
+
+};
+
+
+
 struct EntityIndex: std::unordered_map<address_t, IndexEntry, address_sort> {
-    std::unordered_map<datatag_t, IndexEntry> tag_index;
+    std::unordered_map<datatag_indexed_key, IndexEntry, datatag_indexed_key::hasher> tag_index;
     std::set<Token*> stable_tokens;
 };
 
 } // namespace idx
 } // namespace model
 } // namespace bofh
+
+

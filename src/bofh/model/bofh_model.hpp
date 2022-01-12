@@ -204,6 +204,12 @@ struct TheGraph: Ref<TheGraph> {
     const Exchange *add_exchange(const Exchange::name_t &name
                                  , const char *address);
 
+    /**
+     * @brief fetch a known exchange node by tag id
+     * @warning This takes O(n) time
+     */
+    const Exchange *lookup_exchange(datatag_t tag);
+
 
     /**
      * @brief Introduce a new token node into the graph, if not existing.

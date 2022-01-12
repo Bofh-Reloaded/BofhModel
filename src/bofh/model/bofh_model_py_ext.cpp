@@ -163,16 +163,17 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     register_ptr_to_python<LiquidityPool*>();
 
     class_<TheGraph, dont_make_copies>("TheGraph")
-            .def("add_exchange" , &TheGraph::add_exchange    , dont_manage_returned_pointer())
-            .def("add_token"    , &TheGraph::add_token       , dont_manage_returned_pointer())
-            .def("add_lp"       , &TheGraph::add_lp          , dont_manage_returned_pointer())
-            .def("lookup_token" , static_cast<const Token    *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
-            .def("lookup_token" , static_cast<const Token    *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
-            .def("lookup_lp"    , static_cast<const LiquidityPool *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
-            .def("lookup_lp"    , static_cast<const LiquidityPool *(TheGraph::*)(const char *         )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
-            .def("lookup_lp"    , static_cast<const LiquidityPool *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
-            .def("lookup"       , &TheGraph::lookup          , dont_manage_returned_pointer())
-            .def("reindex"      , &TheGraph::reindex)
+            .def("add_exchange"   , &TheGraph::add_exchange    , dont_manage_returned_pointer())
+            .def("add_token"      , &TheGraph::add_token       , dont_manage_returned_pointer())
+            .def("add_lp"         , &TheGraph::add_lp          , dont_manage_returned_pointer())
+            .def("lookup_exchange", &TheGraph::lookup_exchange , dont_manage_returned_pointer())
+            .def("lookup_token"   , static_cast<const Token    *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
+            .def("lookup_token"   , static_cast<const Token    *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
+            .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
+            .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(const char *         )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
+            .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
+            .def("lookup"         , &TheGraph::lookup          , dont_manage_returned_pointer())
+            .def("reindex"        , &TheGraph::reindex)
             ;
 }
 

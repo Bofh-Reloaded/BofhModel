@@ -12,7 +12,7 @@ Options:
   -h  --help
   -d, --dsn=<connection_str>            DB dsn connection string [default: sqlite3://status.db]
   -c, --connection_url=<url>            Web3 RPC connection URL [default: %s]
-  -n <n>                                number of pools to query before exit (benchmark mode)
+  -n <n>                                limit number of items to load (benchmark mode)
   -j <n>                                number of RPC data ingest workers, default one per hardware thread. Only used during initialization phase
   -v, --verbose                         debug output
   --chunk_size=<n>                      preloaded work chunk size per each worker [default: 100]
@@ -28,7 +28,7 @@ from bofh.model.database import ModelDB, BasicScopedCursor
 class Args:
     status_db_dsn: str = None
     verbose: bool = False
-    pools_limit: int = 0
+    items_limit: int = 0
     web3_rpc_url: str = None
     max_workers: int = 0
     chunk_size: int = 0
@@ -47,7 +47,7 @@ class Args:
         return cls(
             status_db_dsn = args["--dsn"]
             , verbose=bool(cls.default(args["--verbose"], 0))
-            , pools_limit=int(cls.default(args["-n"], 0))
+            , items_limit=int(cls.default(args["-n"], 0))
             , web3_rpc_url=cls.default(args["--connection_url"], 0)
             , max_workers=int(cls.default(args["-j"], 0))
             , chunk_size=int(cls.default(args["--chunk_size"], 100))
@@ -126,7 +126,8 @@ class Runner:
                            , self.args.max_workers
                            , self.args.chunk_size
                            )
-            tokens_requiring_update = list(self.tokens_requiring_update())
+            tokens_requiring_update = list(self.tokens_requiring_update())  # Consolidate list in RAM, so that the DB
+                                                                            # is unlocked (we are updating it later)
             curs = self.db.cursor()
             try:
                 for success, token_addr, name, symbol, decimals in executor.map(read_token_data,
@@ -143,6 +144,9 @@ class Runner:
                             self.log.warning("token %s seems to be broken. marking it with disabled=1", token_addr)
                     if progress():
                         self.db.commit()
+                    if self.args.items_limit and progress.total >= self.args.items_limit:
+                        self.log.info("aborting batch after %r items, due to -n CLI parameter", self.args.items_limit)
+                        break
                 self.log.info("batch completed for a total of %r tokens."
                               " %r tokens correctly updated, "
                               "while %r were found broken and marked as disabled=1"
