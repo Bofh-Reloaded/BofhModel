@@ -152,8 +152,10 @@ class Runner:
                 t0 = self.graph.lookup_token(token0_id)
                 t1 = self.graph.lookup_token(token1_id)
                 if not t0 or not t1:
-                    self.log.warning("disabling pool %s due to missing or disabled affering token "
-                                     "(token0=%r, token1=%r)", address, token0_id, token1_id)
+                    self.skip += 1
+                    if self.args.verbose:
+                        self.log.warning("disabling pool %s due to missing or disabled affering token "
+                                         "(token0=%r, token1=%r)", address, token0_id, token1_id)
                     continue
                 exchange = self.graph.lookup_exchange(exchange_id)
                 assert exchange is not None
@@ -161,10 +163,12 @@ class Runner:
                 self.tot += 1
                 if pool is None:
                     self.skip += 1
-                    self.log.warning("integrity error: pool address is already not of a pool: id=%r, %r -- skip %r over %r", id, address, self.skip, self.tot)
-                else:
-                    pool.tag = id
-                    self.pools.add(pool)
+                    if self.args.verbose:
+                        self.log.warning("integrity error: pool address is already not of a pool: "
+                                         "id=%r, %r -- skip %r over %r", id, address, self.skip, self.tot)
+                    continue
+                pool.tag = id
+                self.pools.add(pool)
                 if self.args.pools_limit and self.pools_ctr >= self.args.pools_limit:
                     self.log.info("stopping after loading %r pools, as per effect of -n cli parameter", self.pools_ctr)
                     break
@@ -175,8 +179,6 @@ class Runner:
         print_progress = progress_printer(self.pools_ctr
                                           , "fetching pool reserves {percent}% ({count} of {tot}"
                                             " eta={expected_secs:.0f}s at {rate:.0f} items/s) ..."
-                                          , print_every=10000
-                                          , print_every_percent=1
                                           , on_same_line=True)
         with Web3PoolExecutor(connection_uri=self.args.web3_rpc_url, max_workers=self.args.max_workers) as executor:
             self.log.info("fetching balances via Web3:"
@@ -203,12 +205,12 @@ class Runner:
                     if not pair:
                         raise IndexError("unknown pool: %s" % pool_addr)
                     # reset pool reserves
-                    print_progress()
                     pair.reserve0, pair.reserve1 = reserve0, reserve1
                     if curs:
                         pool = self.graph.lookup_lp(pool_addr)
                         assert pool
                         curs.add_pool_reserve(pool.tag, reserve0, reserve1)
+                    print_progress()
             finally:
                 if self.swap_log_db:
                     self.swap_log_db.commit()
@@ -225,84 +227,86 @@ class Runner:
                     if not pool_addr:
                         continue
                     pool = self.graph.lookup_lp(pool_addr)
-                    self.log.info("pool of interest: %s (%s)", pool_addr, pool and "KNOWN" or "unknown")
-                    if pool:
-                        try:
-                            amount0In, amount1In, amount0Out, amount1Out = parse_data_parameters(log["data"])
-                        except:
-                            self.log.exception("unable to decode swap log data")
-                            continue
-                        try:
-                            if amount0In > 0 and amount1In > 0:
-                                raise RuntimeError("inconsistent swap. Should not be possible: "
-                                                   "amount0In > 0 and amount1In > 0 (%r, %r)" %
-                                                   (amount0In, amount1In))
-                            if amount0Out > 0 and amount1Out > 0:
+                    if not pool and self.args.verbose:
+                        self.log.info("unknown pool of interest: %s", pool_addr)
+                        continue
+                    self.log.info("pool of interest: %s", pool_addr)
+                    try:
+                        amount0In, amount1In, amount0Out, amount1Out = parse_data_parameters(log["data"])
+                    except:
+                        self.log.exception("unable to decode swap log data")
+                        continue
+                    try:
+                        if amount0In > 0 and amount1In > 0:
+                            raise RuntimeError("inconsistent swap. Should not be possible: "
+                                               "amount0In > 0 and amount1In > 0 (%r, %r)" %
+                                               (amount0In, amount1In))
+                        if amount0Out > 0 and amount1Out > 0:
+                            raise RuntimeError(
+                                "inconsistent swap. Should not be possible: amount0Out > 0 and amount1Out > 0 (%r, %r)" %
+                                (amount0Out, amount1Out))
+                        checks_out = False
+                        if amount0In > 0:
+                            if amount1Out == 0:
                                 raise RuntimeError(
-                                    "inconsistent swap. Should not be possible: amount0Out > 0 and amount1Out > 0 (%r, %r)" %
-                                    (amount0Out, amount1Out))
-                            checks_out = False
-                            if amount0In > 0:
-                                if amount1Out == 0:
-                                    raise RuntimeError(
-                                        "inconsistent swap. amount0In > 0 but amount1Out == 0 (%r, %r)" %
-                                        (amount0In, amount1Out))
-                                tokenIn = pool.token0
-                                tokenOut = pool.token1
-                                balanceIn = amount0In
-                                balanceOut = amount1Out
-                                reserveInBefore = int(str(pool.reserve0))
-                                reserveOutBefore = int(str(pool.reserve1))
-                                checks_out = True
+                                    "inconsistent swap. amount0In > 0 but amount1Out == 0 (%r, %r)" %
+                                    (amount0In, amount1Out))
+                            tokenIn = pool.token0
+                            tokenOut = pool.token1
+                            balanceIn = amount0In
+                            balanceOut = amount1Out
+                            reserveInBefore = int(str(pool.reserve0))
+                            reserveOutBefore = int(str(pool.reserve1))
+                            checks_out = True
 
-                            if amount1In > 0:
-                                if amount0Out == 0:
-                                    raise RuntimeError(
-                                        "inconsistent swap. amount1In > 0 but amount0Out == 0 (%r, %r)" %
-                                        (amount1In, amount0Out))
-                                tokenIn = pool.token1
-                                tokenOut = pool.token0
-                                balanceIn = amount1In
-                                balanceOut = amount0Out
-                                reserveInBefore = int(str(pool.reserve1))
-                                reserveOutBefore = int(str(pool.reserve0))
-                                checks_out = True
-                            if checks_out:
-                                reserveInAfter = reserveInBefore + balanceIn
-                                reserveOutAfter = reserveOutBefore - balanceOut
-                                reserveInPctGain = (100 * balanceIn) / reserveInBefore
-                                reserveOutPctLoss = (100 * balanceOut) / reserveOutBefore
-                                rate = balanceOut / balanceIn
-                                self.log.info("pool %s swaps %r %s toward %r %s, "
-                                              "effective %s/%s swap rate is %02.05f, "
-                                              "reserves changed from %r/%r to %r/%r, "
-                                              "this swap affects %02.10f%% of the stored liquidity"
-                                              , pool_addr, balanceIn, tokenIn.address, balanceOut, tokenOut.address
-                                              , tokenIn.address, tokenOut.address, rate
-                                              , reserveInBefore, reserveOutBefore, reserveInAfter, reserveOutAfter
-                                              , reserveInPctGain)
-                                if self.swap_log_db:
-                                    with self.swap_log_db as curs:
-                                        curs.add_swap_log(
-                                            block_nr=self.latestBlockNumber
-                                            , json_data=log
-                                            , pool_id=pool.tag
-                                            , tokenIn=tokenIn.tag
-                                            , tokenOut=tokenIn.tag
-                                            , poolAddr=str(pool.address)
-                                            , tokenInAddr=str(tokenIn.address)
-                                            , tokenOutAddr=str(tokenOut.address)
-                                            , balanceIn=balanceIn
-                                            , balanceOut=balanceOut
-                                            , reserveInBefore=reserveInBefore
-                                            , reserveOutBefore=reserveOutBefore
-                                        )
-                            else:
-                                self.log.warning("swap parameters don't check out. ignored")
+                        if amount1In > 0:
+                            if amount0Out == 0:
+                                raise RuntimeError(
+                                    "inconsistent swap. amount1In > 0 but amount0Out == 0 (%r, %r)" %
+                                    (amount1In, amount0Out))
+                            tokenIn = pool.token1
+                            tokenOut = pool.token0
+                            balanceIn = amount1In
+                            balanceOut = amount0Out
+                            reserveInBefore = int(str(pool.reserve1))
+                            reserveOutBefore = int(str(pool.reserve0))
+                            checks_out = True
+                        if checks_out:
+                            reserveInAfter = reserveInBefore + balanceIn
+                            reserveOutAfter = reserveOutBefore - balanceOut
+                            reserveInPctGain = (100 * balanceIn) / reserveInBefore
+                            reserveOutPctLoss = (100 * balanceOut) / reserveOutBefore
+                            rate = balanceOut / balanceIn
+                            self.log.info("pool %s swaps %r %s toward %r %s, "
+                                          "effective %s/%s swap rate is %02.05f, "
+                                          "reserves changed from %r/%r to %r/%r, "
+                                          "this swap affects %02.10f%% of the stored liquidity"
+                                          , pool_addr, balanceIn, tokenIn.address, balanceOut, tokenOut.address
+                                          , tokenIn.address, tokenOut.address, rate
+                                          , reserveInBefore, reserveOutBefore, reserveInAfter, reserveOutAfter
+                                          , reserveInPctGain)
+                            if self.swap_log_db:
+                                with self.swap_log_db as curs:
+                                    curs.add_swap_log(
+                                        block_nr=self.latestBlockNumber
+                                        , json_data=log
+                                        , pool_id=pool.tag
+                                        , tokenIn=tokenIn.tag
+                                        , tokenOut=tokenIn.tag
+                                        , poolAddr=str(pool.address)
+                                        , tokenInAddr=str(tokenIn.address)
+                                        , tokenOutAddr=str(tokenOut.address)
+                                        , balanceIn=balanceIn
+                                        , balanceOut=balanceOut
+                                        , reserveInBefore=reserveInBefore
+                                        , reserveOutBefore=reserveOutBefore
+                                    )
+                        else:
+                            self.log.warning("swap parameters don't check out. ignored")
 
-                        except:
-                            self.log.exception("unexpected swap data. check this out")
-                            continue
+                    except:
+                        self.log.exception("unexpected swap data. check this out")
+                        continue
 
     async def prediction_polling_task(self):
         # await self.polling_started.wait()

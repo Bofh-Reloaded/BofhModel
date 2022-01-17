@@ -5,6 +5,7 @@ namespace model {
 namespace idx {
 
 struct EntityIndex;
+struct SwapIndex;
 
 } // namespace idx
 } // namespace model

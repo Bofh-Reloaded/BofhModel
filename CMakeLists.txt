@@ -6,6 +6,7 @@ if(MSYS OR MINGW)
     # cut out toolchain dlls
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static -static-libgcc -static-libstdc++")
 endif()
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fdiagnostics-color=always")
 
 set(CMAKE_CXX_STANDARD 20)
 
@@ -40,15 +41,20 @@ include_directories(${Python_INCLUDE_DIR})
 
 set(MODEL_SRC
     src/bofh/model/bofh_common.hpp
-    src/bofh/model/bofh_entity_idx.hpp
+    src/bofh/model/bofh_entity.hpp
+    src/bofh/model/bofh_entity.cpp
     src/bofh/model/bofh_entity_idx_fwd.hpp
+    src/bofh/model/bofh_entity_idx.hpp
+    src/bofh/model/bofh_entity_idx.cpp
     src/bofh/model/bofh_types.cpp
     src/bofh/model/bofh_types.hpp
     src/bofh/model/bofh_model.cpp
     src/bofh/model/bofh_model.hpp
     src/bofh/model/bofh_model_fwd.hpp
+    src/bofh/pathfinder/finder_3way.hpp
+    src/bofh/pathfinder/finder_3way.cpp
     )
-
+include_directories(src)
 # # Build library as a Python module. (Using Boost.Python)
 # add_library(bofh_model SHARED
 #     )
@@ -74,8 +80,10 @@ enable_testing()
 
 function(create_test test_name)
     add_executable(${test_name} EXCLUDE_FROM_ALL ${ARGN})
-    target_link_libraries(${test_name} bofh_model)
+    #target_link_libraries(${test_name} bofh_model_ext)
     add_test(${test_name} ${test_name})
 endfunction()
 
 create_test(test_address test/test_address.cpp)
+create_test(test_multiindex test/test_multiindex.cpp)
+

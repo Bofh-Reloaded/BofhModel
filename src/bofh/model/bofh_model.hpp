@@ -1,64 +1,104 @@
+/**
+ * @file bofh_model.hpp
+ * @brief Models for entities which have a role in the blockchain.
+ *
+ * This includes:
+ *
+ *  - Exchange
+ *  - Token
+ *  - LiquidityPool
+ *  - OperableSwap
+ *  - TheGraph
+ */
+
 #pragma once
 
 #include "bofh_common.hpp"
 #include "bofh_model_fwd.hpp"
 #include "bofh_types.hpp"
 #include "bofh_entity_idx_fwd.hpp"
-#include <vector>
-#include <functional>
-#include <boost/multiprecision/cpp_int.hpp>
-#include <boost/functional/hash.hpp>
+#include <boost/noncopyable.hpp>
+#include <memory>
 
 
 namespace bofh {
 namespace model {
 
-struct IndexedObject {
-    datatag_t tag;
-    const address_t *address;
-    IndexedObject(const address_t *address_): address(address_) {}
-};
+/**
+ * @brief base object for all entities that are elected to be part of the main index.
+ * @note We are not using language-provided RTTI, that's an explicit choice here.
+ */
+
+/**
+ * @brief Enum for entity type.
+ */
+typedef enum {
+    TYPE_EXCHANGE,  ///< Exchange object
+    TYPE_TOKEN,     ///< Token object
+    TYPE_LP,        ///< LiquidityPool object
+} EntityType_e;
 
 
 /**
- * @brief Define a potential swap from a token to another.
+ * @brief Base for all blockchain-addressable objects
  *
- * The swap is operatoed via the referred pool.
+ * In our model, an entity in known by its blockchain address,
+ * or (in alternative) by its arbitrary tag number.
+ *
+ * Multiple entities CAN have the same tag,
+ * however two entities of the same type CAN'T.
+ */
+struct Entity: boost::noncopyable
+{
+
+    const EntityType_e type;    ///< type identifier
+    const datatag_t    tag;     ///< model consumes attach their identifiers to this member. It will be indexed. Not that it's non-const.
+    const address_t    address; ///< 320bit blockchain address of the thing. also indexed.
+
+    Entity(const EntityType_e type_
+           , datatag_t        tag_
+           , const address_t &address_)
+        : type(type_)
+        , tag(tag_)
+        , address(address_)
+    {}
+};
+
+
+
+/**
+ * @brief Define a potential swap from a source to a destination token.
+ *
+ * The swap is operated by the referred pool.
+ * This object ties together a tuple made of:
+ *
+ *  - tokenSrc
+ *  - tokenDest
+ *  - pool
+ *
  * This object is only necessary in order to clearly define graph
  * edge connectivity in an uni-directional way. This allows
  * nodes (tokens) to have a set of predecessors and successors.
+ *
+ * In principle, due to the fact that a LP opeates swaps both ways,
+ * a token's predecessor set and successor set are the same, however
+ * we model this relationship as a directional graph.
+ * This grants us an easy way to mark bad or unwanted swaps
+ * even in a single direction.
  */
-struct OperableSwap: Ref<OperableSwap> {
-    const Token* tokenFrom;
-    const Token* tokenTo;
+struct OperableSwap: boost::noncopyable, Ref<OperableSwap>
+{
+    const Token* tokenSrc;
+    const Token* tokenDest;
     const LiquidityPool *pool;
-    const std::size_t hashValue; // pre-computed on init for performance reasons
 
-    std::size_t m_calcHash() const
-    {
-        std::size_t res = 0;
-        boost::hash_combine(res, tokenFrom);
-        boost::hash_combine(res, tokenTo);
-        boost::hash_combine(res, pool);
-        return res;
-    }
-
-    OperableSwap(const Token *tokenFrom_
-                 , const Token *tokenTo_
-                 , const LiquidityPool *pool_):
-        tokenFrom(tokenFrom_),
-        tokenTo(tokenTo_),
-        pool(pool_),
-        hashValue(m_calcHash())
+    OperableSwap(const Token* tokenSrc_
+                 , const Token* tokenDest_
+                 , const LiquidityPool *pool_)
+        : tokenSrc(tokenSrc_)
+        , tokenDest(tokenDest_)
+        , pool(pool_)
     { }
-    OperableSwap(const OperableSwap &) = default;
-
-    bool operator==(const OperableSwap &o) const noexcept {
-        return hashValue == o.hashValue;
-    }
-    bool operator<(const OperableSwap &o) const noexcept {
-        return hashValue < o.hashValue;
-    }
 };
 
 
@@ -67,41 +107,29 @@ struct OperableSwap: Ref<OperableSwap> {
  *
  * Identifies a tradable asset.
  *
+ * It corresponds to a token contract instance in the blockchain.
+ *
  * @todo extend me.
  */
-struct Token: Ref<Token>, IndexedObject
+struct Token: Entity, Ref<Token>
 {
-    const string name;
-    const bool is_stable;
-    const string symbol;
-    const unsigned int decimals;
+    const string name;     ///< descriptive name (debug purposes only)
+    const bool is_stable;  ///< true if this token is elected to be considered stable
+    const string symbol;   ///< symbol, or ticker name. Ex: "wBNB", "USDT"
+    const unsigned int decimals; ///< number of decimals to convert to/fromWei
 
-    /**
-     * @brief Token ctor
-     * @param name_ (may be null). name is copied and not referenced if non-null and non-empty
-     * @param address_
-     * @param is_stablecoin_
-     */
-    Token(const string &name_
-          , const address_t *address_
+    Token(datatag_t tag_
+          , const address_t &address_
+          , const string &name_
           , const std::string &symbol_
           , unsigned int decimals_
           , bool is_stable_)
-        : IndexedObject(address_)
+        : Entity(TYPE_TOKEN, tag_, address_)
         , name(name_)
         , is_stable(is_stable_)
         , symbol(symbol_)
         , decimals(decimals_)
     { }
-
-    struct OperableSwaps: std::vector<OperableSwap*>
-    {
-        typedef std::vector<OperableSwap*> base_t;
-        using base_t::vector;
-    };
-
-    OperableSwaps predecessors;
-    OperableSwaps successors;
 };
 
 
@@ -109,17 +137,17 @@ struct Token: Ref<Token>, IndexedObject
  * @brief Models the identity of an Exchange entity, which is
  * basically relatable to a subset of Liquidity Pools.
  *
- * LP objects have an outgoing relation toward the exchange they
- * are part of.
+ * Exchanges tie LiquidityPool together under their hat.
  */
-struct Exchange: Ref<Exchange>, IndexedObject {
-    typedef std::string name_t;
-    const name_t name;
-    Exchange(const name_t &name_
-             , const address_t *address_)
-        : IndexedObject(address_)
+struct Exchange: Entity, Ref<Exchange> {
+    const string name;
+    Exchange(datatag_t tag_
+             , const address_t &address_
+             , const string &name_)
+        : Entity(TYPE_EXCHANGE, tag_, address_)
         , name(name_)
         {}
+    Exchange(const Exchange &) = delete;
 };
 
 
@@ -127,7 +155,8 @@ struct Exchange: Ref<Exchange>, IndexedObject {
  * @brief A facility which swaps between two tokens.
  *
  * A LiquidityPool represents a possibility to execute a swap
- * between two tokens. It corresponds to a liquidity pool in the blockchain.
+ * between two tokens.
+ * It corresponds to a liquidity pool contract instance in the blockchain.
  *
  * For each affering token (token0, token1), it stores a certain amount
  * of balance (reserve0, reserve1).
@@ -140,7 +169,7 @@ struct Exchange: Ref<Exchange>, IndexedObject {
  *
  * @todo Missing defi exchange ref, contract id and stuff. All this to come later.
  */
-struct LiquidityPool: Ref<LiquidityPool>, IndexedObject
+struct LiquidityPool: Entity, Ref<LiquidityPool>
 {
     typedef double rate_t;
 
@@ -150,24 +179,16 @@ struct LiquidityPool: Ref<LiquidityPool>, IndexedObject
     balance_t reserve0;
     balance_t reserve1;
 
-    void check()
-    {
-        assert(exchange != nullptr);
-        assert(token0 != nullptr);
-        assert(token1 != nullptr);
-    }
-
-    LiquidityPool(const Exchange* exchange_
-             , const address_t *address_
-             , Token* token0_
-             , Token* token1_)
-      : IndexedObject(address_),
+    LiquidityPool(datatag_t tag_
+                  , const address_t &address_
+                  , const Exchange* exchange_
+                  , Token* token0_
+                  , Token* token1_)
+      : Entity(TYPE_LP, tag_, address_),
         exchange(exchange_),
         token0(token0_),
         token1(token1_)
-    {
-        check();
-    }
+    { }
 };
 
 
@@ -183,26 +204,24 @@ struct LiquidityPool: Ref<LiquidityPool>, IndexedObject
  *
  * We want to be in that neighborhood.
  */
-struct TheGraph: Ref<TheGraph> {
+struct TheGraph: boost::noncopyable, Ref<TheGraph> {
+    // log sink. Model consumers can inject their own logger
+    log_ctx m_log_ctx   = nullptr;
+    log_sink m_log_sink = nullptr;
 
-    // This is to clarify what in this graph is a node and and edge:
-    typedef Token Node;
-    typedef LiquidityPool Edge;
-
-    typedef std::vector<Node*> NodeList;
-
-    NodeList nodes;
-    idx::EntityIndex *index;
-
-
-    typedef std::unordered_map<Exchange::name_t, Exchange*> ExchangeList;
-    ExchangeList exchanges;
+    std::unique_ptr<idx::EntityIndex> entity_index;
+    std::unique_ptr<idx::SwapIndex>   swap_index;
 
     TheGraph();
 
-
-    const Exchange *add_exchange(const Exchange::name_t &name
-                                 , const char *address);
+    /**
+     * @brief create and index Exchange object
+     * @return address of new object. null if already existing
+     */
+    const Exchange *add_exchange(datatag_t tag
+                                 , const char *address
+                                 , const string &name
+                                 );
 
     /**
      * @brief fetch a known exchange node by tag id
@@ -219,8 +238,9 @@ struct TheGraph: Ref<TheGraph> {
      * @param is_stablecoin
      * @return reference to the token graph node
      */
-    const Token *add_token(const char *name
-                           , const char *address
+    const Token *add_token(datatag_t tag
+                           , const address_t &address
+                           , const string &name
                            , const char *symbol
                            , unsigned int decimals
                            , bool is_stablecoin);
@@ -235,10 +255,11 @@ struct TheGraph: Ref<TheGraph> {
      * @param rate
      * @return reference to the LP
      */
-    const LiquidityPool *add_lp(const Exchange *exchange
-                                , const char *address
-                                , Token *token0
-                                , Token *token1);
+    const LiquidityPool *add_lp(datatag_t tag
+                                , const address_t &address
+                                , const Exchange* exchange
+                                , Token* token0
+                                , Token* token1);
 
     /**
      * @brief fetch a known token node by address
@@ -270,12 +291,7 @@ struct TheGraph: Ref<TheGraph> {
      * @param address
      * @return reference to the object, if found. NULL otherwise
      */
-    const IndexedObject *lookup(const address_t &address);
-
-    /**
-     * @brief reindexes graph knowledge also for datatag id resolution
-     */
-    void reindex(void);
+    const Entity *lookup(const address_t &address);
 };
 
 

@@ -5,6 +5,7 @@
 #include <boost/python/suite/indexing/map_indexing_suite.hpp>
 #include "longobject.h"
 #include "bofh_model.hpp"
+#include "bofh_entity_idx.hpp"
 
 
 using namespace boost::python;
@@ -123,39 +124,39 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     register_ptr_to_python<const address_t*>();
     register_ptr_to_python<address_t*>();
 
-    class_<IndexedObject, dont_make_copies>("IndexedObject", no_init)
-            .def_readwrite("tag" , &IndexedObject::tag)
-            .def_readonly("address", &IndexedObject::address);
-    register_ptr_to_python<const IndexedObject*>();
-    register_ptr_to_python<IndexedObject*>();
+    class_<Entity, dont_make_copies>("Entity", no_init)
+            .def_readonly("tag" , &Entity::tag)
+            .def_readonly("address", &Entity::address);
+    register_ptr_to_python<const Entity*>();
+    register_ptr_to_python<Entity*>();
 
     class_<OperableSwap, dont_make_copies>("OperableSwap", no_init)
-            .def_readonly("tokenFrom", &OperableSwap::tokenFrom)
-            .def_readonly("tokenTo", &OperableSwap::tokenTo)
+            .def_readonly("tokenSrc", &OperableSwap::tokenSrc)
+            .def_readonly("tokenDest", &OperableSwap::tokenDest)
             .def_readonly("pool", &OperableSwap::pool);
     register_ptr_to_python<const OperableSwap*>();
     register_ptr_to_python<OperableSwap*>();
 
-    class_<Token::OperableSwaps>("OperableSwaps").def(vector_indexing_suite<Token::OperableSwaps>());
-    class_<Token, bases<IndexedObject>, dont_make_copies>("Token", no_init)
-            .def_readonly("name"        , &Token::name)
+    //class_<Token::OperableSwaps>("OperableSwaps").def(vector_indexing_suite<Token::OperableSwaps>());
+    class_<Token, bases<Entity>, dont_make_copies>("Token", no_init)
+            .def_readonly("name"       , &Token::name)
             .def_readonly("symbol"     , &Token::symbol)
             .def_readonly("decimals"   , &Token::decimals)
-            .def_readonly("predecessors", &Token::predecessors)
-            .def_readonly("successors"  , &Token::successors)
+            .def_readonly("is_stable"  , &Token::is_stable)
             ;
     register_ptr_to_python<const Token*>();
     register_ptr_to_python<Token*>();
 
-    class_<Exchange, bases<IndexedObject>, dont_make_copies>("Exchange", no_init)
+    class_<Exchange, bases<Entity>, dont_make_copies>("Exchange", no_init)
             .def_readonly("name"   , &Exchange::name)
             ;
     register_ptr_to_python<const Exchange*>();
     register_ptr_to_python<Exchange*>();
 
-    class_<LiquidityPool, bases<IndexedObject>, dont_make_copies>("LiquidityPool", no_init)
-            .def_readonly("token0" , &LiquidityPool::token0)
-            .def_readonly("token1" , &LiquidityPool::token1)
+    class_<LiquidityPool, bases<Entity>, dont_make_copies>("LiquidityPool", no_init)
+            .def_readonly("exchange"  , &LiquidityPool::exchange)
+            .def_readonly("token0"    , &LiquidityPool::token0)
+            .def_readonly("token1"    , &LiquidityPool::token1)
             .def_readwrite("reserve0" , &LiquidityPool::reserve0)
             .def_readwrite("reserve1" , &LiquidityPool::reserve1)
             ;
@@ -167,13 +168,12 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def("add_token"      , &TheGraph::add_token       , dont_manage_returned_pointer())
             .def("add_lp"         , &TheGraph::add_lp          , dont_manage_returned_pointer())
             .def("lookup_exchange", &TheGraph::lookup_exchange , dont_manage_returned_pointer())
-            .def("lookup_token"   , static_cast<const Token    *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
-            .def("lookup_token"   , static_cast<const Token    *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
-            .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(const address_t &    )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
-            .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(const char *         )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
-            .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(datatag_t            )>(&TheGraph::lookup_lp), dont_manage_returned_pointer())
+            .def("lookup_token"   , static_cast<const Token    *(TheGraph::*)(const address_t &     )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
+            .def("lookup_token"   , static_cast<const Token    *(TheGraph::*)(datatag_t             )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
+            .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(const address_t &)>(&TheGraph::lookup_lp)   , dont_manage_returned_pointer())
+            .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(const char *     )>(&TheGraph::lookup_lp)   , dont_manage_returned_pointer())
+            .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(datatag_t        )>(&TheGraph::lookup_lp)   , dont_manage_returned_pointer())
             .def("lookup"         , &TheGraph::lookup          , dont_manage_returned_pointer())
-            .def("reindex"        , &TheGraph::reindex)
             ;
 }
 

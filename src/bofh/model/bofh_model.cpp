@@ -16,173 +16,123 @@ struct bad_argument: public std::runtime_error
 #define check_not_null_arg(name) if (name == nullptr) throw bad_argument("can't be null: " #name);
 
 
-TheGraph::TheGraph(): index(new EntityIndex()) {};
+TheGraph::TheGraph()
+    : entity_index(new EntityIndex)
+    , swap_index(new SwapIndex)
+{};
+
+namespace {
+// FIY: an unnamed namespace makes its content private to this code unit
+
+/**
+ * Use this to check the outcome of any cointainer emplace()
+ * @return true if the emplace() was rejected and an existing
+ *         duplicate was found in the container
+ */
+auto already_exists = [](const auto &i) { return !i.second; };
+
+}; // unnamed namespace
 
 
-const Exchange *TheGraph::add_exchange(const Exchange::name_t &name
-                                       , const char *address)
+const Exchange *TheGraph::add_exchange(datatag_t tag
+                                       , const char *address
+                                       , const string &name
+                                       )
 {
-    auto entity_type = EntityType::EXCHANGE;
-
-    auto res = index->emplace(address, entity_type);
-    auto has_been_added = res.second;
-    auto &entry = res.first->second;
-    if (has_been_added)
-    {
-        auto address_ptr = &res.first->first;
-        entry.exchange = Exchange::make(name, address_ptr);
-    }
-    else {
-        // already known to the index. Check it it's of the correct type
-        if (entry.type != entity_type)
-        {
-            // it's not. sorry
-            return nullptr;
-        }
-    }
-
-    return entry.exchange;
-}
-
-const Exchange *TheGraph::lookup_exchange(datatag_t tag)
-{
-    auto res = index->tag_index.find(idx::datatag_indexed_key(EntityType::EXCHANGE, tag));
-    if (res == index->tag_index.end())
+    auto ptr = std::make_unique<Exchange>(tag, address, name);
+    auto item = entity_index->emplace(ptr.get());
+    if (already_exists(item))
     {
         return nullptr;
     }
-    return res->second.exchange;
+    ptr.release();
+    return reinterpret_cast<Exchange*>(*item.first);
 }
 
 
+const Exchange *TheGraph::lookup_exchange(datatag_t tag)
+{
+    return entity_index->lookup<Exchange, TYPE_EXCHANGE>(tag);
+}
 
-const Token *TheGraph::add_token(const char *name
-                                 , const char *address
+
+const Token *TheGraph::add_token(datatag_t tag
+                                 , const address_t &address
+                                 , const string &name
                                  , const char *symbol
                                  , unsigned int decimals
                                  , bool is_stablecoin)
 {
-    auto entity_type = EntityType::TOKEN;
-    auto res = index->emplace(address, entity_type);
-    auto has_been_added = res.second;
-    auto &entry = res.first->second;
-    if (has_been_added)
+    auto ptr = std::make_unique<Token>(tag
+                                       , address
+                                       , name
+                                       , symbol
+                                       , decimals
+                                       , is_stablecoin);
+    auto item = entity_index->emplace(ptr.get());
+    if (already_exists(item))
     {
-        auto address_ptr = &res.first->first;
-        entry.token = Token::make(name, address_ptr, symbol, decimals, is_stablecoin);
+        return nullptr;
     }
-    else {
-        // already known to the index. Check it it's of the correct type
-        if (entry.type != entity_type)
-        {
-            // it's not. sorry
-            return nullptr;
-        }
-    }
-
-    return entry.token;
+    ptr.release();
+    return reinterpret_cast<Token*>(*item.first);
 }
 
-
-const LiquidityPool *TheGraph::add_lp(const Exchange *exchange
-                                        , const char *address
-                                        , Token *token0
-                                        , Token *token1)
-{
-    check_not_null_arg(address);
-    check_not_null_arg(token0);
-    check_not_null_arg(token1);
-    auto entity_type = EntityType::LP;
-    auto res = index->emplace(address, entity_type);
-    auto has_been_added = res.second;
-    auto &entry = res.first->second;
-    if (has_been_added)
-    {
-        auto address_ptr = &res.first->first;
-        entry.lp = LiquidityPool::make(exchange, address_ptr, token0, token1);
-        token0->successors.emplace_back(OperableSwap::make(token0, token1, entry.lp));
-        token0->predecessors.emplace_back(OperableSwap::make(token1, token0, entry.lp));
-    }
-    else {
-        // already known to the index. Check it it's of the correct type
-        if (entry.type != entity_type)
-        {
-            // it's not. sorry
-            return nullptr;
-        }
-
-    }
-
-    return entry.lp;
-}
 
 const Token *TheGraph::lookup_token(const address_t &address)
 {
-    auto entity_type = EntityType::TOKEN;
-    auto res = index->find(address);
-    if (res == index->end() || res->second.type != entity_type)
-    {
-        return nullptr;
-    }
-    return res->second.token;
+    return entity_index->lookup<Token>(address);
 }
+
 
 const Token *TheGraph::lookup_token(datatag_t tag)
 {
-    auto res = index->tag_index.find(idx::datatag_indexed_key(EntityType::TOKEN, tag));
-    if (res == index->tag_index.end())
+    return entity_index->lookup<Token, TYPE_TOKEN>(tag);
+}
+
+
+const LiquidityPool *TheGraph::add_lp(datatag_t tag
+                                      , const address_t &address
+                                      , const Exchange* exchange
+                                      , Token* token0
+                                      , Token* token1)
+{
+    check_not_null_arg(exchange);
+    check_not_null_arg(token0);
+    check_not_null_arg(token1);
+    auto ptr = std::make_unique<LiquidityPool>(tag
+                                               , address
+                                               , exchange
+                                               , token0
+                                               , token1);
+    auto item = entity_index->emplace(ptr.get());
+    if (already_exists(item))
     {
         return nullptr;
     }
-    return res->second.token;
+    ptr.release();
+
+    auto lp = reinterpret_cast<LiquidityPool*>(*item.first);
+
+    // create OperableSwap objects
+    swap_index->emplace(OperableSwap::make(token0, token1, lp));
+    swap_index->emplace(OperableSwap::make(token1, token0, lp));
+    return lp;
 }
 
 const LiquidityPool *TheGraph::lookup_lp(const address_t &address)
 {
-    auto entity_type = EntityType::LP;
-    auto res = index->find(address);
-    if (res == index->end() || res->second.type != entity_type)
-    {
-        return nullptr;
-    }
-    return res->second.lp;
+    return entity_index->lookup<LiquidityPool>(address);
 }
 
 const LiquidityPool *TheGraph::lookup_lp(datatag_t tag)
 {
-    ;
-    auto res = index->tag_index.find(idx::datatag_indexed_key(EntityType::LP, tag));
-    if (res == index->tag_index.end())
-    {
-        return nullptr;
-    }
-    return res->second.lp;
+    return entity_index->lookup<LiquidityPool, TYPE_LP>(tag);
 }
 
-const IndexedObject *TheGraph::lookup(const address_t &address)
+const Entity *TheGraph::lookup(const address_t &address)
 {
-    auto res = index->find(address);
-    if (res == index->end())
-    {
-        return nullptr;
-    }
-    return res->second.lp;
-}
-
-void TheGraph::reindex(void)
-{
-    index->tag_index.clear();
-    index->stable_tokens.clear();
-    for (auto &i: *index)
-    {
-        auto obj = i.second;
-        index->tag_index.emplace(idx::datatag_indexed_key(obj.type, obj.indexed_object->tag), i.second);
-        if (i.second.type == EntityType::TOKEN
-            && i.second.token->is_stable)
-        {
-            index->stable_tokens.emplace(i.second.token);
-        }
-    }
+    return entity_index->lookup<Entity>(address);
 }
 
 
