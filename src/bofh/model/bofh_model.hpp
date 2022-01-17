@@ -19,6 +19,7 @@
 #include "bofh_entity_idx_fwd.hpp"
 #include <boost/noncopyable.hpp>
 #include <memory>
+#include "../pathfinder/swaps_idx_fwd.hpp"
 
 
 namespace bofh {
@@ -211,6 +212,8 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
 
     std::unique_ptr<idx::EntityIndex> entity_index;
     std::unique_ptr<idx::SwapIndex>   swap_index;
+    std::unique_ptr<pathfinder::idx::SwapPathsIndex> paths_index;
+    Token *start_token = nullptr;
 
     TheGraph();
 
@@ -292,6 +295,13 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
      * @return reference to the object, if found. NULL otherwise
      */
     const Entity *lookup(const address_t &address);
+
+
+    /**
+     * initially called (once) to pre-compute all useful swap paths,
+     * and add them to an hot index
+     */
+    void calculate_paths();
 };
 
 

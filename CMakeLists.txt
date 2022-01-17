@@ -53,6 +53,8 @@ set(MODEL_SRC
     src/bofh/model/bofh_model_fwd.hpp
     src/bofh/pathfinder/finder_3way.hpp
     src/bofh/pathfinder/finder_3way.cpp
+    src/bofh/pathfinder/swaps_idx.hpp
+    src/bofh/pathfinder/swaps_idx.cpp
     )
 include_directories(src)
 # # Build library as a Python module. (Using Boost.Python)

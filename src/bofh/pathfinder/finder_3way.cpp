@@ -44,8 +44,12 @@ static auto iterable_please = [](auto iterpair){
 void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
                                      , const model::Token *start_node)
 {
-    using namespace model;
     using namespace std;
+
+    // indexes we use later:
+    using stable_predecessors = model::idx::stable_predecessors;
+    using by_src_token = model::idx::by_src_token;
+    using by_dest_token = model::idx::by_dest_token;
 
     assert(start_node != nullptr);
 
@@ -63,7 +67,7 @@ void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
 
     auto usable_swaps = graph
             ->swap_index
-            ->get<idx::stable_predecessors>()
+            ->get<stable_predecessors>()
             .equal_range(boost::make_tuple(true, start_node));
 
     for (auto stable_swap: iterable_please(usable_swaps))
@@ -85,11 +89,11 @@ void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
         //          do_stuff()
         auto swaps0 = graph
                 ->swap_index
-                ->get<idx::by_src_token>()
+                ->get<by_src_token>()
                 .equal_range(start_node);
         auto swaps1 = graph
                 ->swap_index
-                ->get<idx::by_dest_token>()
+                ->get<by_dest_token>()
                 .equal_range(stable_node);
 
         for (auto swap0: iterable_please(swaps0))

@@ -6,6 +6,8 @@
 #include "longobject.h"
 #include "bofh_model.hpp"
 #include "bofh_entity_idx.hpp"
+#include "../pathfinder/finder_3way.hpp"
+#include "../pathfinder/swaps_idx.hpp"
 
 
 using namespace boost::python;

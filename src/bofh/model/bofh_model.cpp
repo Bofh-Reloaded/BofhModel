@@ -1,5 +1,8 @@
 #include "bofh_model.hpp"
 #include "bofh_entity_idx.hpp"
+#include "../pathfinder/swaps_idx.hpp"
+#include "../pathfinder/finder_3way.hpp"
+
 #include <exception>
 
 
@@ -7,7 +10,7 @@ namespace bofh {
 namespace model {
 
 using namespace idx;
-
+using namespace pathfinder::idx;
 
 struct bad_argument: public std::runtime_error
 {
@@ -19,6 +22,7 @@ struct bad_argument: public std::runtime_error
 TheGraph::TheGraph()
     : entity_index(new EntityIndex)
     , swap_index(new SwapIndex)
+    , paths_index(new SwapPathsIndex)
 {};
 
 namespace {
@@ -133,6 +137,52 @@ const LiquidityPool *TheGraph::lookup_lp(datatag_t tag)
 const Entity *TheGraph::lookup(const address_t &address)
 {
     return entity_index->lookup<Entity>(address);
+}
+
+static auto clear_existing_paths_if_any = [](TheGraph *graph)
+{
+    assert(graph);
+    assert(graph->paths_index);
+
+    for (auto p: graph->paths_index->holder)
+    {
+        assert(p != nullptr);
+        delete p;
+    }
+
+    graph->paths_index->paths.clear();
+    graph->paths_index->holder.clear();
+};
+
+void TheGraph::calculate_paths()
+{
+    using Path = pathfinder::Path3Way;
+
+    clear_existing_paths_if_any(this);
+
+    pathfinder::Finder f{this};
+
+    if (start_token == nullptr)
+    {
+        return;
+    }
+
+    auto listener = [&](const Path &swap_path)
+    {
+        auto val = new Path(swap_path);
+        paths_index->holder.emplace_back(val);
+        // TODO: fix theoretical memleak in case of emplace() exception
+
+        for (unsigned int i = 0; i < swap_path.size()-1; ++i)
+        {
+            auto key = TokenTransition(
+                          swap_path[i]->tokenSrc
+                        , swap_path[i]->tokenDest);
+            paths_index->paths.emplace(key, val);
+        }
+    };
+
+    f.find_all_paths_3way_var(listener, start_token);
 }
 
 

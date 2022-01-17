@@ -12,6 +12,9 @@ src/bofh/model/bofh_model_fwd.hpp
 src/bofh/model/bofh_model_py_ext.cpp
 src/bofh/pathfinder/finder_3way.hpp
 src/bofh/pathfinder/finder_3way.cpp
+src/bofh/pathfinder/swaps_idx.hpp
+src/bofh/pathfinder/swaps_idx_fwd.hpp
+src/bofh/pathfinder/swaps_idx.cpp
 test/test_utils.cpp
 test/test_utils.hpp
 test/test_address.cpp
