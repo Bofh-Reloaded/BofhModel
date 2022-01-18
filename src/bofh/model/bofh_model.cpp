@@ -61,8 +61,8 @@ const Exchange *TheGraph::lookup_exchange(datatag_t tag)
 
 
 const Token *TheGraph::add_token(datatag_t tag
-                                 , const address_t &address
-                                 , const string &name
+                                 , const char *address
+                                 , const char *name
                                  , const char *symbol
                                  , unsigned int decimals
                                  , bool is_stablecoin)
@@ -96,7 +96,7 @@ const Token *TheGraph::lookup_token(datatag_t tag)
 
 
 const LiquidityPool *TheGraph::add_lp(datatag_t tag
-                                      , const address_t &address
+                                      , const char *address
                                       , const Exchange* exchange
                                       , Token* token0
                                       , Token* token1)

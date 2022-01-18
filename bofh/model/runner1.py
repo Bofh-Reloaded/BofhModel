@@ -1,4 +1,5 @@
 from asyncio import get_event_loop
+from random import choice
 from time import sleep
 
 from jsonrpc_websocket import Server
@@ -125,29 +126,41 @@ class Runner:
     def pools_ctr(self):
         return len(self.pools)
 
-    NULL_ADDRESS = "0x0000000000000000000000000000000000000000"
+    @staticmethod
+    def random_address():
+        res = "0x"
+        hex = "0123456789abcdef"
+        for i in range(40):
+            res += choice(hex)
+        return res
 
     def preload_exchanges(self):
         self.log.info("preloading exchanges...")
         with self.db as curs:
-            for id, *args in curs.list_exchanges():
-                exc = self.graph.add_exchange(*args, self.NULL_ADDRESS)
+            for id, name in curs.list_exchanges():
+                exc = self.graph.add_exchange(id, self.random_address(), name)
                 assert exc is not None
-                exc.tag = id
 
     def preload_tokens(self):
-        self.log.info("preloading tokens...")
         with self.db as curs:
-            for id, *args, is_stabletoken in curs.list_tokens():
-                tok = self.graph.add_token(*args, bool(is_stabletoken))
+            ctr = curs.count_tokens()
+            print_progress = progress_printer(ctr
+                                              , "preloading tokens {percent}% ({count} of {tot}"
+                                                " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
+                                              , on_same_line=True)
+            for args in curs.list_tokens():
+                tok = self.graph.add_token(*args)
                 if tok is None:
                     raise RuntimeError("integrity error: token address is already not of a token: id=%r, %r" % (id, args))
-                tok.tag = id
-        self.graph.reindex()
+                print_progress()
 
     def preload_pools(self):
-        self.log.info("preloading pools...")
         with self.db as curs:
+            ctr = curs.count_pools()
+            print_progress = progress_printer(ctr
+                                              , "preloading pools {percent}% ({count} of {tot}"
+                                                " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
+                                              , on_same_line=True)
             for id, address, exchange_id, token0_id, token1_id in curs.list_pools():
                 t0 = self.graph.lookup_token(token0_id)
                 t1 = self.graph.lookup_token(token1_id)
@@ -159,7 +172,8 @@ class Runner:
                     continue
                 exchange = self.graph.lookup_exchange(exchange_id)
                 assert exchange is not None
-                pool = self.graph.add_lp(exchange, address, t0, t1)
+                pool = self.graph.add_lp(id, address, exchange, t0, t1)
+                print_progress()
                 self.tot += 1
                 if pool is None:
                     self.skip += 1
@@ -167,18 +181,16 @@ class Runner:
                         self.log.warning("integrity error: pool address is already not of a pool: "
                                          "id=%r, %r -- skip %r over %r", id, address, self.skip, self.tot)
                     continue
-                pool.tag = id
                 self.pools.add(pool)
                 if self.args.pools_limit and self.pools_ctr >= self.args.pools_limit:
                     self.log.info("stopping after loading %r pools, as per effect of -n cli parameter", self.pools_ctr)
                     break
-        self.graph.reindex()
 
     def preload_balances(self):
         self.log.info("fetching balances via Web3...")
         print_progress = progress_printer(self.pools_ctr
                                           , "fetching pool reserves {percent}% ({count} of {tot}"
-                                            " eta={expected_secs:.0f}s at {rate:.0f} items/s) ..."
+                                            " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
                                           , on_same_line=True)
         with Web3PoolExecutor(connection_uri=self.args.web3_rpc_url, max_workers=self.args.max_workers) as executor:
             self.log.info("fetching balances via Web3:"

@@ -242,8 +242,8 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
      * @return reference to the token graph node
      */
     const Token *add_token(datatag_t tag
-                           , const address_t &address
-                           , const string &name
+                           , const char *address
+                           , const char *name
                            , const char *symbol
                            , unsigned int decimals
                            , bool is_stablecoin);
@@ -259,7 +259,7 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
      * @return reference to the LP
      */
     const LiquidityPool *add_lp(datatag_t tag
-                                , const address_t &address
+                                , const char *address
                                 , const Exchange* exchange
                                 , Token* token0
                                 , Token* token1);

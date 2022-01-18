@@ -243,11 +243,14 @@ class StatusScopedCursor(BasicScopedCursor):
             for i in seq:
                 yield i
 
+    def count_tokens(self):
+        return self.execute("SELECT COUNT(1) FROM tokens WHERE NOT disabled").get_int()
+
     def list_tokens(self):
         assert self.conn is not None
         self.execute("SELECT id"
-                     ", SUBSTR(COALESCE(name, ''), 0, ?)"
                      ", address"
+                     ", SUBSTR(COALESCE(name, ''), 0, ?)"
                      ", SUBSTR(COALESCE(symbol, ''), 0, ?)"
                      ", decimals"
                      ", is_stabletoken FROM tokens WHERE NOT disabled", (self.MAX_TOKEN_NAME_LEN, self.MAX_TOKEN_SYMBOL_LEN))
@@ -259,6 +262,9 @@ class StatusScopedCursor(BasicScopedCursor):
                 return
             for i in seq:
                 yield i
+
+    def count_pools(self):
+        return self.execute("SELECT COUNT(1) FROM pools").get_int()
 
     def list_pools(self):
         assert self.conn is not None
