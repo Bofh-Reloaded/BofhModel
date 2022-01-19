@@ -1,4 +1,5 @@
 #include "finder_3way.hpp"
+#include "../commons/bofh_log.hpp"
 #include <bofh/model/bofh_model.hpp>
 #include <bofh/model/bofh_entity_idx.hpp>
 #include <assert.h>
@@ -11,8 +12,6 @@ namespace pathfinder {
 
 
 namespace {
-
-auto WBNB_address = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
 
 using namespace model;
 
@@ -36,6 +35,13 @@ static auto iterable_please = [](auto iterpair){
     return iterpair_range<decltype(iterpair.first)>(iterpair);
 };
 
+
+static auto range_len = [](auto i)
+{
+    unsigned int ctr = 0;
+    for (; i.first != i.second; i.first++, ++ctr);
+    return ctr;
+};
 
 };
 
@@ -70,8 +76,23 @@ void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
             ->get<stable_predecessors>()
             .equal_range(boost::make_tuple(true, start_node));
 
-    for (auto stable_swap: iterable_please(usable_swaps))
+    unsigned int ctr = 0;
+    auto count = [&]() {
+        ctr++;
+        log_debug("found %1% paths so far...", ctr);
+        if ((ctr % 1000) == 0)
+        {
+        }
+    };
+
+    log_debug("find_all_paths_3way_var starting, using start_node = %1% (%2%), considering %3% stable paths"
+              , start_node->symbol
+              , start_node->address
+              , range_len(usable_swaps));
+
+    for (auto i = usable_swaps.first; i != usable_swaps.second; ++i)
     {
+        auto stable_swap = *i;
         auto stable_node = stable_swap->tokenSrc;
 
         // orig code:
@@ -126,6 +147,7 @@ void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
 
             // send the new entry to whoever requested it
             callback(Path3Way{swap0, swap1, swap2});
+            count();
         }
     }
 }

@@ -61,7 +61,7 @@ MAINTAINER neta <neta@logn.info>
 
 ENV TOOLCHAIN_ROOT=/toolchain
 ENV SRC_ROOT=/src
-ENV DEB_PACKAGES="build-essential bzip2 libncurses5 sqlite3 zlib1g libreadline5 lzma libgdbm6 g++ less inetutils-ping vim"
+ENV DEB_PACKAGES="build-essential gdb bzip2 libncurses5 sqlite3 zlib1g libreadline5 lzma libgdbm6 g++ less inetutils-ping vim"
 ENV PATH=${TOOLCHAIN_ROOT}/bin:${PATH}
 
 COPY --from=builder ${TOOLCHAIN_ROOT} ${TOOLCHAIN_ROOT}

@@ -122,7 +122,7 @@ struct EntityIndex: EntityIndex_base {
         {
             return nullptr;
         }
-        return reinterpret_cast<const T*>(&(*i));
+        return reinterpret_cast<const T*>(*i);
     }
 
     /**
@@ -138,7 +138,7 @@ struct EntityIndex: EntityIndex_base {
         {
             return nullptr;
         }
-        return reinterpret_cast<const T*>(&(*i));
+        return reinterpret_cast<const T*>(*i);
     }
 };
 

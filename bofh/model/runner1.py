@@ -27,10 +27,11 @@ from dataclasses import dataclass
 from logging import getLogger, basicConfig
 
 from bofh.model.database import ModelDB, StatusScopedCursor, SwapLogScopedCursor
-from bofh_model_ext import TheGraph
+from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level
 
 
 PREDICTION_LOG_TOPIC0 = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"  # Keccak256("Swap(address,uint256,uint256,uint256,uint256,address)")
+WBNB_address = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"
 
 
 @dataclass
@@ -85,23 +86,25 @@ def getReserves(pool_address):
         exe = getReserves.exe = JSONRPCConnector.get_connection()
         ioloop = getReserves.ioloop = get_event_loop()
         mid = getReserves.mid = method_id("getReserves()")
-    fut = exe.eth_call({"to": pool_address, "data": mid}, "latest")
-    res = ioloop.run_until_complete(fut)
-    # at this point "res" should be a long 0xhhhhh... byte hexstring.
-    # it should be composed of 3 32-bytes big-endian values. In sequence:
-    # - reserve0
-    # - reserve1
-    # - blockTimestampLast (mod 2**32) of the last block during which an interaction occured for the pair.
-    try:
-        reserve0, reserve1, blockTimestampLast = parse_data_parameters(res)
-        return (pool_address
-                , reserve0
-                , reserve1
-                , blockTimestampLast
-                )
-    except:
+    for i in range(4):  # make two attempts
+        fut = exe.eth_call({"to": pool_address, "data": mid}, "latest")
+        res = ioloop.run_until_complete(fut)
+        # at this point "res" should be a long 0xhhhhh... byte hexstring.
+        # it should be composed of 3 32-bytes big-endian values. In sequence:
+        # - reserve0
+        # - reserve1
+        # - blockTimestampLast (mod 2**32) of the last block during which an interaction occured for the pair.
+        try:
+            reserve0, reserve1, blockTimestampLast = parse_data_parameters(res)
+            return (pool_address
+                    , reserve0
+                    , reserve1
+                    , blockTimestampLast
+                    )
+        except:
+            pass
         print("invalid response (expected 96-byte hexstring):", res)
-        return pool_address, None, None
+        return pool_address, None, None, None
 
 
 class Runner:
@@ -121,6 +124,24 @@ class Runner:
         self.tot = 0
         self.ioloop = get_event_loop()
         # self.polling_started = Event()
+
+    SHADOW_POOLS = (
+        "0xdc5572a52da075c006a95f23f776155a1c36ddb9",
+        "0xb9ec4724bf27e17fb1f942f1013ad9add26858d1",
+        "0xe5920e9b6c0fd1c1d36094a5390a2629b4e8f945",
+        "0x79e2359b6ccb740bbdccccd67f3c8c02cf9156bf",
+
+        "0xc2e2fcf95f1ba93fcf7ae3c607c07354ad2a975c", # not found in index
+        "0x63af8d0493afc4c89a2a6c550b8cf9beb7715df9",
+        "0x4f1910d85d98bf274797da6c41f677b40d751103",
+        "0x01985b4998b6592d3fee1669ce2b152a749a4ba9",
+        "0x9425c606c91fd491fce3b7d02a646fa1da3d9411", # bogus responde from getReserves()
+        "0xa6bdcee0711669d00789e544a4ed81c2671e153b",
+        "0xd6a4373f56a0813ee77ef838db4c57d73ab1b475",
+        "0xc63c6c9563cad6a85462aea30e35392c61a406e4",
+    )
+
+
 
     @property
     def pools_ctr(self):
@@ -144,47 +165,47 @@ class Runner:
     def preload_tokens(self):
         with self.db as curs:
             ctr = curs.count_tokens()
-            print_progress = progress_printer(ctr
-                                              , "preloading tokens {percent}% ({count} of {tot}"
-                                                " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
+            print_progress = progress_printer(ctr, "preloading tokens {percent}% ({count} of {tot}"
+                                              " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
                                               , on_same_line=True)
-            for args in curs.list_tokens():
-                tok = self.graph.add_token(*args)
-                if tok is None:
-                    raise RuntimeError("integrity error: token address is already not of a token: id=%r, %r" % (id, args))
-                print_progress()
+            with print_progress:
+                for args in curs.list_tokens():
+                    tok = self.graph.add_token(*args)
+                    if tok is None:
+                        raise RuntimeError("integrity error: token address is already not of a token: id=%r, %r" % (id, args))
+                    print_progress()
 
     def preload_pools(self):
         with self.db as curs:
             ctr = curs.count_pools()
-            print_progress = progress_printer(ctr
-                                              , "preloading pools {percent}% ({count} of {tot}"
-                                                " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
+            print_progress = progress_printer(ctr, "preloading pools {percent}% ({count} of {tot}"
+                                              " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
                                               , on_same_line=True)
-            for id, address, exchange_id, token0_id, token1_id in curs.list_pools():
-                t0 = self.graph.lookup_token(token0_id)
-                t1 = self.graph.lookup_token(token1_id)
-                if not t0 or not t1:
-                    self.skip += 1
-                    if self.args.verbose:
-                        self.log.warning("disabling pool %s due to missing or disabled affering token "
-                                         "(token0=%r, token1=%r)", address, token0_id, token1_id)
-                    continue
-                exchange = self.graph.lookup_exchange(exchange_id)
-                assert exchange is not None
-                pool = self.graph.add_lp(id, address, exchange, t0, t1)
-                print_progress()
-                self.tot += 1
-                if pool is None:
-                    self.skip += 1
-                    if self.args.verbose:
-                        self.log.warning("integrity error: pool address is already not of a pool: "
-                                         "id=%r, %r -- skip %r over %r", id, address, self.skip, self.tot)
-                    continue
-                self.pools.add(pool)
-                if self.args.pools_limit and self.pools_ctr >= self.args.pools_limit:
-                    self.log.info("stopping after loading %r pools, as per effect of -n cli parameter", self.pools_ctr)
-                    break
+            with print_progress:
+                for id, address, exchange_id, token0_id, token1_id in curs.list_pools():
+                    t0 = self.graph.lookup_token(token0_id)
+                    t1 = self.graph.lookup_token(token1_id)
+                    if not t0 or not t1:
+                        self.skip += 1
+                        if self.args.verbose:
+                            self.log.warning("disabling pool %s due to missing or disabled affering token "
+                                             "(token0=%r, token1=%r)", address, token0_id, token1_id)
+                        continue
+                    exchange = self.graph.lookup_exchange(exchange_id)
+                    assert exchange is not None
+                    pool = self.graph.add_lp(id, address, exchange, t0, t1)
+                    print_progress()
+                    self.tot += 1
+                    if pool is None:
+                        self.skip += 1
+                        if self.args.verbose:
+                            self.log.warning("integrity error: pool address is already not of a pool: "
+                                             "id=%r, %r -- skip %r over %r", id, address, self.skip, self.tot)
+                        continue
+                    self.pools.add(pool)
+                    if self.args.pools_limit and self.pools_ctr >= self.args.pools_limit:
+                        self.log.info("stopping after loading %r pools, as per effect of -n cli parameter", self.pools_ctr)
+                        break
 
     def preload_balances(self):
         self.log.info("fetching balances via Web3...")
@@ -210,19 +231,22 @@ class Runner:
                 def pool_addresses_iter():
                     for p in self.pools:
                         yield str(p.address)
-                for pool_addr, reserve0, reserve1, blockTimestampLast in executor.map(getReserves,
-                                                                                      pool_addresses_iter(),
-                                                                                      chunksize=self.args.chunk_size):
-                    pair = self.graph.lookup_lp(pool_addr)
-                    if not pair:
-                        raise IndexError("unknown pool: %s" % pool_addr)
-                    # reset pool reserves
-                    pair.reserve0, pair.reserve1 = reserve0, reserve1
-                    if curs:
-                        pool = self.graph.lookup_lp(pool_addr)
-                        assert pool
-                        curs.add_pool_reserve(pool.tag, reserve0, reserve1)
-                    print_progress()
+                for pool_addr, reserve0, reserve1, blockTimestampLast in executor.map(getReserves, pool_addresses_iter(), chunksize=self.args.chunk_size):
+                    try:
+                        if reserve0 is None or reserve1 is None:
+                            continue
+                        pair = self.graph.lookup_lp(pool_addr)
+                        if not pair:
+                            raise IndexError("unknown pool: %s" % pool_addr)
+                        # reset pool reserves
+                        pair.reserve0, pair.reserve1 = reserve0, reserve1
+                        if curs:
+                            pool = self.graph.lookup_lp(pool_addr)
+                            assert pool
+                            curs.add_pool_reserve(pool.tag, reserve0, reserve1)
+                        print_progress()
+                    except:
+                        self.log.exception("unable to query pool %s", pool_addr)
             finally:
                 if self.swap_log_db:
                     self.swap_log_db.commit()
@@ -239,10 +263,12 @@ class Runner:
                     if not pool_addr:
                         continue
                     pool = self.graph.lookup_lp(pool_addr)
-                    if not pool and self.args.verbose:
-                        self.log.info("unknown pool of interest: %s", pool_addr)
+                    if not pool:
+                        if self.args.verbose:
+                            self.log.info("unknown pool of interest: %s", pool_addr)
                         continue
                     self.log.info("pool of interest: %s", pool_addr)
+                    continue
                     try:
                         amount0In, amount1In, amount0Out, amount1Out = parse_data_parameters(log["data"])
                     except:
@@ -349,12 +375,22 @@ class Runner:
 
 def main():
     basicConfig(level="INFO")
+    log_set_level(log_level.debug)
+    log_register_sink(print)
     runner = Runner(Args.from_cmdline(__doc__))
+
     runner.preload_exchanges()
     runner.preload_tokens()
+    start_token = runner.graph.lookup_token(WBNB_address)
+    assert start_token
+    runner.graph.start_token = start_token
     runner.preload_pools()
-    runner.preload_balances()
-    runner.poll_prediction()
+    runner.graph.calculate_paths()
+    #runner.preload_balances()
+    print("LOAD COMPLETE")
+    #runner.poll_prediction()
+    while True:
+        sleep(10)
 
 
 if __name__ == '__main__':

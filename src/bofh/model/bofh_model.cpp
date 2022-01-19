@@ -2,6 +2,7 @@
 #include "bofh_entity_idx.hpp"
 #include "../pathfinder/swaps_idx.hpp"
 #include "../pathfinder/finder_3way.hpp"
+#include "../commons/bofh_log.hpp"
 
 #include <exception>
 
@@ -18,12 +19,30 @@ struct bad_argument: public std::runtime_error
 };
 #define check_not_null_arg(name) if (name == nullptr) throw bad_argument("can't be null: " #name);
 
+Token::Token(datatag_t tag_
+      , const address_t &address_
+      , const string &name_
+      , const std::string &symbol_
+      , unsigned int decimals_
+      , bool is_stable_)
+    : Entity(TYPE_TOKEN, tag_, address_)
+    , name(name_)
+    , is_stable(is_stable_)
+    , symbol(symbol_)
+    , decimals(decimals_)
+{
+    if (tag_ == 2)
+        log_debug("token 2 at %p", this);
+}
+
 
 TheGraph::TheGraph()
     : entity_index(new EntityIndex)
     , swap_index(new SwapIndex)
     , paths_index(new SwapPathsIndex)
-{};
+{
+    log_trace("TheGraph created at 0x%p", this);
+};
 
 namespace {
 // FIY: an unnamed namespace makes its content private to this code unit
@@ -49,8 +68,7 @@ const Exchange *TheGraph::add_exchange(datatag_t tag
     {
         return nullptr;
     }
-    ptr.release();
-    return reinterpret_cast<Exchange*>(*item.first);
+    return reinterpret_cast<Exchange*>(ptr.release());
 }
 
 
@@ -78,12 +96,11 @@ const Token *TheGraph::add_token(datatag_t tag
     {
         return nullptr;
     }
-    ptr.release();
-    return reinterpret_cast<Token*>(*item.first);
+    return reinterpret_cast<Token*>(ptr.release());
 }
 
 
-const Token *TheGraph::lookup_token(const address_t &address)
+const Token *TheGraph::lookup_token(const char *address)
 {
     return entity_index->lookup<Token>(address);
 }
@@ -114,13 +131,13 @@ const LiquidityPool *TheGraph::add_lp(datatag_t tag
     {
         return nullptr;
     }
-    ptr.release();
 
-    auto lp = reinterpret_cast<LiquidityPool*>(*item.first);
+    auto lp = reinterpret_cast<LiquidityPool*>(ptr.release());
 
     // create OperableSwap objects
     swap_index->emplace(OperableSwap::make(token0, token1, lp));
     swap_index->emplace(OperableSwap::make(token1, token0, lp));
+
     return lp;
 }
 
@@ -164,8 +181,13 @@ void TheGraph::calculate_paths()
 
     if (start_token == nullptr)
     {
+        log_error("calculate_paths(): start_token not set");
         return;
     }
+
+    log_info("calculate_paths() considering start_token %s at %p"
+             , start_token->symbol.c_str()
+             , start_token);
 
     auto listener = [&](const Path &swap_path)
     {
@@ -183,6 +205,9 @@ void TheGraph::calculate_paths()
     };
 
     f.find_all_paths_3way_var(listener, start_token);
+    log_info("computed: %u paths, %u entries in hot swaps index"
+             , paths_index->holder.size()
+             , paths_index->paths.size());
 }
 
 

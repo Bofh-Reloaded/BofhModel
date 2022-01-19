@@ -124,13 +124,7 @@ struct Token: Entity, Ref<Token>
           , const string &name_
           , const std::string &symbol_
           , unsigned int decimals_
-          , bool is_stable_)
-        : Entity(TYPE_TOKEN, tag_, address_)
-        , name(name_)
-        , is_stable(is_stable_)
-        , symbol(symbol_)
-        , decimals(decimals_)
-    { }
+          , bool is_stable_);
 };
 
 
@@ -206,11 +200,14 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
  * We want to be in that neighborhood.
  */
 struct TheGraph: boost::noncopyable, Ref<TheGraph> {
-    // log sink. Model consumers can inject their own logger
-    log_ctx m_log_ctx   = nullptr;
-    log_sink m_log_sink = nullptr;
 
-    std::unique_ptr<idx::EntityIndex> entity_index;
+    //std::unique_ptr<idx::EntityIndex> entity_index;
+    idx::EntityIndex *entity_index; // TODO: so, I'm purposefully leaking this
+                                    // object because multi_index::detail::hashed_index
+                                    // dtor has a bug in it and segfaults on program exit.
+                                    // Postponing the problem because multi_index is supposed
+                                    // to be used as a quick hack. It will be replaced
+                                    // by more custom code if things develop more.
     std::unique_ptr<idx::SwapIndex>   swap_index;
     std::unique_ptr<pathfinder::idx::SwapPathsIndex> paths_index;
     Token *start_token = nullptr;
@@ -269,7 +266,7 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
      * @param address
      * @return reference to the token node, if existing. Otherwise nullptr
      */
-    const Token *lookup_token(const address_t &address);
+    const Token *lookup_token(const char *address);
     /**
      * @brief fetch a known token node by tag id
      * @warning This takes O(n) time

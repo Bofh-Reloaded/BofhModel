@@ -69,16 +69,6 @@ std::ostream& operator<< (std::ostream& stream, const address_t& o);
 
 typedef unsigned long int datatag_t;
 
-typedef enum {
-    log_level_trace,
-    log_level_debug,
-    log_level_info,
-    log_level_warning,
-    log_level_error,
-} log_level;
-typedef void *log_ctx;
-typedef void (*log_sink)(log_ctx *ctx, log_level level, const char *fmt, ...);
-
 } // namespace model
 } // namespace bofh
 

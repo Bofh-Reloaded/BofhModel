@@ -15,6 +15,8 @@ src/bofh/pathfinder/finder_3way.cpp
 src/bofh/pathfinder/swaps_idx.hpp
 src/bofh/pathfinder/swaps_idx_fwd.hpp
 src/bofh/pathfinder/swaps_idx.cpp
+src/bofh/commons/bofh_log.hpp
+src/bofh/commons/bofh_log.cpp
 test/test_utils.cpp
 test/test_utils.hpp
 test/test_address.cpp
