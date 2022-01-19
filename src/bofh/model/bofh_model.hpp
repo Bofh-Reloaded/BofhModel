@@ -124,7 +124,13 @@ struct Token: Entity, Ref<Token>
           , const string &name_
           , const std::string &symbol_
           , unsigned int decimals_
-          , bool is_stable_);
+          , bool is_stable_)
+        : Entity(TYPE_TOKEN, tag_, address_)
+        , name(name_)
+        , is_stable(is_stable_)
+        , symbol(symbol_)
+        , decimals(decimals_)
+    { }
 };
 
 

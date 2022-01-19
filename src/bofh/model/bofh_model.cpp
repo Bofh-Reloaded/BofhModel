@@ -19,22 +19,6 @@ struct bad_argument: public std::runtime_error
 };
 #define check_not_null_arg(name) if (name == nullptr) throw bad_argument("can't be null: " #name);
 
-Token::Token(datatag_t tag_
-      , const address_t &address_
-      , const string &name_
-      , const std::string &symbol_
-      , unsigned int decimals_
-      , bool is_stable_)
-    : Entity(TYPE_TOKEN, tag_, address_)
-    , name(name_)
-    , is_stable(is_stable_)
-    , symbol(symbol_)
-    , decimals(decimals_)
-{
-    if (tag_ == 2)
-        log_debug("token 2 at %p", this);
-}
-
 
 TheGraph::TheGraph()
     : entity_index(new EntityIndex)
@@ -195,7 +179,7 @@ void TheGraph::calculate_paths()
         paths_index->holder.emplace_back(val);
         // TODO: fix theoretical memleak in case of emplace() exception
 
-        for (unsigned int i = 0; i < swap_path.size()-1; ++i)
+        for (unsigned int i = 0; i < swap_path.size(); ++i)
         {
             auto key = TokenTransition(
                           swap_path[i]->tokenSrc

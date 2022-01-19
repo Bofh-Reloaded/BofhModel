@@ -3,12 +3,15 @@
 #include <bofh/model/bofh_model.hpp>
 #include <bofh/model/bofh_entity_idx.hpp>
 #include <assert.h>
+#include <algorithm>
 
 namespace bofh {
 namespace pathfinder {
 
 
 
+typedef std::set<const model::Entity *> EntitySet;
+typedef std::set<const model::Token *> TokenSet;
 
 
 namespace {
@@ -43,11 +46,164 @@ static auto range_len = [](auto i)
     return ctr;
 };
 
+static auto set_from_range = [](auto range)
+{
+    TokenSet dest;
+    for (auto i: iterable_please(range))
+    {
+        dest.emplace(reinterpret_cast<TokenSet::value_type>(i));
+    }
+    return dest;
+};
+
+static auto intersection = [](const auto &s1, const auto &s2)
+{
+    EntitySet res;
+    std::set_intersection(s1.begin()
+                          , s1.end()
+                          , s2.begin()
+                          , s2.end()
+                          , std::inserter(res, res.begin())
+                          );
+    return res;
 };
 
 
+} // namespace
+
 
 void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
+                                     , const model::Token *start_node)
+{
+    using namespace std;
+
+    // indexes we use later:
+    using is_stabletoken = model::idx::is_stabletoken;
+    using by_src_token = model::idx::by_src_token;
+    using by_dest_token = model::idx::by_dest_token;
+    using by_both = model::idx::by_src_and_dest_token;
+
+    assert(start_node != nullptr);
+
+    auto get_stable_list = [&](){
+        auto select = graph
+                ->entity_index
+                ->get<is_stabletoken>()
+                .equal_range(true);
+        return iterable_please(select);
+    };
+
+    auto get_predecessors_list = [&](const Entity *t)
+    {
+        assert(t != nullptr && t->type  == model::TYPE_TOKEN);
+        EntitySet res;
+        auto select = graph
+                ->swap_index
+                ->get<by_dest_token>()
+                .equal_range(reinterpret_cast<const Token *>(t));
+        for (auto i: iterable_please(select))
+        {
+            res.emplace(reinterpret_cast<EntitySet::key_type>(i->tokenSrc));
+        }
+        return res;
+    };
+    auto get_successors_list = [&](const Entity *t)
+    {
+        EntitySet res;
+        auto select = graph
+                ->swap_index
+                ->get<by_src_token>()
+                .equal_range(reinterpret_cast<const Token *>(t));
+        for (auto i: iterable_please(select))
+        {
+            res.emplace(reinterpret_cast<EntitySet::key_type>(i->tokenDest));
+        }
+        return res;
+    };
+
+    auto find_swaps = [&](const Entity *tokenSrc, const Entity *tokenDest)
+    {
+        assert(tokenSrc  != nullptr && tokenSrc->type  == model::TYPE_TOKEN);
+        assert(tokenDest != nullptr && tokenDest->type == model::TYPE_TOKEN);
+        auto select = graph
+                ->swap_index
+                ->get<by_both>()
+                .equal_range(boost::make_tuple(reinterpret_cast<const Token *>(tokenSrc)
+                             , reinterpret_cast<const Token *>(tokenDest)));
+        return iterable_please(select);
+    };
+
+
+    auto stable_list = get_stable_list();
+    auto predecessorslist = get_predecessors_list(start_node);
+    auto successorlist = get_successors_list(start_node);
+    auto usable_nodes = intersection(stable_list, predecessorslist);
+
+    // orig code:
+    //      usable_nodes = (set(stable_list) & (predecessorslist)) #filter blue arrows on stable nodes
+    // means:
+    //      list of nodes which are stable tokens AND for which a swap exists, that lands on start_node
+
+    log_debug("find_all_paths_3way_var starting, using start_node = %1% (%2%), "
+              "considering %3% way-out stable tokens, "
+              "%4% predecessors and %5% successors"
+              , start_node->symbol
+              , start_node->address
+              , usable_nodes.size()
+              , predecessorslist.size()
+              , successorlist.size()
+              );
+
+
+    unsigned int ctr = 0;
+    auto count = [&]() {
+        ctr++;
+        if ((ctr % 1000) == 0)
+        {
+            log_debug("found %1% paths so far...", ctr);
+        }
+    };
+
+    for (auto stable_node: usable_nodes)
+    {
+        // orig code:
+        //      tc_nodes = set(graph.predecessors(stable_node)) & set(successorslist)
+        // means:
+        //      list of nodes for which a swap exists that lands on stable_node and
+        //      at the same time, another swap exists that starts from start_token
+        auto tc_nodes = intersection(get_predecessors_list(stable_node)
+                                     , successorlist);
+        // orig code:
+        //      for tc_node in tc_nodes:
+        //          path = [start_node, tc_node, stable_node, start_node]
+        //          path_list.append(path)
+        // means:
+        //      compound a list of swap paths with new entries. Each entry consisting of
+        //      a token walking sequence: start_node, tc_node, stable_node, start_node
+        for (auto tc_node: tc_nodes)
+        {
+            log_trace("start_node %1% tag: %2%", reinterpret_cast<const Token*>(start_node)->symbol, reinterpret_cast<const Token*>(start_node)->tag);
+            log_trace("tc_node %1% tag: %2%", reinterpret_cast<const Token*>(tc_node)->symbol, reinterpret_cast<const Token*>(tc_node)->tag);
+            log_trace("stable_node %1% tag: %2%", reinterpret_cast<const Token*>(stable_node)->symbol, reinterpret_cast<const Token*>(stable_node)->tag);
+            for (auto swap0: find_swaps(start_node, tc_node))
+            {
+                for (auto swap1: find_swaps(tc_node, stable_node))
+                {
+                    for (auto swap2: find_swaps(stable_node, start_node))
+                    {
+                        callback(Path3Way{swap0, swap1, swap2});
+                        count();
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+
+
+void Finder::find_all_paths_3way_var_based_on_swaps(Path3Way::listener_t callback
                                      , const model::Token *start_node)
 {
     using namespace std;

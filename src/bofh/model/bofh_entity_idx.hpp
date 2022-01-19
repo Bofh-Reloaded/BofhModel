@@ -55,6 +55,15 @@ inline bool isSwapDestStableToken(const OperableSwap &s) noexcept
 {
     return isEntityStableToken(*s.tokenDest);
 };
+inline std::size_t swapSourceAndDestUniqueKey(const OperableSwap *s)
+{
+    auto t0 = s->tokenSrc < s->tokenDest ? s->tokenSrc : s->tokenDest;
+    auto t1 = s->tokenSrc < s->tokenDest ? s->tokenDest : s->tokenSrc;
+    std::size_t res = 0;
+    boost::hash_combine(res, t0);
+    boost::hash_combine(res, t1);
+    return res;
+}
 
 /** @} */
 

@@ -36,6 +36,8 @@ struct Finder {
     model::TheGraph *graph;
 
     // find all 3-way paths that start and end on start_node, and exit via a stable node
+    void find_all_paths_3way_var_based_on_swaps(Path3Way::listener_t callback
+                                 , const model::Token *start_node);
     void find_all_paths_3way_var(Path3Way::listener_t callback
                                  , const model::Token *start_node);
 };
