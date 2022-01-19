@@ -32,7 +32,8 @@ from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level
 
 PREDICTION_LOG_TOPIC0 = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"  # Keccak256("Swap(address,uint256,uint256,uint256,uint256,address)")
 WBNB_address = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"
-
+TETHER_address = "0x55d398326f99059ff775485246999027b3197955"
+START_TOKEN = TETHER_address
 
 @dataclass
 class Args:
@@ -124,24 +125,6 @@ class Runner:
         self.tot = 0
         self.ioloop = get_event_loop()
         # self.polling_started = Event()
-
-    SHADOW_POOLS = (
-        "0xdc5572a52da075c006a95f23f776155a1c36ddb9",
-        "0xb9ec4724bf27e17fb1f942f1013ad9add26858d1",
-        "0xe5920e9b6c0fd1c1d36094a5390a2629b4e8f945",
-        "0x79e2359b6ccb740bbdccccd67f3c8c02cf9156bf",
-
-        "0xc2e2fcf95f1ba93fcf7ae3c607c07354ad2a975c", # not found in index
-        "0x63af8d0493afc4c89a2a6c550b8cf9beb7715df9",
-        "0x4f1910d85d98bf274797da6c41f677b40d751103",
-        "0x01985b4998b6592d3fee1669ce2b152a749a4ba9",
-        "0x9425c606c91fd491fce3b7d02a646fa1da3d9411", # bogus responde from getReserves()
-        "0xa6bdcee0711669d00789e544a4ed81c2671e153b",
-        "0xd6a4373f56a0813ee77ef838db4c57d73ab1b475",
-        "0xc63c6c9563cad6a85462aea30e35392c61a406e4",
-    )
-
-
 
     @property
     def pools_ctr(self):
@@ -381,7 +364,7 @@ def main():
 
     runner.preload_exchanges()
     runner.preload_tokens()
-    start_token = runner.graph.lookup_token(WBNB_address)
+    start_token = runner.graph.lookup_token(START_TOKEN)
     assert start_token
     runner.graph.start_token = start_token
     runner.preload_pools()
