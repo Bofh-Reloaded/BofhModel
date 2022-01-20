@@ -4,7 +4,7 @@ from time import sleep
 
 from jsonrpc_websocket import Server
 
-from bofh.utils.misc import progress_printer
+from bofh.utils.misc import progress_printer, LogAdapter
 from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, parse_data_parameters
 
 __doc__="""Start model runner.
@@ -21,6 +21,7 @@ Options:
   --chunk_size=<n>                      preloaded work chunk size per each worker [default: 100]
   --pred_polling_interval=<n>           Web3 prediction polling internal in millisecs [default: 1000]
   --swap_log_db_dsn=<connection_str>    Prediction log swaps DB dsn connection string [default: none]
+  --start_token_address=<address>       on-chain address of start token [default: WBNB]
 """ % Web3Connector.DEFAULT_URI_WSRPC
 
 from dataclasses import dataclass
@@ -31,9 +32,9 @@ from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level
 
 
 PREDICTION_LOG_TOPIC0 = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"  # Keccak256("Swap(address,uint256,uint256,uint256,uint256,address)")
-WBNB_address = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"
-TETHER_address = "0x55d398326f99059ff775485246999027b3197955"
-START_TOKEN = TETHER_address
+WBNB_address = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c" # id=2
+TETHER_address = "0x55d398326f99059ff775485246999027b3197955" # id=4
+START_TOKEN = WBNB_address
 
 @dataclass
 class Args:
@@ -45,6 +46,7 @@ class Args:
     chunk_size: int = 0
     pred_polling_interval: int = 0
     swap_log_db_dsn: str = None
+    start_token_address: str = None
 
     @staticmethod
     def default(arg, d, suppress_list=None):
@@ -66,6 +68,7 @@ class Args:
             , chunk_size=int(cls.default(args["--chunk_size"], 100))
             , pred_polling_interval=int(cls.default(args["--pred_polling_interval"], 1000))
             , swap_log_db_dsn=cls.default(args["--swap_log_db_dsn"], None, suppress_list=["none"])
+            , start_token_address=cls.default(args["--start_token_address"], START_TOKEN, suppress_list=["WBNB"])
         )
 
 
@@ -121,8 +124,6 @@ class Runner:
             self.swap_log_db = ModelDB(schema_name="swap_log", cursor_factory=SwapLogScopedCursor, db_dsn=self.args.swap_log_db_dsn)
             self.swap_log_db.open_and_priming()
         self.pools = set()
-        self.skip = 0
-        self.tot = 0
         self.ioloop = get_event_loop()
         # self.polling_started = Event()
 
@@ -140,10 +141,13 @@ class Runner:
 
     def preload_exchanges(self):
         self.log.info("preloading exchanges...")
+        ctr = 0
         with self.db as curs:
             for id, name in curs.list_exchanges():
                 exc = self.graph.add_exchange(id, self.random_address(), name)
                 assert exc is not None
+                ctr += 1
+        self.log.info("EXCHANGE set loaded, size is %r items", ctr)
 
     def preload_tokens(self):
         with self.db as curs:
@@ -157,6 +161,7 @@ class Runner:
                     if tok is None:
                         raise RuntimeError("integrity error: token address is already not of a token: id=%r, %r" % (id, args))
                     print_progress()
+            self.log.info("TOKENS set loaded, size is %r items", print_progress.ctr)
 
     def preload_pools(self):
         with self.db as curs:
@@ -169,7 +174,6 @@ class Runner:
                     t0 = self.graph.lookup_token(token0_id)
                     t1 = self.graph.lookup_token(token1_id)
                     if not t0 or not t1:
-                        self.skip += 1
                         if self.args.verbose:
                             self.log.warning("disabling pool %s due to missing or disabled affering token "
                                              "(token0=%r, token1=%r)", address, token0_id, token1_id)
@@ -178,17 +182,21 @@ class Runner:
                     assert exchange is not None
                     pool = self.graph.add_lp(id, address, exchange, t0, t1)
                     print_progress()
-                    self.tot += 1
                     if pool is None:
-                        self.skip += 1
                         if self.args.verbose:
                             self.log.warning("integrity error: pool address is already not of a pool: "
-                                             "id=%r, %r -- skip %r over %r", id, address, self.skip, self.tot)
+                                             "id=%r, %r", id, address)
                         continue
                     self.pools.add(pool)
-                    if self.args.pools_limit and self.pools_ctr >= self.args.pools_limit:
-                        self.log.info("stopping after loading %r pools, as per effect of -n cli parameter", self.pools_ctr)
+                    if self.args.pools_limit and print_progress.ctr >= self.args.pools_limit:
+                        self.log.info("stopping after loading %r pools, "
+                                      "as per effect of -n cli parameter", print_progress.ctr)
                         break
+            self.log.info("POOLS set loaded, size is %r items", print_progress.ctr)
+            missing = print_progress.tot - print_progress.ctr
+            if missing > 0:
+                self.log.info("  \\__ %r over pool the total %r were not loaded due to "
+                              "failed graph connectivity or other problems", missing, print_progress.tot)
 
     def preload_balances(self):
         self.log.info("fetching balances via Web3...")
@@ -359,16 +367,19 @@ class Runner:
 def main():
     basicConfig(level="INFO")
     log_set_level(log_level.debug)
-    log_register_sink(print)
-    runner = Runner(Args.from_cmdline(__doc__))
-
+    log_register_sink(LogAdapter(level="DEBUG"))
+    args = Args.from_cmdline(__doc__)
+    runner = Runner(args)
     runner.preload_exchanges()
     runner.preload_tokens()
-    start_token = runner.graph.lookup_token(START_TOKEN)
+    start_token = runner.graph.lookup_token(args.start_token_address)
     assert start_token
     runner.graph.start_token = start_token
     runner.preload_pools()
-    runner.graph.calculate_paths()
+    while True:
+        print("Aoh, che si fa?")
+        input()
+        runner.graph.calculate_paths()
     #runner.preload_balances()
     print("LOAD COMPLETE")
     #runner.poll_prediction()

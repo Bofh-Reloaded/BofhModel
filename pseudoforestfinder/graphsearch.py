@@ -14,7 +14,7 @@ import sys
 from load_from_status_db import load_graph_from_db_directory
 from load_from_status_db import load_predicted_swap_events
 
-the_graph = load_graph_from_db_directory("./dbswap/dbswap")
+the_graph = load_graph_from_db_directory(".")
 
 #Core function to find all possible 4-way exchanges in "graph" starting and coming back to "start node"
 def find_all_paths_4way(graph, start_node, stable_list):
@@ -56,6 +56,7 @@ def find_all_paths_3way_var(graph, start_node, stable_list):
     print("number of successors: ", len(successorslist)) #green arrows - forward path
     print("number of predecessors: ", len(predecessorslist)) #blue arrows - reverese path
     usable_nodes = (set(stable_list) & (predecessorslist)) #filter blue arrows on stable nodes
+    print("usable_nodes: ", list(usable_nodes))
     for stable_node in usable_nodes:
         tc_nodes = set(graph.predecessors(stable_node)) & set(successorslist)
         for tc_node in tc_nodes:
@@ -83,7 +84,7 @@ def get_edge_weight(graph,start,end,key):
 def get_edge_pool(graph,start,end,key):
     dict = graph[start][end]
     mypool = dict[0][key]
-    print(mypool.address)
+    #print(mypool.address)
     if mypool.reserve1 == 0 :
         raise Exception ('Found empty reserve in liquidity pool') 
     #ratio = mypool.reserve0/mypool.reserve1
@@ -166,6 +167,8 @@ def automagical_formula_3_way (r1,r2,path, graph, delta):
 
 ##Uncomment if using the loaded matrix
 G = the_graph
+print("G.has_edge(2, 4)", G.has_edge(2, 4))
+print("G.has_edge(4, 2)", G.has_edge(4, 2))
 
 print("number of nodes: ", G.number_of_nodes())
 print("number of edges: ", G.number_of_edges())
@@ -196,17 +199,17 @@ for analyzed_path in possible_paths_2:
 print("The number of possible 3-way exchanges starting from node", start_node, " is: ", len(possible_paths_3))
 print("Printing the list of possible paths and their cost:")
 arbitrage_opportunity = []
-file = open ('3waystest.txt','w')
-for analyzed_path in possible_paths_3:
-    weight,amount,start_amount = compute_weights_in_path(analyzed_path, G,0.003)
-    #print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
-    #print(analyzed_path)
-    #file.write(repr(analyzed_path) + " total unbalance: " + repr(compute_weights_in_path(analyzed_path, G)) + '\n')
-    #file.write(repr(analyzed_path) + " total unbalance: " + repr(compute_weights_in_path(analyzed_path, G,0.003)) + '\n')
-    if weight >= 1:
-        file.write(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:.3} -> {amount:.3} \n")
-        arbitrage_opportunity.append(analyzed_path)
-file.close()
+with open('3waystest.txt','w') as file:
+    for analyzed_path in possible_paths_3:
+        weight,amount,start_amount = compute_weights_in_path(analyzed_path, G,0.003)
+        #print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
+        #print(analyzed_path)
+        #file.write(repr(analyzed_path) + " total unbalance: " + repr(compute_weights_in_path(analyzed_path, G)) + '\n')
+        #file.write(repr(analyzed_path) + " total unbalance: " + repr(compute_weights_in_path(analyzed_path, G,0.003)) + '\n')
+        print(f" {analyzed_path}", file=file)
+        if 0 and  weight >= 1:
+            print(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:.3} -> {amount:.3}", file=file)
+            arbitrage_opportunity.append(analyzed_path)
 
 #print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths_4))
 #print("Printing the list of possible paths and their cost:")

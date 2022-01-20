@@ -78,10 +78,13 @@ def load_graph_from_db_directory(dp_dump_directory=None):
         if not rec: break
         G.add_node(rec[0], address=rec[1])
 
-    threshold = 2
-    f = f"token0_id IN (SELECT token0_id FROM pools GROUP BY token0_id HAVING COUNT(token1_id) > {threshold})"
-
-    curs.execute(f"SELECT id, token0_id, token1_id, address FROM pools WHERE {f}")
+    if False:
+        # OCCOSE??
+        threshold = 2
+        f = f"token0_id IN (SELECT token0_id FROM pools GROUP BY token0_id HAVING COUNT(token1_id) > {threshold})"
+        curs.execute(f"SELECT id, token0_id, token1_id, address FROM pools WHERE {f}")
+    else:
+        curs.execute(f"SELECT id, token0_id, token1_id, address FROM pools")
     pools = dict()
     while True:
         rec = curs.fetchone()
@@ -107,16 +110,21 @@ def load_graph_from_db_directory(dp_dump_directory=None):
             if not pool: continue
             pool.update(reserve0=int(rec[1]), reserve1=int(rec[2]))
 
+    edge_ctr = 0
     for id, pool in pools.items():
         token0 = pool["token0"]
         token1 = pool["token1"]
         if "reserve0" not in pool:
             # Do not bless the arches with a pool object. Reserves db is not available
             pool = None
+            G.add_edge(token0, token1, pool=pool)
+            G.add_edge(token1, token0, pool=pool)
         else:
             pool = IdealPool(**pool)
-            G.add_edge(token0, token1, pool=pool)  # Note that both edges share the same pool object
+            G.add_edge(token0, token1, pool=pool)
             G.add_edge(token1, token0, pool=pool.flip())
+        edge_ctr += 2
+    print("numero di edges caricati da db:", edge_ctr)
 
     return G
 

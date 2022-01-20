@@ -1,3 +1,25 @@
+/**
+ * @file bofh_log.hpp
+ * @brief Logger facility with Python delegation
+ *
+ * Pretty standard logging with log_info(), log_debug() macros and so on.
+ * The usual stuff.
+ *
+ * Features to mention:
+ * - the output of the logging is delegated to a boost::python::object
+ *   that is expected to be injected by the Python VM which loads this extension,
+ *   using the function log_register_sink(python_callable)
+ * - single-branch runtime triggering of log statements
+ * - remove (not minimize) runtime impact of log statement parameter
+ *   evaluation when log is not triggered
+ * - uses boost::format in a more log-context friendly fashion
+ *
+ * @see bofh.model.misc.LogAdapter
+ * @note The bofh.model.misc.LogAdapter class is designed to be injected
+ *       into log_register_sink(). It redirects log events generated here to
+ *       Python's standard logging framework
+ */
+
 #pragma once
 
 #include <boost/format.hpp>
@@ -11,10 +33,27 @@ typedef enum {
     log_level_error,
 } log_level;
 
+/**
+ * @brief returns true if the specified log @p lvl triggers the currently set log threshold
+ */
 bool log_trigger(log_level lvl);
+
+/**
+ * @brief returns the currently set log level threshold
+ */
 log_level log_get_level();
+
+/**
+ * @brief sets the log level threshold
+ */
 void log_set_level(log_level lvl);
+
+/**
+ * @brief Injects a Python callable delegate, as the log data sink
+ */
 void log_register_sink(boost::python::object sink);
+
+
 void log_emit_ll(log_level lvl, const std::string &msg);
 
 // some proper C preprocessor sht follows. feel free to look away
@@ -42,10 +81,6 @@ void log_emit_ll(log_level lvl, const std::string &msg);
 #define _VFUNC_(name, n) name##n
 #define _VFUNC(name, n) _VFUNC_(name, n)
 
-// all of this was done to achieve 3 things:
-// - single-branch runtime triggering of log statements
-// - remove (not minimize) runtime impact of log statement parameter evaluation when log is not triggered
-// - use boost::format in a more log-context friendly fashion
 
 #define log_emit_2(lvl, msg)                                      if(log_trigger(lvl)) log_emit_ll(lvl, boost::str(boost::format(msg)))
 #define log_emit_3(lvl, msg, a1)                                  if(log_trigger(lvl)) log_emit_ll(lvl, boost::str(boost::format(msg) % a1))

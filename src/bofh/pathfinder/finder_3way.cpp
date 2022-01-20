@@ -58,11 +58,13 @@ static auto set_from_range = [](auto range)
 
 static auto intersection = [](const auto &s1, const auto &s2)
 {
+    EntitySet tmp1(s1.begin(), s1.end());
+    EntitySet tmp2(s2.begin(), s2.end());
     EntitySet res;
-    std::set_intersection(s1.begin()
-                          , s1.end()
-                          , s2.begin()
-                          , s2.end()
+    std::set_intersection(tmp1.begin()
+                          , tmp1.end()
+                          , tmp2.begin()
+                          , tmp2.end()
                           , std::inserter(res, res.begin())
                           );
     return res;
@@ -73,7 +75,7 @@ static auto intersection = [](const auto &s1, const auto &s2)
 
 
 void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
-                                     , const model::Token *start_node)
+                                     , const model::Token *start_token)
 {
     using namespace std;
 
@@ -83,7 +85,7 @@ void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
     using by_dest_token = model::idx::by_dest_token;
     using by_both = model::idx::by_src_and_dest_token;
 
-    assert(start_node != nullptr);
+    assert(start_token != nullptr);
 
     auto get_stable_list = [&](){
         auto select = graph
@@ -107,6 +109,7 @@ void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
         }
         return res;
     };
+
     auto get_successors_list = [&](const Entity *t)
     {
         EntitySet res;
@@ -135,8 +138,9 @@ void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
 
 
     auto stable_list = get_stable_list();
-    auto predecessorslist = get_predecessors_list(start_node);
-    auto successorlist = get_successors_list(start_node);
+    auto predecessorslist = get_predecessors_list(start_token);
+    auto successorlist = get_successors_list(start_token);
+
     auto usable_nodes = intersection(stable_list, predecessorslist);
 
     // orig code:
@@ -144,16 +148,22 @@ void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
     // means:
     //      list of nodes which are stable tokens AND for which a swap exists, that lands on start_node
 
-    log_debug("find_all_paths_3way_var starting, using start_node = %1% (%2%), "
+    log_info("find_all_paths_3way_var starting, using start_token = %1% (%2%), "
               "considering %3% way-out stable tokens, "
               "%4% predecessors and %5% successors"
-              , start_node->symbol
-              , start_node->address
+              , start_token->symbol
+              , start_token->address
               , usable_nodes.size()
               , predecessorslist.size()
               , successorlist.size()
               );
 
+    log_debug("list of usable_nodes:");
+    for (auto n: usable_nodes)
+    {
+        auto t = reinterpret_cast<const Token*>(n);
+        log_debug(" - id=%1% %2% (%3%)", t->tag, t->symbol, t->address);
+    }
 
     unsigned int ctr = 0;
     auto count = [&]() {
@@ -182,14 +192,26 @@ void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
         //      a token walking sequence: start_node, tc_node, stable_node, start_node
         for (auto tc_node: tc_nodes)
         {
-            log_trace("start_node %1% tag: %2%", reinterpret_cast<const Token*>(start_node)->symbol, reinterpret_cast<const Token*>(start_node)->tag);
-            log_trace("tc_node %1% tag: %2%", reinterpret_cast<const Token*>(tc_node)->symbol, reinterpret_cast<const Token*>(tc_node)->tag);
-            log_trace("stable_node %1% tag: %2%", reinterpret_cast<const Token*>(stable_node)->symbol, reinterpret_cast<const Token*>(stable_node)->tag);
-            for (auto swap0: find_swaps(start_node, tc_node))
+            if (log_trigger(log_level_trace))
+            {
+                {
+                    auto token = reinterpret_cast<const Token*>(start_token);
+                    log_trace("start_node %1% tag: %2%", token->symbol, token->tag);
+                }
+                {
+                    auto token = reinterpret_cast<const Token*>(tc_node);
+                    log_trace("tc_node %1% tag: %2%", token->symbol, token->tag);
+                }
+                {
+                    auto token = reinterpret_cast<const Token*>(stable_node);
+                    log_trace("stable_node %1% tag: %2%", token->symbol, token->tag);
+                }
+            }
+            for (auto swap0: find_swaps(start_token, tc_node))
             {
                 for (auto swap1: find_swaps(tc_node, stable_node))
                 {
-                    for (auto swap2: find_swaps(stable_node, start_node))
+                    for (auto swap2: find_swaps(stable_node, start_token))
                     {
                         callback(Path3Way{swap0, swap1, swap2});
                         count();
@@ -241,7 +263,7 @@ void Finder::find_all_paths_3way_var_based_on_swaps(Path3Way::listener_t callbac
         }
     };
 
-    log_debug("find_all_paths_3way_var starting, using start_node = %1% (%2%), considering %3% stable paths"
+    log_info("find_all_paths_3way_var starting, using start_node = %1% (%2%), considering %3% stable paths"
               , start_node->symbol
               , start_node->address
               , range_len(usable_swaps));

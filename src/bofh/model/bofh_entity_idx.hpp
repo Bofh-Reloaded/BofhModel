@@ -180,8 +180,8 @@ typedef multi_index_container<
                , member<OperableSwap, const LiquidityPool*, &OperableSwap::pool>               >
           >
         , ordered_non_unique< tag<by_src_and_dest_token>,  composite_key<OperableSwap,
-                 member<OperableSwap, const Token*, &OperableSwap::tokenDest>
-               , member<OperableSwap, const Token*, &OperableSwap::tokenSrc>                   >
+                 member<OperableSwap, const Token*, &OperableSwap::tokenSrc>
+               , member<OperableSwap, const Token*, &OperableSwap::tokenDest>                  >
           >
         , ordered_non_unique< tag<stable_predecessors>,  composite_key<OperableSwap,
                  global_fun<const OperableSwap&, bool, isSwapDestStableToken>

@@ -179,6 +179,12 @@ void TheGraph::calculate_paths()
         paths_index->holder.emplace_back(val);
         // TODO: fix theoretical memleak in case of emplace() exception
 
+        log_debug("found path: [%1%, %2%, %3%, %4%]"
+                  , swap_path[0]->tokenSrc->tag
+                  , swap_path[1]->tokenSrc->tag
+                  , swap_path[2]->tokenSrc->tag
+                  , swap_path[2]->tokenDest->tag);
+
         for (unsigned int i = 0; i < swap_path.size(); ++i)
         {
             auto key = TokenTransition(
