@@ -180,7 +180,7 @@ static auto clear_existing_paths_if_any = [](TheGraph *graph)
 
 void TheGraph::calculate_paths()
 {
-    using Path = pathfinder::Path3Way;
+    using Path = pathfinder::Path;
 
     clear_existing_paths_if_any(this);
 
@@ -196,24 +196,23 @@ void TheGraph::calculate_paths()
              , start_token->symbol.c_str()
              , start_token);
 
-    auto listener = [&](const Path &swap_path)
+    auto listener = [&](const Path *path)
     {
-        auto val = new Path(swap_path);
-        paths_index->holder.emplace_back(val);
+        paths_index->holder.emplace_back(path);
         // TODO: fix theoretical memleak in case of emplace() exception
 
         log_debug("found path: [%1%, %2%, %3%, %4%]"
-                  , swap_path[0]->tokenSrc->tag
-                  , swap_path[1]->tokenSrc->tag
-                  , swap_path[2]->tokenSrc->tag
-                  , swap_path[2]->tokenDest->tag);
+                  , (*path)[0]->tokenSrc->tag
+                  , (*path)[1]->tokenSrc->tag
+                  , (*path)[2]->tokenSrc->tag
+                  , (*path)[2]->tokenDest->tag);
 
-        for (unsigned int i = 0; i < swap_path.size(); ++i)
+        for (unsigned int i = 0; i < path->size(); ++i)
         {
             auto key = TokenTransition(
-                          swap_path[i]->tokenSrc
-                        , swap_path[i]->tokenDest);
-            paths_index->paths.emplace(key, val);
+                          (*path)[i]->tokenSrc
+                        , (*path)[i]->tokenDest);
+            paths_index->paths.emplace(key, path);
         }
     };
 

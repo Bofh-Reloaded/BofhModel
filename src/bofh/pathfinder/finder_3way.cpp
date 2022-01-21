@@ -74,7 +74,7 @@ static auto intersection = [](const auto &s1, const auto &s2)
 } // namespace
 
 
-void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
+void Finder::find_all_paths_3way_var(Path::listener_t callback
                                      , const model::Token *start_token)
 {
     using namespace std;
@@ -213,7 +213,7 @@ void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
                 {
                     for (auto swap2: find_swaps(stable_node, start_token))
                     {
-                        callback(Path3Way{swap0, swap1, swap2});
+                        callback(new Path(swap0, swap1, swap2));
                         count();
                     }
                 }
@@ -225,7 +225,7 @@ void Finder::find_all_paths_3way_var(Path3Way::listener_t callback
 
 
 
-void Finder::find_all_paths_3way_var_based_on_swaps(Path3Way::listener_t callback
+void Finder::find_all_paths_3way_var_based_on_swaps(Path::listener_t callback
                                      , const model::Token *start_node)
 {
     using namespace std;
@@ -324,7 +324,7 @@ void Finder::find_all_paths_3way_var_based_on_swaps(Path3Way::listener_t callbac
             assert(swap2->tokenDest == start_node);
 
             // send the new entry to whoever requested it
-            callback(Path3Way{swap0, swap1, swap2});
+            callback(new Path(swap0, swap1, swap2));
             count();
         }
     }

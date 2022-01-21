@@ -56,7 +56,7 @@ struct TokenTransition
 struct SwapPathsIndex {
     // effective owenr of Path object pointers (stored here so that later they can be deleted)
     // TODO: use unique_ptr and correct RAII
-    std::list<const Path3Way*> holder;
+    std::list<const Path*> holder;
 
     // in case anyone is baffled by what an unordered_multimap is,
     // this implements the case of one-to-many map: key -> multiple values.
@@ -65,7 +65,7 @@ struct SwapPathsIndex {
     // The weird predicament of TokenTransition::hash is the least ugly way
     // to effectively establish an hashed index. Sorry.
     std::unordered_multimap<TokenTransition
-                            , const Path3Way*
+                            , const Path*
                             , TokenTransition::hash> paths;
 
 

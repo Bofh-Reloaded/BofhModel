@@ -299,6 +299,8 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
      * and add them to an hot index
      */
     void calculate_paths();
+
+
 };
 
 

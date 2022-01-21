@@ -11,8 +11,12 @@
 #include "../commons/bofh_log.hpp"
 
 
+
 using namespace boost::python;
 using namespace bofh::model;
+using namespace bofh::pathfinder;
+
+
 
 #define PY_ABS_LONG_MIN         (0-(unsigned long)LONG_MIN)
 
@@ -167,6 +171,13 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             ;
     register_ptr_to_python<const LiquidityPool*>();
     register_ptr_to_python<LiquidityPool*>();
+
+    class_<Path>("Path", init<Path::value_type, Path::value_type, Path::value_type>())
+            .def(init<Path::value_type, Path::value_type, Path::value_type, Path::value_type>())
+            .def("size"   , &Path::size)
+            .def("get"    , &Path::get, dont_manage_returned_pointer());
+    register_ptr_to_python<const Path*>();
+    register_ptr_to_python<Path*>();
 
     class_<TheGraph, dont_make_copies>("TheGraph")
             .def_readwrite("start_token" , &TheGraph::start_token)
