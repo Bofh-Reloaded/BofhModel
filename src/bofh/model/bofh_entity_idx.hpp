@@ -89,14 +89,19 @@ typedef multi_index_container<
   Entity*,
   indexed_by<
         // 1. index by on-chain address
-          hashed_unique<      tag<by_address>    ,  member<Entity, const address_t, &Entity::address> >
+
+        hashed_unique<      tag<by_address>         ,  composite_key<Entity,
+                 member<Entity, const EntityType_e, &Entity::type>
+               , member<Entity, const address_t, &Entity::address> >
+
+          >
         // 2. index by our own internal reference system:
         //    entities have an attached tracing tag, which tracks PKEY from a DB.
         //    These ids do collide across entity types, so this index is a
         //    composite key to take the necessary 2nd cardinality into account
         , hashed_unique<      tag<by_tag>         ,  composite_key<Entity,
-                 member<Entity, const datatag_t   , &Entity::tag>
-               , member<Entity, const EntityType_e, &Entity::type>               >
+                 member<Entity, const EntityType_e, &Entity::type>
+               ,  member<Entity, const datatag_t   , &Entity::tag> >
           >
         // 3. partition all entities which are elected stablecoins:
         //    using this index just as a basket. It wastes ram. The solution is
@@ -126,7 +131,7 @@ struct EntityIndex: EntityIndex_base {
     const T* lookup(datatag_t tag) const noexcept
     {
         auto &idx = get<by_tag>();
-        auto i = idx.find(boost::make_tuple(tag, type));
+        auto i = idx.find(boost::make_tuple(type, tag));
         if (i == idx.end())
         {
             return nullptr;
@@ -138,11 +143,11 @@ struct EntityIndex: EntityIndex_base {
      * @brief lookup entities by on-chain address
      * @return matching entity pointer or null
      */
-    template<typename T>
+    template<typename T, EntityType_e type>
     const T* lookup(const address_t &addr) const noexcept
     {
         auto &idx = get<by_address>();
-        auto i = idx.find(addr);
+        auto i = idx.find(boost::make_tuple(type, addr));
         if (i == idx.end())
         {
             return nullptr;

@@ -286,19 +286,13 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
      */
     const LiquidityPool *lookup_lp(const address_t &address);
     const LiquidityPool *lookup_lp(const char *address) { return lookup_lp(address_t(address)); }
+    std::vector<const OperableSwap *> lookup_swap(datatag_t token0, datatag_t token1);
+
     /**
      * @brief fetch a known LP node by tag id
      * @warning This takes O(n) time
      */
     const LiquidityPool *lookup_lp(datatag_t tag);
-
-    /**
-     * @brief retrieve an address-indexed object from the graph knowledge
-     * @param address
-     * @return reference to the object, if found. NULL otherwise
-     */
-    const Entity *lookup(const address_t &address);
-
 
     /**
      * initially called (once) to pre-compute all useful swap paths,

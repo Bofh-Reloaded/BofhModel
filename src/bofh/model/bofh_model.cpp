@@ -86,7 +86,7 @@ const Token *TheGraph::add_token(datatag_t tag
 
 const Token *TheGraph::lookup_token(const char *address)
 {
-    return entity_index->lookup<Token>(address);
+    return entity_index->lookup<Token, TYPE_TOKEN>(address);
 }
 
 
@@ -127,17 +127,40 @@ const LiquidityPool *TheGraph::add_lp(datatag_t tag
 
 const LiquidityPool *TheGraph::lookup_lp(const address_t &address)
 {
-    return entity_index->lookup<LiquidityPool>(address);
+    return entity_index->lookup<LiquidityPool, TYPE_LP>(address);
 }
+
+std::vector<const OperableSwap *> TheGraph::lookup_swap(datatag_t token0, datatag_t token1)
+{
+    std::vector<const OperableSwap *> res;
+    auto t0 = lookup_token(token0);
+    auto t1 = lookup_token(token1);
+
+    if (t0 == nullptr)
+    {
+        log_error("token0 id %1% not found", token0);
+        return res;
+    }
+    if (t1 == nullptr)
+    {
+        log_error("token1 id %1% not found", token1);
+        return res;
+    }
+
+    auto range = swap_index->get<idx::by_src_and_dest_token>().equal_range(boost::make_tuple(t0, t1));
+    for (auto i = range.first; i != range.second; ++i)
+    {
+        res.push_back(*i);
+    }
+
+    return res;
+}
+
+
 
 const LiquidityPool *TheGraph::lookup_lp(datatag_t tag)
 {
     return entity_index->lookup<LiquidityPool, TYPE_LP>(tag);
-}
-
-const Entity *TheGraph::lookup(const address_t &address)
-{
-    return entity_index->lookup<Entity>(address);
 }
 
 static auto clear_existing_paths_if_any = [](TheGraph *graph)
