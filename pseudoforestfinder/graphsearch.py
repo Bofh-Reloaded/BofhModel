@@ -14,7 +14,7 @@ import sys
 from load_from_status_db import load_graph_from_db_directory
 from load_from_status_db import load_predicted_swap_events
 
-the_graph = load_graph_from_db_directory(".")
+the_graph = load_graph_from_db_directory("./dbswap/dbswap")
 
 #Core function to find all possible 4-way exchanges in "graph" starting and coming back to "start node"
 def find_all_paths_4way(graph, start_node, stable_list):
@@ -142,7 +142,21 @@ def automagical_formula_3_way (r1,r2,path, graph, delta):
     gain = (r1 * r2 * ((r1**2 * r2**2 * b1 * c2 * a3)/(b2*c3+r1*r2*b1*c3*r1**2*r2**2*b1*c2)/((a1*b2*c3))/(b2*c3+r1*r2*b1*c3+r1**2*r2**2*b1*c2)+r1*delta)-1)*delta
     return gain
     
+def read_paths_from_file (file):
+    buffer = open(file, "r")
+    content = buffer.read()
+    content_list = content.split("\n")
+    print(len(content_list))
+    buffer.close()
+    return content_list
 
+def extract_differences (file1, file2) :
+    list1 = read_paths_from_file(file1)
+    list2 = read_paths_from_file(file2)
+    if len(list1) > len(list2):
+        return set(list1) - set(list2)
+    return set(list2) - set(list1)
+    
 #Generating the graph of example on draw.io
 #G = nx.MultiDiGraph()
 
@@ -167,15 +181,15 @@ def automagical_formula_3_way (r1,r2,path, graph, delta):
 
 ##Uncomment if using the loaded matrix
 G = the_graph
-print("G.has_edge(2, 4)", G.has_edge(2, 4))
-print("G.has_edge(4, 2)", G.has_edge(4, 2))
+#print("G.has_edge(2, 4)", G.has_edge(2, 4))
+#print("G.has_edge(4, 2)", G.has_edge(4, 2))
 
 print("number of nodes: ", G.number_of_nodes())
 print("number of edges: ", G.number_of_edges())
 
 #stable_nodes = [i for i in range(1, 626199)]    
 stable_nodes = [420608,4, 377192, 2, 5, 258, 489332, 451609, 611173, 604407, 538538, 623880, 374437, 3, 13, 515506, 31, 34, 29]
-start_node = 4
+start_node = 2
 #print("List of predecessors is", set(G.predecessors(1)))
 #print(nx.is_directed(G))
 #nx.draw(the_graph, pos=nx.circular_layout(the_graph), node_color='r', edge_color='b') #draw graph 
@@ -210,7 +224,7 @@ with open('3waystest.txt','w') as file:
         if 0 and  weight >= 1:
             print(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:.3} -> {amount:.3}", file=file)
             arbitrage_opportunity.append(analyzed_path)
-
+print ('The difference is: ',extract_differences('3waystest.txt','3waystestmod.txt' ))
 #print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths_4))
 #print("Printing the list of possible paths and their cost:")
 #for analyzed_path in possible_paths_4:
