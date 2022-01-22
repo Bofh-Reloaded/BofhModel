@@ -4,7 +4,7 @@ from time import sleep
 
 from jsonrpc_websocket import Server
 
-from bofh.utils.misc import progress_printer, LogAdapter
+from bofh.utils.misc import progress_printer, LogAdapter,Timer
 from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, parse_data_parameters
 
 __doc__="""Start model runner.
@@ -22,6 +22,7 @@ Options:
   --pred_polling_interval=<n>           Web3 prediction polling internal in millisecs [default: 1000]
   --swap_log_db_dsn=<connection_str>    Prediction log swaps DB dsn connection string [default: none]
   --start_token_address=<address>       on-chain address of start token [default: WBNB]
+  --cli                                 preload status and stop at CLI (for debugging)
 """ % Web3Connector.DEFAULT_URI_WSRPC
 
 from dataclasses import dataclass
@@ -47,6 +48,7 @@ class Args:
     pred_polling_interval: int = 0
     swap_log_db_dsn: str = None
     start_token_address: str = None
+    cli: bool = False
 
     @staticmethod
     def default(arg, d, suppress_list=None):
@@ -69,6 +71,7 @@ class Args:
             , pred_polling_interval=int(cls.default(args["--pred_polling_interval"], 1000))
             , swap_log_db_dsn=cls.default(args["--swap_log_db_dsn"], None, suppress_list=["none"])
             , start_token_address=cls.default(args["--start_token_address"], START_TOKEN, suppress_list=["WBNB"])
+            , cli=bool(cls.default(args["--cli"], 0))
         )
 
 
@@ -376,10 +379,10 @@ def main():
     assert start_token
     runner.graph.start_token = start_token
     runner.preload_pools()
-    while True:
-        print("Aoh, che si fa?")
-        input()
-        runner.graph.calculate_paths()
+    while args.cli:
+        from IPython import embed
+        embed()
+    runner.graph.calculate_paths()
     #runner.preload_balances()
     print("LOAD COMPLETE")
     #runner.poll_prediction()

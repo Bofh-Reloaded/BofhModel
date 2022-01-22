@@ -11,8 +11,12 @@
 #include "../commons/bofh_log.hpp"
 
 
+
 using namespace boost::python;
 using namespace bofh::model;
+using namespace bofh::pathfinder;
+
+
 
 #define PY_ABS_LONG_MIN         (0-(unsigned long)LONG_MIN)
 
@@ -124,37 +128,39 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def(self_ns::repr(self_ns::self))
             .def(self_ns::str(self_ns::self))
             ;
-//    register_ptr_to_python<const address_t*>();
-//    register_ptr_to_python<address_t*>();
+    register_ptr_to_python<const address_t*>();
+    register_ptr_to_python<address_t*>();
 
     class_<Entity, dont_make_copies>("Entity", no_init)
             .def_readonly("tag" , &Entity::tag)
             .def_readonly("address", &Entity::address);
-//    register_ptr_to_python<const Entity*>();
-//    register_ptr_to_python<Entity*>();
+    register_ptr_to_python<const Entity*>();
+    register_ptr_to_python<Entity*>();
 
     class_<OperableSwap, dont_make_copies>("OperableSwap", no_init)
             .def_readonly("tokenSrc", &OperableSwap::tokenSrc)
             .def_readonly("tokenDest", &OperableSwap::tokenDest)
             .def_readonly("pool", &OperableSwap::pool);
-//    register_ptr_to_python<const OperableSwap*>();
-//    register_ptr_to_python<OperableSwap*>();
+    register_ptr_to_python<const OperableSwap*>();
+    register_ptr_to_python<OperableSwap*>();
 
-    //class_<Token::OperableSwaps>("OperableSwaps").def(vector_indexing_suite<Token::OperableSwaps>());
+    class_<std::vector<const OperableSwap*>>("OperableSwaps")
+            .def(vector_indexing_suite<std::vector<const OperableSwap*>>());
+
     class_<Token, bases<Entity>, dont_make_copies>("Token", no_init)
             .def_readonly("name"       , &Token::name)
             .def_readonly("symbol"     , &Token::symbol)
             .def_readonly("decimals"   , &Token::decimals)
             .def_readonly("is_stable"  , &Token::is_stable)
             ;
-//    register_ptr_to_python<const Token*>();
-//    register_ptr_to_python<Token*>();
+    register_ptr_to_python<const Token*>();
+    register_ptr_to_python<Token*>();
 
     class_<Exchange, bases<Entity>, dont_make_copies>("Exchange", no_init)
             .def_readonly("name"   , &Exchange::name)
             ;
-//    register_ptr_to_python<const Exchange*>();
-//    register_ptr_to_python<Exchange*>();
+    register_ptr_to_python<const Exchange*>();
+    register_ptr_to_python<Exchange*>();
 
     class_<LiquidityPool, bases<Entity>, dont_make_copies>("LiquidityPool", no_init)
             .def_readonly("exchange"  , &LiquidityPool::exchange)
@@ -163,8 +169,15 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def_readwrite("reserve0" , &LiquidityPool::reserve0)
             .def_readwrite("reserve1" , &LiquidityPool::reserve1)
             ;
-//    register_ptr_to_python<const LiquidityPool*>();
-//    register_ptr_to_python<LiquidityPool*>();
+    register_ptr_to_python<const LiquidityPool*>();
+    register_ptr_to_python<LiquidityPool*>();
+
+    class_<Path>("Path", init<Path::value_type, Path::value_type, Path::value_type>())
+            .def(init<Path::value_type, Path::value_type, Path::value_type, Path::value_type>())
+            .def("size"   , &Path::size)
+            .def("get"    , &Path::get, dont_manage_returned_pointer());
+    register_ptr_to_python<const Path*>();
+    register_ptr_to_python<Path*>();
 
     class_<TheGraph, dont_make_copies>("TheGraph")
             .def_readwrite("start_token" , &TheGraph::start_token)
@@ -177,7 +190,7 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(const address_t &)>(&TheGraph::lookup_lp)   , dont_manage_returned_pointer())
             .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(const char *     )>(&TheGraph::lookup_lp)   , dont_manage_returned_pointer())
             .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(datatag_t        )>(&TheGraph::lookup_lp)   , dont_manage_returned_pointer())
-            .def("lookup"         , &TheGraph::lookup          , dont_manage_returned_pointer())
+            .def("lookup_swap"    , &TheGraph::lookup_swap)
             .def("calculate_paths", &TheGraph::calculate_paths)
             ;
 

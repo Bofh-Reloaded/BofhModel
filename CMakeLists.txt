@@ -57,6 +57,8 @@ set(MODEL_SRC
     src/bofh/pathfinder/swaps_idx.cpp
     src/bofh/commons/bofh_log.hpp
     src/bofh/commons/bofh_log.cpp
+    src/bofh/pathfinder/paths.hpp
+    src/bofh/pathfinder/paths.cpp
     )
 include_directories(src)
 # # Build library as a Python module. (Using Boost.Python)
