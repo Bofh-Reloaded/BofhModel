@@ -15,21 +15,16 @@ namespace model {
 namespace bignum {
 
 using namespace boost::multiprecision;
-
-using uint256_t = number<cpp_int_backend<256, 256, unsigned_magnitude, unchecked, void> >;
-using uint320_t = number<cpp_int_backend<320, 320, unsigned_magnitude, unchecked, void> >;
-using uint512_t = number<cpp_int_backend<512, 512, unsigned_magnitude, unchecked, void> >;
-
+using uint256_t = boost::multiprecision::uint256_t;
+using uint320_t = boost::multiprecision::uint512_t;
 }
 
-struct balance_t: bignum::uint256_t
-{
-    using bignum::uint256_t::uint256_t;
-    balance_t(const char *txtrepr);
-    const balance_t &operator=(const char *txtrepr);
-    using bignum::uint256_t::operator=;
-    using bignum::uint256_t::operator|=;
-};
+/**
+ * @brief Balance of any given token (currently unsigned)
+ *
+ * TODO: establish when and where this needs to be signed;
+ */
+typedef bignum::uint256_t balance_t;
 
 
 /**

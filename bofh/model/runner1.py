@@ -233,7 +233,7 @@ class Runner:
                         if not pair:
                             raise IndexError("unknown pool: %s" % pool_addr)
                         # reset pool reserves
-                        pair.reserve0, pair.reserve1 = reserve0, reserve1
+                        pair.setReserves(reserve0, reserve1)
                         if curs:
                             pool = self.graph.lookup_lp(pool_addr)
                             assert pool
@@ -245,6 +245,31 @@ class Runner:
                 if self.swap_log_db:
                     self.swap_log_db.commit()
             executor.shutdown(wait=True)
+
+    def preload_balances_from_db(self):
+        assert self.swap_log_db
+
+        self.log.info("fetching balances previously saved in db...")
+        with self.swap_log_db as curs:
+            nr = curs.execute("SELECT COUNT(1) FROM pool_reserves").get_int()
+            with progress_printer(nr, "fetching pool reserves {percent}% ({count} of {tot}"
+                                       " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
+                                       , on_same_line=True) as print_progress:
+
+                ok = 0
+                disc = 0
+                for poolid, reserve0, reserve1 in curs.execute("SELECT pool, reserve0, reserve1 FROM pool_reserves").get_all():
+                    pool = self.graph.lookup_lp(poolid)
+                    print_progress()
+                    if not pool:
+                        if self.args.verbose:
+                            self.log.debug("pool id not found: %r", poolid)
+                        disc += 1
+                        continue
+                    pool.setReserves(reserve0, reserve1)
+                    ok += 1
+                self.log.info("%r records read, reserves loaded for %r pools, %r discarded"
+                              , print_progress.ctr, ok, disc)
 
     def __serve_eth_consPredictLogs(self, result):
         if result and result.get("logs"):
@@ -383,7 +408,7 @@ def main():
         from IPython import embed
         embed()
     runner.graph.calculate_paths()
-    #runner.preload_balances()
+    runner.preload_balances()
     print("LOAD COMPLETE")
     #runner.poll_prediction()
     while True:

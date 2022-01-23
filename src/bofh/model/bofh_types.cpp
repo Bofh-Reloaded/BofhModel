@@ -31,47 +31,47 @@ static unsigned hex2nib(unsigned c)
 };
 
 
-balance_t::balance_t(const char *s)
-{
-    assert(s != nullptr);
-    *this = s;
-}
+//balance_t::balance_t(const char *s)
+//{
+//    assert(s != nullptr);
+//    *this = s;
+//}
 
-const balance_t &balance_t::operator=(const char *s)
-{
-    assert(s != nullptr);
-    *this = 0u;
-    if (s != nullptr)
-    {
-        bool hex = false;
-        if (*s == '0') ++s;
-        if (*s == 'x' || *s == 'X') { ++s; hex = true; }
-        if (! hex) for (; *s; ++s)
-        {
-            *this *= 10;
-            switch (*s) {
-            case '0': *this += 0; break;
-            case '1': *this += 1; break;
-            case '2': *this += 2; break;
-            case '3': *this += 3; break;
-            case '4': *this += 4; break;
-            case '5': *this += 5; break;
-            case '6': *this += 6; break;
-            case '7': *this += 7; break;
-            case '8': *this += 8; break;
-            case '9': *this += 9; break;
-            default:
-                throw std::bad_cast();
-            }
-        }
-        else {
-            // hex
-            *this *= 16;
-            *this += hex2nib(*s);
-        }
-    }
-    return *this;
-}
+//const balance_t &balance_t::operator=(const char *s)
+//{
+//    assert(s != nullptr);
+//    *this = 0u;
+//    if (s != nullptr)
+//    {
+//        bool hex = false;
+//        if (*s == '0') ++s;
+//        if (*s == 'x' || *s == 'X') { ++s; hex = true; }
+//        if (! hex) for (; *s; ++s)
+//        {
+//            *this *= 10;
+//            switch (*s) {
+//            case '0': *this += 0; break;
+//            case '1': *this += 1; break;
+//            case '2': *this += 2; break;
+//            case '3': *this += 3; break;
+//            case '4': *this += 4; break;
+//            case '5': *this += 5; break;
+//            case '6': *this += 6; break;
+//            case '7': *this += 7; break;
+//            case '8': *this += 8; break;
+//            case '9': *this += 9; break;
+//            default:
+//                throw std::bad_cast();
+//            }
+//        }
+//        else {
+//            // hex
+//            *this *= 16;
+//            *this += hex2nib(*s);
+//        }
+//    }
+//    return *this;
+//}
 
 
 address_t::address_t()

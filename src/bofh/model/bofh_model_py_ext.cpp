@@ -4,6 +4,7 @@
 #include <boost/python/suite/indexing/vector_indexing_suite.hpp>
 #include <boost/python/suite/indexing/map_indexing_suite.hpp>
 #include "longobject.h"
+#include "unicodeobject.h"
 #include "bofh_model.hpp"
 #include "bofh_entity_idx.hpp"
 #include "../pathfinder/finder_3way.hpp"
@@ -39,6 +40,16 @@ static balance_t PyLong_AsBalance(PyObject *vv)
 
     // TODO: avoid using string parsing. Perform more efficient bit banging translation.
 
+    if (PyBytes_Check(vv))
+    {
+        try {
+            return balance_t(PyBytes_AsString(vv));
+        } catch (...) {
+            PyErr_SetString(PyExc_ValueError, "bad uint representation");
+            return -1;
+        }
+    }
+
     PyObject *str_repr = PyObject_Str(vv);
     PyObject *encodedString = PyUnicode_AsEncodedString(str_repr, "UTF-8", "strict");
     balance_t res = -1;
@@ -46,7 +57,7 @@ static balance_t PyLong_AsBalance(PyObject *vv)
     {
         char *repr = PyBytes_AsString(encodedString);
         try {
-            res = repr;
+            res = balance_t(repr);
         }
         catch (...) {
             PyErr_SetString(PyExc_ValueError, "value error");
@@ -82,8 +93,11 @@ struct balance_from_python_long
     // Determine if obj_ptr can be converted
     static void* convertible(PyObject* obj_ptr)
     {
-        if (!PyLong_Check(obj_ptr)) return 0;
-        return obj_ptr;
+        if (PyLong_Check(obj_ptr) ||
+                PyUnicode_Check(obj_ptr) ||
+                PyBytes_Check(obj_ptr)
+                ) return obj_ptr;
+        return 0;
     }
 
     static void construct(
@@ -95,8 +109,7 @@ struct balance_from_python_long
 
         // in-place construct the new QString using the character data
         // extraced from the python object
-        new (storage) balance_t();
-        *storage = PyLong_AsBalance(obj_ptr);
+        new (storage) balance_t(PyLong_AsBalance(obj_ptr));
 
         // Stash the memory chunk pointer for later use by boost.python
         data->convertible = storage;
@@ -168,14 +181,22 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def_readonly("token1"    , &LiquidityPool::token1)
             .def_readwrite("reserve0" , &LiquidityPool::reserve0)
             .def_readwrite("reserve1" , &LiquidityPool::reserve1)
+//            .def("setReserve", &LiquidityPool::setReserve)
+            .def("setReserves", &LiquidityPool::setReserves)
+//            .def("getReserve", &LiquidityPool::getReserve)
+//            .def("simpleSwap", &LiquidityPool::simpleSwap)
+            .def("swapRatio", &LiquidityPool::swapRatio)
+            .def("fees", &LiquidityPool::fees)
             ;
+
     register_ptr_to_python<const LiquidityPool*>();
     register_ptr_to_python<LiquidityPool*>();
 
     class_<Path>("Path", init<Path::value_type, Path::value_type, Path::value_type>())
             .def(init<Path::value_type, Path::value_type, Path::value_type, Path::value_type>())
-            .def("size"   , &Path::size)
-            .def("get"    , &Path::get, dont_manage_returned_pointer());
+            .def("size"                 , &Path::size)
+            .def("estimate_profit_ratio", &Path::estimate_profit_ratio)
+            .def("get"                  , &Path::get, dont_manage_returned_pointer());
     register_ptr_to_python<const Path*>();
     register_ptr_to_python<Path*>();
 
@@ -192,6 +213,7 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(datatag_t        )>(&TheGraph::lookup_lp)   , dont_manage_returned_pointer())
             .def("lookup_swap"    , &TheGraph::lookup_swap)
             .def("calculate_paths", &TheGraph::calculate_paths)
+            .def("debug_evaluate_known_paths", &TheGraph::debug_evaluate_known_paths)
             ;
 
     enum_<log_level>("log_level")

@@ -3,7 +3,7 @@
 #include "../pathfinder/swaps_idx.hpp"
 #include "../pathfinder/finder_3way.hpp"
 #include "../commons/bofh_log.hpp"
-
+#include <sstream>
 #include <exception>
 
 
@@ -18,6 +18,92 @@ struct bad_argument: public std::runtime_error
     using std::runtime_error::runtime_error ;
 };
 #define check_not_null_arg(name) if (name == nullptr) throw bad_argument("can't be null: " #name);
+
+
+
+void LiquidityPool::setReserve(const Token *token, const balance_t &reserve)
+{
+    assert(token == token1 || token == token0);
+    if (token == token0)
+    {
+        reserve0 = reserve;
+        freserve0 = reserve.convert_to<double>();
+    }
+    else if (token == token1)
+    {
+        reserve1 = reserve;
+        freserve1 = reserve.convert_to<double>();
+    }
+    k = reserve0 * reserve1;
+    fk = k.convert_to<double>();
+}
+
+const balance_t &LiquidityPool::getReserve(const Token *token)
+{
+    assert(token == token1 || token == token0);
+    return token == token0 ? reserve0 : reserve1;
+}
+
+void LiquidityPool::setReserves(const balance_t &reserve0_, const balance_t &reserve1_)
+{
+    reserve0 = reserve0_;
+    reserve1 = reserve1_;
+    k = reserve0 * reserve1;
+    fk = k.convert_to<double>();
+    freserve0 = reserve0.convert_to<double>();
+    freserve1 = reserve1.convert_to<double>();
+}
+
+balance_t LiquidityPool::simpleSwap(const Token *tokenIn, const balance_t &amountIn, bool updateReserves)
+{
+    assert(tokenIn == token1 || tokenIn == token0);
+
+    // Let's simulate how an Uniswap's AMM compliant LP would behave. Let's take
+    // for example an hypotetical ETH/LTC pool.
+    //
+    // Such pool has: reserveETH=100 and reserveLTC=200, making LTC more abundant than ETH
+    // The k value of the pool is reserveETH*reserveLTC = 100*200 = 20000
+
+    // A consumer comes and wants to swap balanceIn=45 of LTC into a ETH using this pool.
+    // Respective of the pool's reserves, such operation would entail:
+    // - adding LTC to the pool (in) --> reserveLTC+=amountIn
+    // - subtracting ETH from the pool (out) --> reserveETH-=amountOut
+
+    // As per Uniswap's AMM specifications, here is what is set in stone for the operation:
+    // - by contract constraint, the pool must maintain k=200000 after the swap
+    // - the pool will have reserveLTC+balanceIn = 200+45 = 245 LTC in its reserves
+    // - a number of ETH must be calculated to substract in order to maintain k constant
+    // - since k=reserveETH*reserveLTC=20000 --->
+    //     k=(reserveETH-amountOut)*(reserveLTC+amountIn) --->
+    //     reserveETH-amountOut = k / (reserveLTC+amountIn) --->
+    // (written in a form compatible with uints) -->
+    //     amountOut = reserveETH - (k / (reserveLTC+amountIn))
+
+    balance_t reserveIn  = tokenIn == token0 ? reserve0 : reserve1;
+    balance_t reserveOut = tokenIn == token0 ? reserve1 : reserve0;
+
+    balance_t newReserveIn = reserveIn+amountIn;
+    balance_t amountOutIdeal = reserveOut - k / newReserveIn;
+    balance_t amountOutWithFees(amountOutIdeal.convert_to<double>() * (1.0f-fees()));
+
+    if (updateReserves)
+    {
+        (tokenIn == token0 ? reserve0 : reserve1) = newReserveIn;
+        (tokenIn == token0 ? reserve1 : reserve0) = reserveOut - amountOutWithFees;
+    }
+
+    return amountOutWithFees;
+}
+
+double LiquidityPool::swapRatio(const Token *tokenIn) const noexcept
+{
+    assert(tokenIn == token1 || tokenIn == token0);
+
+    double reserveOut = tokenIn == token0 ? freserve0 : freserve1;
+    double reserveIn  = tokenIn == token0 ? freserve1 : freserve0;
+
+    return (reserveOut - (fk / (reserveIn+1.0))) * (1.0f - fees());
+}
 
 
 TheGraph::TheGraph()
@@ -220,6 +306,36 @@ void TheGraph::calculate_paths()
     log_info("computed: %u paths, %u entries in hot swaps index"
              , paths_index->holder.size()
              , paths_index->paths.size());
+}
+
+void TheGraph::debug_evaluate_known_paths(double convenience_min_threshold
+                                          , double convenience_max_threshold
+                                          , unsigned int limit)
+{
+    unsigned int ctr = 0;
+    for (auto path: paths_index->holder)
+    {
+        auto ratio = path->estimate_profit_ratio();
+        if (convenience_min_threshold >= 0 && ratio < convenience_min_threshold) continue;
+        if (convenience_max_threshold >= 0 && ratio > convenience_max_threshold) continue;
+        if (limit > 0 && ctr > limit) return;
+        std::stringstream ss;
+        ss << "known path ";
+        for (auto i = 0; i < path->size(); ++i)
+        {
+            auto swap = path->get(i);
+            if (i > 0) ss << ",";
+            auto fmt = boost::format(" %2%-%3%@%1%(%4%)")
+                    % swap->pool->exchange->name
+                    % swap->tokenSrc->symbol
+                    % swap->tokenDest->symbol
+                    % swap->pool->tag;
+            ss << fmt;
+        }
+        ss << " yield is " << ratio;
+        log_info("%1%", ss.str().c_str());
+        ctr++;
+    }
 }
 
 

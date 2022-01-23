@@ -190,6 +190,47 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
         token0(token0_),
         token1(token1_)
     { }
+
+    void setReserve(const Token *token, const balance_t &reserve);
+    void setReserves(const balance_t &reserve0, const balance_t &reserve1);
+    const balance_t &getReserve(const Token *token);
+
+    /**
+     * @brief do the math and simulate a swap
+     * @param tokenIn MUST be one of the two affering tokens: either token0 or token1
+     * @param amountIn amount of @p tokenIn balance to be converted to the other token
+     * @param updateReserves if true, makes the swap "happen" by updating the reserves. This updates the LP
+     * @return the balance that the swap yields, for the counterpart of @p tokenIn
+     * @note the implementation is LP dependent. Some pools apply fees. This methods attempts to simulate that.
+     * @warning probably unnecessary code. Keeping this as a conceptual reference of what may happen inside a real LP
+     */
+    balance_t simpleSwap(const Token *tokenIn
+                         , const balance_t &amountIn
+                         , bool updateReserves=false);
+
+    /**
+     * @brief calculate the current swap ratio
+     *
+     * 1 * units of tokenIn would result in <return> amount of tokenOut
+     *
+     * @param tokenIn MUST be one of the two affering tokens: either token0 or token1
+     */
+    double swapRatio(const Token *tokenIn) const noexcept;
+
+    /**
+     * swap fees amount expressed in unitary value (1=100%, 0.03=3%, 0.0003=0.03%)
+     */
+    double fees() const noexcept { return 0.0003; }
+
+private:
+    balance_t k; // cached value of reserve0*reserve1. Updated by setReserve().
+                 // in AAM compliant swaps this must remain constant in time
+
+    // i'm keeping cache values in floating point format.
+    // Don't really known which one is best for us. Keeping both for now.
+    double fk;
+    double freserve0;
+    double freserve1;
 };
 
 
@@ -299,6 +340,13 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
      * and add them to an hot index
      */
     void calculate_paths();
+
+    /**
+     * Evaluate all known paths for convenience (debug usage. Just prints output)
+     */
+    void debug_evaluate_known_paths(double convenience_min_threshold=1.0f
+                                    , double convenience_max_threshold=1.02f
+                                    , unsigned int limit=0);
 
 
 };
