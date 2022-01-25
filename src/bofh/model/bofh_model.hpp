@@ -131,6 +131,15 @@ struct Token: Entity, Ref<Token>
         , symbol(symbol_)
         , decimals(decimals_)
     { }
+
+    double fromWei(const balance_t &b) const
+    {
+        return b.convert_to<double>() / std::pow(10, decimals);
+    }
+
+    balance_t toWei(double amount) const {
+        return balance_t(amount * std::pow(10, decimals));
+    }
 };
 
 
@@ -420,11 +429,22 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
         double       convenience_max_threshold=2.0f;
 
         /**
-         * @brief limit
+         * @brief match limit
          *
          * limit to the amount of matching paths
          * (does not sort for best or worst. It just stops the output
          * after a certain amount of random matches)
+         *
+         * @default 0 (no constraint)
+         */
+        unsigned int match_limit=0;
+
+        /**
+         * @brief routine loop limit
+         *
+         * limit to the amount of examined paths
+         * (does not sort for best or worst. It just stops the output
+         * after a certain amount of examination loops are completed)
          *
          * @default 0 (no constraint)
          */

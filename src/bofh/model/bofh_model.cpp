@@ -1,8 +1,8 @@
 #include "bofh_model.hpp"
+#include "../commons/bofh_log.hpp"
 #include "bofh_entity_idx.hpp"
 #include "../pathfinder/swaps_idx.hpp"
 #include "../pathfinder/finder_3way.hpp"
-#include "../commons/bofh_log.hpp"
 #include <sstream>
 #include <exception>
 
@@ -329,7 +329,7 @@ void TheGraph::calculate_paths()
         paths_index->holder.emplace_back(path);
         // TODO: fix theoretical memleak in case of emplace() exception
 
-        log_debug("found path: [%1%, %2%, %3%, %4%]"
+        log_trace("found path: [%1%, %2%, %3%, %4%]"
                   , (*path)[0]->tokenSrc->tag
                   , (*path)[1]->tokenSrc->tag
                   , (*path)[2]->tokenSrc->tag
@@ -355,14 +355,80 @@ void TheGraph::debug_evaluate_known_paths(const PathEvalutionConstraints &c)
     struct ConstraintViolation {};
     struct LimitReached {};
 
+    log_debug("evaluate_known_paths() seach of swap opportunities starting");
+    log_debug(" \\__ start_token is %1% (%2%)", start_token->symbol, start_token->address);
+    if (c.initial_token_wei_balance > 0)
+    {
+        log_debug(" \\__ initial_token_wei_balance is %1% (%2% Weis)"
+                  , start_token->fromWei(c.initial_token_wei_balance)
+                  , c.initial_token_wei_balance);
+    }
+    else {
+        log_debug(" \\__ no balance provided. Please set "
+                  "initial_token_wei_balance to a meaningful Wei amount of start_token (%1%)"
+                  , start_token->symbol);
+        return;
+    }
+    if (c.max_lp_reserves_stress > 0)
+    {
+        log_debug(" \\__ max_lp_reserves_stress set at %1%", c.max_lp_reserves_stress);
+    }
+    if (c.convenience_min_threshold >= 0)
+    {
+        log_debug(" \\__ ignore yields < convenience_min_threshold (%1%)", c.convenience_min_threshold);
+    }
+    if (c.convenience_max_threshold >= 0)
+    {
+        log_debug(" \\__ ignore yields > convenience_max_threshold (%1%)", c.convenience_max_threshold);
+    }
+    if (c.match_limit)
+    {
+        log_debug(" \\__ match limit is set at %1%", c.match_limit);
+    }
+    if (c.limit)
+    {
+        log_debug(" \\__ loop limit is set at %1%", c.limit);
+    }
+
+
     unsigned int ctr = 0;
+    unsigned int matches = 0;
     for (auto path: paths_index->holder) try
     {
         // @note: loop body is a try block
 
+        ctr++;
+        if (c.limit > 0 && ctr >= c.limit)
+        {
+            log_trace("loop limit reached (%1%)"
+                      , c.limit);
+            throw LimitReached();
+        }
+
+
         balance_t    balance = c.initial_token_wei_balance;
         const Token *token   = start_token;
-        double yieldRatio = 1.0f;
+
+        // local functor: returns a string representation of the steps involved
+        // in the currently examined swap.  Only used for logging.
+        // returns a string
+        auto log_path_nodes = [&](bool include_addesses=false, bool include_tags=true) {
+            std::stringstream ss;
+            for (auto i = 0; i < path->size(); ++i)
+            {
+                auto swap = path->get(i);
+                if (i > 0) ss << ",";
+                ss << " " << swap->pool->exchange->name
+                   << "(" << swap->tokenSrc->symbol
+                   << "-" << swap->tokenDest->symbol;
+                if (include_tags) ss << ", " << swap->pool->tag;
+                if (include_addesses) ss << ", " << swap->pool->address;
+                ss << ")";
+            }
+            return ss.str();
+        };
+
+        log_trace("evaluating path %1%", log_path_nodes(true));
 
         // walk the swap path:
         for (unsigned int i = 0; i < path->size(); ++i)
@@ -377,55 +443,110 @@ void TheGraph::debug_evaluate_known_paths(const PathEvalutionConstraints &c)
             assert(token == swap->tokenSrc);
             assert(token == pool->token0 || token == pool->token1);
 
-            if (balance > 0) // simulate swapping some actual balance
+            log_trace(" \\__ current token is %1%", token->symbol);
+
+            log_trace(" \\__ current balance is %1% (%2% Weis)"
+                      , token->fromWei(balance)
+                      , balance);
+            if (c.max_lp_reserves_stress > 0)
             {
-                if (c.max_lp_reserves_stress > 0)
+                auto stress = pool->estimateSwapStress(token, balance);
+                log_trace(" \\__ swap attempt would induce a %0.03f%% "
+                          "reserves stress on the pool"
+                          , (stress * 100.0));
+                if (stress > c.max_lp_reserves_stress)
                 {
-                    auto stress = pool->estimateSwapStress(token, balance);
-                    if (stress > c.max_lp_reserves_stress) throw ConstraintViolation();
+                    log_trace(" \\__ swap stress would induce excessive "
+                              "reserves unbalance on the pool (path skipped)");
+                    throw ConstraintViolation();
                 }
-                auto ncpool = const_cast<LiquidityPool*>(pool);
-                balance = ncpool->simpleSwap(token, balance);
             }
-
-            yieldRatio *= pool->swapRatio(token);
+            auto ncpool = const_cast<LiquidityPool*>(pool);
+            balance = ncpool->simpleSwap(token, balance);
             token = swap->tokenDest;
-        }
-        if (c.convenience_min_threshold >= 0
-                && yieldRatio < c.convenience_min_threshold) throw ConstraintViolation();
-        if (c.convenience_max_threshold >= 0
-                && yieldRatio > c.convenience_max_threshold) throw ConstraintViolation();
+            assert(token != nullptr);
+            log_trace(" \\__ after the swap, the new balance would be %1% %2% (%3% Weis)"
+                      , token->fromWei(balance)
+                      , token->symbol
+                      , balance);
 
-        auto print_swap_candidate = [&]() {
-            std::stringstream ss;
-            ss << "path ";
-            for (auto i = 0; i < path->size(); ++i)
-            {
-                auto swap = path->get(i);
-                if (i > 0) ss << ",";
-                auto fmt = boost::format(" %2%-%3%@%1%(%4%)")
-                        % swap->pool->exchange->name
-                        % swap->tokenSrc->symbol
-                        % swap->tokenDest->symbol
-                        % swap->pool->tag;
-                ss << fmt;
-            }
-            ss << " yields " << yieldRatio;
-            if (c.initial_token_wei_balance != 0)
-            {
-                ss << " (initial balance of " << c.initial_token_wei_balance
-                   << " " << start_token->symbol << " Wei turned in "
-                   << balance << ")";
-            }
-            log_info("%1%", ss.str().c_str());
-            ctr++;
-        };
+
+        }
+        if (token != start_token)
+        {
+            log_error("BROKEN SWAP: it's not circular. start_token is %1%,"
+                      " terminal token is %2%"
+                      , start_token->symbol
+                      , token->symbol);
+
+            throw ConstraintViolation();
+        }
+
+
+        double yieldRatio = balance.convert_to<double>() - c.initial_token_wei_balance.convert_to<double>();
+        log_trace(" \\__ after the final swap yield would be %0.5f%%"
+                  , yieldRatio*100.0);
+        if (balance > c.initial_token_wei_balance)
+        {
+            auto gap = balance - c.initial_token_wei_balance;
+            log_trace(" \\__ the operation gains %0.5f %s"
+                      , token->fromWei(gap)
+                      , token->symbol.c_str());
+            log_trace("         \\__ or +%1% %2% Weis :)"
+                      , gap
+                      , token->symbol);
+        }
+        else {
+            auto gap = c.initial_token_wei_balance - balance;
+            log_trace(" \\__ the operation loses %0.5f %s"
+                      , token->fromWei(gap)
+                      , token->symbol.c_str());
+            log_trace("         \\__ or -%1% %2% Weis :("
+                      , gap
+                      , token->symbol);
+        }
+        if (c.convenience_min_threshold >= 0 && yieldRatio < c.convenience_min_threshold)
+        {
+            log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
+            throw ConstraintViolation();
+        }
+
+        if (c.convenience_max_threshold >= 0 && yieldRatio > c.convenience_max_threshold)
+        {
+            log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
+            throw ConstraintViolation();
+        }
 
         assert(token == start_token);
 
+        auto print_swap_candidate = [&]() {
+            log_info("mathing path %s would yield %0.5f%%"
+                     , log_path_nodes().c_str()
+                     , yieldRatio*100);
+            if (c.initial_token_wei_balance != 0)
+            {
+                log_info(" \\__ initial balance of %1% %2% (%3% Weis) "
+                         "turned in %4% %5% (%6% Weis)"
+                         , start_token->fromWei(c.initial_token_wei_balance)
+                         , start_token->symbol
+                         , c.initial_token_wei_balance
+                         , token->fromWei(balance)
+                         , token->symbol
+                         , balance
+                         );
+            }
+        };
+
+
+        matches++;
         print_swap_candidate();
 
-        if (c.limit > 0 && ctr >= c.limit) throw LimitReached();
+        if (c.match_limit > 0 && matches >= c.match_limit)
+        {
+            log_trace("match limit reached (%1%)"
+                      , c.match_limit);
+            throw LimitReached();
+        }
 
     }
     catch (ConstraintViolation&) { continue; }

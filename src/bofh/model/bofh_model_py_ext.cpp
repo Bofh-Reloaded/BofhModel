@@ -165,6 +165,8 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def_readonly("symbol"     , &Token::symbol)
             .def_readonly("decimals"   , &Token::decimals)
             .def_readonly("is_stable"  , &Token::is_stable)
+            .def("fromWei"             , &Token::fromWei)
+            .def("toWei"               , &Token::toWei)
             ;
     register_ptr_to_python<const Token*>();
     register_ptr_to_python<Token*>();
@@ -208,6 +210,7 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def_readwrite("convenience_min_threshold"  , &TheGraph::PathEvalutionConstraints::convenience_min_threshold)
             .def_readwrite("convenience_max_threshold"  , &TheGraph::PathEvalutionConstraints::convenience_max_threshold)
             .def_readwrite("limit"                      , &TheGraph::PathEvalutionConstraints::limit)
+            .def_readwrite("match_limit"                , &TheGraph::PathEvalutionConstraints::match_limit)
             ;
     register_ptr_to_python<const TheGraph::PathEvalutionConstraints*>();
     register_ptr_to_python<TheGraph::PathEvalutionConstraints*>();
