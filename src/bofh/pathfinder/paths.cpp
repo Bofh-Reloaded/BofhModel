@@ -8,6 +8,7 @@ namespace pathfinder {
 
 double Path::estimate_profit_ratio() const
 {
+    // DEPRECATED: better implementation in TheGraph::debug_evaluate_known_paths
     double ratio = 1.0f;
     for (unsigned int i = 0; i < size(); ++i)
     {

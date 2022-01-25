@@ -192,6 +192,7 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     register_ptr_to_python<const LiquidityPool*>();
     register_ptr_to_python<LiquidityPool*>();
 
+
     class_<Path>("Path", init<Path::value_type, Path::value_type, Path::value_type>())
             .def(init<Path::value_type, Path::value_type, Path::value_type, Path::value_type>())
             .def("size"                 , &Path::size)
@@ -199,6 +200,18 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def("get"                  , &Path::get, dont_manage_returned_pointer());
     register_ptr_to_python<const Path*>();
     register_ptr_to_python<Path*>();
+
+
+    class_<TheGraph::PathEvalutionConstraints>("PathEvalutionConstraints")
+            .def_readwrite("initial_token_wei_balance"  , &TheGraph::PathEvalutionConstraints::initial_token_wei_balance)
+            .def_readwrite("max_lp_reserves_stress"     , &TheGraph::PathEvalutionConstraints::max_lp_reserves_stress)
+            .def_readwrite("convenience_min_threshold"  , &TheGraph::PathEvalutionConstraints::convenience_min_threshold)
+            .def_readwrite("convenience_max_threshold"  , &TheGraph::PathEvalutionConstraints::convenience_max_threshold)
+            .def_readwrite("limit"                      , &TheGraph::PathEvalutionConstraints::limit)
+            ;
+    register_ptr_to_python<const TheGraph::PathEvalutionConstraints*>();
+    register_ptr_to_python<TheGraph::PathEvalutionConstraints*>();
+
 
     class_<TheGraph, dont_make_copies>("TheGraph")
             .def_readwrite("start_token" , &TheGraph::start_token)
