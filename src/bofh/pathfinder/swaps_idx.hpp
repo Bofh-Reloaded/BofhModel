@@ -64,9 +64,8 @@ struct SwapPathsIndex {
     // versus one or more path objects in which that transition occurs.
     // The weird predicament of TokenTransition::hash is the least ugly way
     // to effectively establish an hashed index. Sorry.
-    std::unordered_multimap<TokenTransition
-                            , const Path*
-                            , TokenTransition::hash> paths;
+    std::unordered_multimap<const model::LiquidityPool *
+                            , const Path*> paths;
 
 
 };

@@ -183,12 +183,15 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def_readonly("token1"    , &LiquidityPool::token1)
             .def_readwrite("reserve0" , &LiquidityPool::reserve0)
             .def_readwrite("reserve1" , &LiquidityPool::reserve1)
-//            .def("setReserve", &LiquidityPool::setReserve)
+            .def("SwapTokensForExactTokens" , &LiquidityPool::SwapTokensForExactTokens)
+            .def("SwapExactTokensForTokens" , &LiquidityPool::SwapExactTokensForTokens)
+            .def("enter_predicted_state", &LiquidityPool::enter_predicted_state)
+            .def("leave_predicted_state", &LiquidityPool::leave_predicted_state)
             .def("setReserves", &LiquidityPool::setReserves)
 //            .def("getReserve", &LiquidityPool::getReserve)
 //            .def("simpleSwap", &LiquidityPool::simpleSwap)
-            .def("swapRatio", &LiquidityPool::swapRatio)
-            .def("fees", &LiquidityPool::fees)
+//            .def("swapRatio", &LiquidityPool::swapRatio)
+//            .def("fees", &LiquidityPool::fees)
             ;
 
     register_ptr_to_python<const LiquidityPool*>();
@@ -198,7 +201,7 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     class_<Path>("Path", init<Path::value_type, Path::value_type, Path::value_type>())
             .def(init<Path::value_type, Path::value_type, Path::value_type, Path::value_type>())
             .def("size"                 , &Path::size)
-            .def("estimate_profit_ratio", &Path::estimate_profit_ratio)
+//            .def("estimate_profit_ratio", &Path::estimate_profit_ratio)
             .def("get"                  , &Path::get, dont_manage_returned_pointer());
     register_ptr_to_python<const Path*>();
     register_ptr_to_python<Path*>();
@@ -230,6 +233,10 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def("lookup_swap"    , &TheGraph::lookup_swap)
             .def("calculate_paths", &TheGraph::calculate_paths)
             .def("debug_evaluate_known_paths", &TheGraph::debug_evaluate_known_paths)
+            .def("add_lp_of_interest", &TheGraph::add_lp_of_interest)
+            .def("clear_lp_of_interest", &TheGraph::clear_lp_of_interest)
+            .def("evaluate_paths_of_interest", &TheGraph::evaluate_paths_of_interest)
+
             ;
 
     enum_<log_level>("log_level")

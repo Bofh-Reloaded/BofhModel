@@ -70,8 +70,6 @@ struct Path: std::array<const OperableSwap *, MAX_PATHS>
      * This saves on memory and time.
      */
     typedef std::function<void(const Path *)> listener_t;
-
-    double estimate_profit_ratio() const;
 };
 
 

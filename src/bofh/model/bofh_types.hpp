@@ -17,6 +17,8 @@ namespace bignum {
 using namespace boost::multiprecision;
 using uint256_t = boost::multiprecision::uint256_t;
 using uint320_t = boost::multiprecision::uint512_t;
+using int256_t = boost::multiprecision::int256_t;
+using int320_t = boost::multiprecision::int512_t;
 }
 
 /**

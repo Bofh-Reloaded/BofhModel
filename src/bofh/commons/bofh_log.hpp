@@ -105,3 +105,46 @@ void log_emit_ll(log_level lvl, const std::string &msg);
 #define log_warning(...) log_emit(log_level_warning, __VA_ARGS__)
 #define log_error(...)   log_emit(log_level_error  , __VA_ARGS__)
 
+
+#ifndef log_print_lvl
+#define log_print_lvl log_level_trace
+#endif
+#define log_print_0()
+#define log_print_1(v1)                             log_emit(log_print_lvl, #v1 " = %1%", (v1))
+#define log_print_2(v1, v2)                         log_emit(log_print_lvl, #v1 " = %1%, "  \
+                                                                            #v2 " = %2%", (v1), (v2))
+#define log_print_3(v1, v2, v3)                     log_emit(log_print_lvl, #v1 " = %1%, "  \
+                                                                            #v2 " = %2%, "  \
+                                                                            #v3 " = %3%", (v1), (v2), (v3))
+#define log_print_4(v1, v2, v3, v4)                 log_emit(log_print_lvl, #v1 " = %1%, "  \
+                                                                            #v2 " = %2%, "  \
+                                                                            #v3 " = %3%, "  \
+                                                                            #v4 " = %4%", (v1), (v2), (v3), (v4))
+#define log_print_5(v1, v2, v3, v4, v5)             log_emit(log_print_lvl, #v1 " = %1%, "  \
+                                                                            #v2 " = %2%, "  \
+                                                                            #v3 " = %3%, "  \
+                                                                            #v4 " = %4%, "  \
+                                                                            #v5 " = %5%", (v1), (v2), (v3), (v4), (v5))
+#define log_print_6(v1, v2, v3, v4, v5, v6)         log_emit(log_print_lvl, #v1 " = %1%, "  \
+                                                                            #v2 " = %2%, "  \
+                                                                            #v3 " = %3%, "  \
+                                                                            #v4 " = %4%, "  \
+                                                                            #v5 " = %5%, "  \
+                                                                            #v6 " = %6%", (v1), (v2), (v3), (v4), (v5), (v6))
+#define log_print_7(v1, v2, v3, v4, v5, v6, v7)     log_emit(log_print_lvl, #v1 " = %1%, "  \
+                                                                            #v2 " = %2%, "  \
+                                                                            #v3 " = %3%, "  \
+                                                                            #v4 " = %4%, "  \
+                                                                            #v5 " = %5%, "  \
+                                                                            #v6 " = %6%, "  \
+                                                                            #v7 " = %7%", (v1), (v2), (v3), (v4), (v5), (v6), (v7))
+#define log_print_8(v1, v2, v3, v4, v5, v6, v7, v8) log_emit(log_print_lvl, #v1 " = %1%, "  \
+                                                                            #v2 " = %2%, "  \
+                                                                            #v3 " = %3%, "  \
+                                                                            #v4 " = %4%, "  \
+                                                                            #v5 " = %5%, "  \
+                                                                            #v6 " = %6%, "  \
+                                                                            #v7 " = %7%, "  \
+                                                                            #v8 " = %8%", (v1), (v2), (v3), (v4), (v5), (v6), (v7), (v8))
+
+#define log_print(...) _VFUNC(log_print_, __NARG__(__VA_ARGS__)) (__VA_ARGS__)

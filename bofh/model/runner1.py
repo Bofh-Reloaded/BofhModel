@@ -5,7 +5,8 @@ from time import sleep
 from jsonrpc_websocket import Server
 
 from bofh.utils.misc import progress_printer, LogAdapter,Timer
-from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, parse_data_parameters
+from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, log_topic_id, parse_data_parameters
+
 
 __doc__="""Start model runner.
 
@@ -23,19 +24,21 @@ Options:
   --swap_log_db_dsn=<connection_str>    Prediction log swaps DB dsn connection string [default: none]
   --start_token_address=<address>       on-chain address of start token [default: WBNB]
   --cli                                 preload status and stop at CLI (for debugging)
-""" % Web3Connector.DEFAULT_URI_WSRPC
+""" % (Web3Connector.DEFAULT_URI_WSRPC, )
 
 from dataclasses import dataclass
 from logging import getLogger, basicConfig
 
 from bofh.model.database import ModelDB, StatusScopedCursor, SwapLogScopedCursor
-from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level
+from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level, PathEvalutionConstraints
 
 
-PREDICTION_LOG_TOPIC0 = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"  # Keccak256("Swap(address,uint256,uint256,uint256,uint256,address)")
+PREDICTION_LOG_TOPIC0_SWAP = log_topic_id("Swap(address,uint256,uint256,uint256,uint256,address)")
+PREDICTION_LOG_TOPIC0_SYNC = log_topic_id("Sync(uint112,uint112)")
 WBNB_address = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c" # id=2
 TETHER_address = "0x55d398326f99059ff775485246999027b3197955" # id=4
 START_TOKEN = WBNB_address
+
 
 @dataclass
 class Args:
@@ -367,20 +370,36 @@ class Runner:
 
     async def prediction_polling_task(self):
         # await self.polling_started.wait()
-        server = Server(self.args.web3_rpc_url)
+        constraint = PathEvalutionConstraints()
+        constraint.initial_token_wei_balance = self.graph.start_token.toWei(1)
+        log_set_level(log_level.info)
         self.latestBlockNumber = 0
+
+        server = Server(self.args.web3_rpc_url)
         try:
             await server.ws_connect()
             while True:  # self.polling_started.is_set():
                 try:
-                    result = await server.eth_consPredictLogs(0, 0, PREDICTION_LOG_TOPIC0)
+                    result = await server.eth_consPredictLogs(0, 0, PREDICTION_LOG_TOPIC0_SYNC, PREDICTION_LOG_TOPIC0_SWAP)
+                    blockNumber = result["blockNumber"]
+                    if blockNumber <= self.latestBlockNumber:
+                        continue
+                    self.latestBlockNumber = blockNumber
                 except:
                     self.log.exception("Error during eth_consPredictLogs() RPC execution")
                     continue
                 try:
-                    self.__serve_eth_consPredictLogs(result)
-                except:
-                    self.log.exception("Error during parsing of eth_consPredictLogs() results")
+                    try:
+                        self.digest_prediction_payload(result)
+                    except:
+                        self.log.exception("Error during parsing of eth_consPredictLogs() results")
+                    try:
+                        self.graph.evaluate_paths_of_interest(constraint)
+                    except:
+                        self.log.exception("Error during execution of TheGraph::evaluate_paths_of_interest()")
+                finally:
+                    # forget about predicted states. go back to normal
+                    self.graph.clear_lp_of_interest()
 
                 sleep(self.args.pred_polling_interval * 0.001)
         except:
@@ -390,6 +409,60 @@ class Runner:
 
     def poll_prediction(self):
         self.ioloop.run_until_complete(self.prediction_polling_task())
+
+    def digest_prediction_payload(self, payload):
+        assert isinstance(payload, dict)
+        logs = payload["logs"]
+        if not logs:
+            return
+        for log in logs:
+            address = log["address"]
+            if not address:
+                continue
+            pool = self.graph.lookup_lp(address)
+            if not pool:
+                if self.args.verbose:
+                    self.log.debug("unknown pool of interest: %s", address)
+                continue
+            topic0 = log["topic0"]
+            if topic0 == PREDICTION_LOG_TOPIC0_SYNC:
+                data = log["data"]
+                try:
+                    r0, r1 = parse_data_parameters(data)
+                except:
+                    self.log.exception("unable to decode sync log data")
+                    continue
+                if self.args.verbose:
+                    self.log.info("use Sync event to update reserves of pool %r: %s(%s-%s), reserve=%r, reserve1=%r"
+                                   , address
+                                   , pool.exchange.name
+                                   , pool.token0.symbol
+                                   , pool.token1.symbol
+                                   , r0
+                                   , r1)
+                pool.setReserves(r0, r1)
+                continue
+            if topic0 == PREDICTION_LOG_TOPIC0_SWAP:
+                data = log["data"]
+                try:
+                    amount0In, amount1In, amount0Out, amount1Out = parse_data_parameters(data)
+                except:
+                    self.log.exception("unable to decode swap log data")
+                    continue
+                if self.args.verbose:
+                    self.log.info("pool %r: %s(%s-%s) entering predicted state "
+                                   "(amount0In=%r, amount1In=%r, amount0Out=%r, amount1Out=%r)"
+                                   , address
+                                   , pool.exchange.name
+                                   , pool.token0.symbol
+                                   , pool.token1.symbol
+                                   , amount0In, amount1In, amount0Out, amount1Out
+                                   )
+                pool.enter_predicted_state(amount0In, amount1In, amount0Out, amount1Out)
+                self.graph.add_lp_of_interest(pool)
+                continue
+
+
 
 
 def main():
@@ -410,7 +483,7 @@ def main():
     runner.graph.calculate_paths()
     runner.preload_balances()
     print("LOAD COMPLETE")
-    #runner.poll_prediction()
+    runner.poll_prediction()
     while True:
         sleep(10)
 

@@ -20,6 +20,14 @@ struct bad_argument: public std::runtime_error
 #define check_not_null_arg(name) if (name == nullptr) throw bad_argument("can't be null: " #name);
 
 
+Exchange::Exchange(datatag_t tag_
+                   , const address_t &address_
+                   , const string &name_)
+    : Entity(TYPE_EXCHANGE, tag_, address_)
+    , name(name_)
+    , estimator(new amm::EstimatorWithProportionalFees)
+{}
+
 
 void LiquidityPool::setReserve(const Token *token, const balance_t &reserve)
 {
@@ -27,18 +35,14 @@ void LiquidityPool::setReserve(const Token *token, const balance_t &reserve)
     if (token == token0)
     {
         reserve0 = reserve;
-        freserve0 = reserve.convert_to<double>();
     }
     else if (token == token1)
     {
         reserve1 = reserve;
-        freserve1 = reserve.convert_to<double>();
     }
-    k = reserve0 * reserve1;
-    fk = k.convert_to<double>();
 }
 
-const balance_t &LiquidityPool::getReserve(const Token *token)
+const balance_t &LiquidityPool::getReserve(const Token *token) const noexcept
 {
     assert(token == token1 || token == token0);
     return token == token0 ? reserve0 : reserve1;
@@ -48,104 +52,150 @@ void LiquidityPool::setReserves(const balance_t &reserve0_, const balance_t &res
 {
     reserve0 = reserve0_;
     reserve1 = reserve1_;
-    k = reserve0 * reserve1;
-    fk = k.convert_to<double>();
-    freserve0 = reserve0.convert_to<double>();
-    freserve1 = reserve1.convert_to<double>();
 }
 
-balance_t LiquidityPool::simpleSwap(const Token *tokenIn, const balance_t &amountIn, bool updateReserves)
+balance_t LiquidityPool::SwapTokensForExactTokens(const Token *wantedToken, const balance_t &wantedAmount) const
 {
-    assert(tokenIn == token1 || tokenIn == token0);
+    assert(exchange != nullptr);
+    assert(exchange->estimator != nullptr);
+    return exchange->estimator->SwapTokensForExactTokens(this, wantedToken, wantedAmount);
+}
 
-    // Let's simulate how an Uniswap's AMM compliant LP would behave. Let's take
-    // for example an hypotetical ETH/LTC pool.
-    //
-    // Such pool has: reserveETH=100 and reserveLTC=200, making LTC more abundant than ETH
-    // The k value of the pool is reserveETH*reserveLTC = 100*200 = 20000
+balance_t LiquidityPool::SwapExactTokensForTokens(const Token *tokenSent, const balance_t &sentAmount) const
+{
+    assert(exchange != nullptr);
+    assert(exchange->estimator != nullptr);
+    return exchange->estimator->SwapExactTokensForTokens(this, tokenSent, sentAmount);
+}
 
-    // A consumer comes and wants to swap balanceIn=45 of LTC into a ETH using this pool.
-    // Respective of the pool's reserves, such operation would entail:
-    // - adding LTC to the pool (in) --> reserveLTC+=amountIn
-    // - subtracting ETH from the pool (out) --> reserveETH-=amountOut
-
-    // As per Uniswap's AMM specifications, here is what is set in stone for the operation:
-    // - by contract constraint, the pool must maintain k=200000 after the swap
-    // - the pool will have reserveLTC+balanceIn = 200+45 = 245 LTC in its reserves
-    // - a number of ETH must be calculated to substract in order to maintain k constant
-    // - since k=reserveETH*reserveLTC=20000 --->
-    //     k=(reserveETH-amountOut)*(reserveLTC+amountIn) --->
-    //     reserveETH-amountOut = k / (reserveLTC+amountIn) --->
-    // (written in a form compatible with uints) -->
-    //     amountOut = reserveETH - (k / (reserveLTC+amountIn))
-
-    balance_t reserveIn  = tokenIn == token0 ? reserve0 : reserve1;
-    balance_t reserveOut = tokenIn == token0 ? reserve1 : reserve0;
-
-    balance_t newReserveIn = reserveIn+amountIn;
-    balance_t amountOutIdeal = reserveOut - k / newReserveIn;
-    balance_t amountOutWithFees(amountOutIdeal.convert_to<double>() * (1.0f-fees()));
-
-    if (updateReserves)
+void LiquidityPool::enter_predicted_state(const balance_t &amount0In
+                                          , const balance_t &amount1In
+                                          , const balance_t &amount0Out
+                                          , const balance_t &amount1Out)
+{
+    if (snapshot == nullptr)
     {
-        (tokenIn == token0 ? reserve0 : reserve1) = newReserveIn;
-        (tokenIn == token0 ? reserve1 : reserve0) = reserveOut - amountOutWithFees;
-        k = reserve0 * reserve1;
-        fk = k.convert_to<double>();
-        freserve0 = reserve0.convert_to<double>();
-        freserve1 = reserve1.convert_to<double>();
+        snapshot = std::make_unique<LPReservesSnapshot>(LPReservesSnapshot{reserve0, reserve1});
     }
+    snapshot->ctr ++;
 
-    return amountOutWithFees;
+    reserve0 += amount0In;
+    if (amount0Out > reserve0) reserve0 = 0;
+    else reserve0 -= amount0Out;
+
+    reserve1 += amount1In;
+    if (amount1Out > reserve1) reserve1 = 0;
+    else reserve1 -= amount1Out;
 }
 
-double LiquidityPool::simpleSwapF(const Token *tokenIn, double amountIn) const noexcept
+void LiquidityPool::leave_predicted_state(bool force)
 {
-    assert(tokenIn == token1 || tokenIn == token0);
-
-    double reserveOut = tokenIn == token0 ? freserve0 : freserve1;
-    double reserveIn  = tokenIn == token0 ? freserve1 : freserve0;
-
-    return (reserveOut - (fk / (reserveIn+amountIn))) * (1.0f - fees());
+    if (snapshot != nullptr)
+    {
+        snapshot->ctr --;
+        if (snapshot->ctr <= 0 || force)
+        {
+            reserve0 = snapshot->reserve0;
+            reserve1 = snapshot->reserve1;
+            snapshot.reset();
+            assert(snapshot == nullptr);
+        }
+    }
 }
 
-double LiquidityPool::swapRatio(const Token *tokenIn) const noexcept
-{
-    return simpleSwapF(tokenIn, 1.0f);
-}
 
-double LiquidityPool::estimateSwapStress(const Token *tokenIn, const balance_t &amountInB) const
-{
-    assert(tokenIn == token1 || tokenIn == token0);
+//balance_t LiquidityPool::simpleSwap(const Token *tokenIn, const balance_t &amountIn, bool updateReserves)
+//{
+//    assert(tokenIn == token1 || tokenIn == token0);
 
-    double reserveOut = tokenIn == token0 ? freserve0 : freserve1;
-    double reserveIn  = tokenIn == token0 ? freserve1 : freserve0;
-    double amountIn = amountInB.convert_to<double>();
+//    // Let's simulate how an Uniswap's AMM compliant LP would behave. Let's take
+//    // for example an hypotetical ETH/LTC pool.
+//    //
+//    // Such pool has: reserveETH=100 and reserveLTC=200, making LTC more abundant than ETH
+//    // The k value of the pool is reserveETH*reserveLTC = 100*200 = 20000
 
-    // assumption:
-    //     fk = (reserveIn+amountIn) * (reserveOut-amountOut);
-    //
-    // need to compute:
-    //     inbalanceOut = amountOut / reserveOut (amountOut not known yet)
-    //
-    // rewriting the equation as:
-    //     inbalanceOut =
-    //         amountOut / reserveOut =
-    //             (reserveOut - (k / (reserveIn+amountIn))) / reserveOut
-    //
-    // perk:
-    //     amountOut isn't explicitly needed anymore
+//    // A consumer comes and wants to swap balanceIn=45 of LTC into a ETH using this pool.
+//    // Respective of the pool's reserves, such operation would entail:
+//    // - adding LTC to the pool (in) --> reserveLTC+=amountIn
+//    // - subtracting ETH from the pool (out) --> reserveETH-=amountOut
 
-    double inbalanceIn = amountIn/reserveIn;
-    double inbalanceOut = (reserveOut - (fk / (reserveIn+amountIn))) / reserveOut;
+//    // As per Uniswap's AMM specifications, here is what is set in stone for the operation:
+//    // - by contract constraint, the pool must maintain k=200000 after the swap
+//    // - the pool will have reserveLTC+balanceIn = 200+45 = 245 LTC in its reserves
+//    // - a number of ETH must be calculated to substract in order to maintain k constant
+//    // - since k=reserveETH*reserveLTC=20000 --->
+//    //     k=(reserveETH-amountOut)*(reserveLTC+amountIn) --->
+//    //     reserveETH-amountOut = k / (reserveLTC+amountIn) --->
+//    // (written in a form compatible with uints) -->
+//    //     amountOut = reserveETH - (k / (reserveLTC+amountIn))
 
-    // in LPs that are reasonably financed, inbalanceIn should be
-    // roughly equal to inbalanceOut, but they tend to deviate sharply as
-    // LP reserves run low. As a security measure, we calculate both and return
-    // the worst one.
+//    balance_t reserveIn  = tokenIn == token0 ? reserve0 : reserve1;
+//    balance_t reserveOut = tokenIn == token0 ? reserve1 : reserve0;
 
-    return std::max(inbalanceIn, inbalanceOut);
-}
+//    balance_t newReserveIn = reserveIn+amountIn;
+//    balance_t amountOutIdeal = reserveOut - k / newReserveIn;
+//    balance_t amountOutWithFees(amountOutIdeal.convert_to<double>() * (1.0f-fees()));
+
+//    if (updateReserves)
+//    {
+//        (tokenIn == token0 ? reserve0 : reserve1) = newReserveIn;
+//        (tokenIn == token0 ? reserve1 : reserve0) = reserveOut - amountOutWithFees;
+//        k = reserve0 * reserve1;
+//        fk = k.convert_to<double>();
+//        freserve0 = reserve0.convert_to<double>();
+//        freserve1 = reserve1.convert_to<double>();
+//    }
+
+//    return amountOutWithFees;
+//}
+
+//double LiquidityPool::simpleSwapF(const Token *tokenIn, double amountIn) const noexcept
+//{
+//    assert(tokenIn == token1 || tokenIn == token0);
+
+//    double reserveOut = tokenIn == token0 ? freserve0 : freserve1;
+//    double reserveIn  = tokenIn == token0 ? freserve1 : freserve0;
+
+//    return (reserveOut - (fk / (reserveIn+amountIn))) * (1.0f - fees());
+//}
+
+//double LiquidityPool::swapRatio(const Token *tokenIn) const noexcept
+//{
+//    return simpleSwapF(tokenIn, 1.0f);
+//}
+
+//double LiquidityPool::estimateSwapStress(const Token *tokenIn, const balance_t &amountInB) const
+//{
+//    assert(tokenIn == token1 || tokenIn == token0);
+
+//    double reserveOut = tokenIn == token0 ? freserve0 : freserve1;
+//    double reserveIn  = tokenIn == token0 ? freserve1 : freserve0;
+//    double amountIn = amountInB.convert_to<double>();
+
+//    // assumption:
+//    //     fk = (reserveIn+amountIn) * (reserveOut-amountOut);
+//    //
+//    // need to compute:
+//    //     inbalanceOut = amountOut / reserveOut (amountOut not known yet)
+//    //
+//    // rewriting the equation as:
+//    //     inbalanceOut =
+//    //         amountOut / reserveOut =
+//    //             (reserveOut - (k / (reserveIn+amountIn))) / reserveOut
+//    //
+//    // perk:
+//    //     amountOut isn't explicitly needed anymore
+
+//    double inbalanceIn = amountIn/reserveIn;
+//    double inbalanceOut = (reserveOut - (fk / (reserveIn+amountIn))) / reserveOut;
+
+//    // in LPs that are reasonably financed, inbalanceIn should be
+//    // roughly equal to inbalanceOut, but they tend to deviate sharply as
+//    // LP reserves run low. As a security measure, we calculate both and return
+//    // the worst one.
+
+//    return std::max(inbalanceIn, inbalanceOut);
+//}
 
 
 TheGraph::TheGraph()
@@ -337,10 +387,7 @@ void TheGraph::calculate_paths()
 
         for (unsigned int i = 0; i < path->size(); ++i)
         {
-            auto key = TokenTransition(
-                          (*path)[i]->tokenSrc
-                        , (*path)[i]->tokenDest);
-            paths_index->paths.emplace(key, path);
+            paths_index->paths.emplace((*path)[i]->pool, path);
         }
     };
 
@@ -350,23 +397,25 @@ void TheGraph::calculate_paths()
              , paths_index->paths.size());
 }
 
-void TheGraph::debug_evaluate_known_paths(const PathEvalutionConstraints &c)
+static void check_constrants_consistency(TheGraph *g, const TheGraph::PathEvalutionConstraints &c)
 {
-    struct ConstraintViolation {};
-    struct LimitReached {};
-
+    assert(g != nullptr);
+    if (g->start_token == nullptr)
+    {
+        throw std::runtime_error("TheGraph::start_token not set!!");
+    }
     log_debug("evaluate_known_paths() seach of swap opportunities starting");
-    log_debug(" \\__ start_token is %1% (%2%)", start_token->symbol, start_token->address);
+    log_debug(" \\__ start_token is %1% (%2%)", g->start_token->symbol, g->start_token->address);
     if (c.initial_token_wei_balance > 0)
     {
         log_debug(" \\__ initial_token_wei_balance is %1% (%2% Weis)"
-                  , start_token->fromWei(c.initial_token_wei_balance)
+                  , g->start_token->fromWei(c.initial_token_wei_balance)
                   , c.initial_token_wei_balance);
     }
     else {
         log_debug(" \\__ no balance provided. Please set "
                   "initial_token_wei_balance to a meaningful Wei amount of start_token (%1%)"
-                  , start_token->symbol);
+                  , g->start_token->symbol);
         return;
     }
     if (c.max_lp_reserves_stress > 0)
@@ -389,7 +438,168 @@ void TheGraph::debug_evaluate_known_paths(const PathEvalutionConstraints &c)
     {
         log_debug(" \\__ loop limit is set at %1%", c.limit);
     }
+}
 
+
+struct evaluate_path_result {
+    double yieldRatio;
+    const Token *token;
+    balance_t balance;
+};
+
+
+// local functor: returns a string representation of the steps involved
+// in the currently examined swap.  Only used for logging.
+static std::string log_path_nodes(const pathfinder::Path *path, bool include_addesses=false, bool include_tags=true)
+{
+    std::stringstream ss;
+    for (auto i = 0; i < path->size(); ++i)
+    {
+        auto swap = path->get(i);
+        if (i > 0) ss << ", ";
+        ss << swap->pool->exchange->name
+           << "(" << swap->tokenSrc->symbol
+           << "-" << swap->tokenDest->symbol;
+        if (include_tags) ss << ", " << swap->pool->tag;
+        if (include_addesses) ss << ", " << swap->pool->address;
+        ss << ")";
+    }
+    return ss.str();
+};
+
+
+static void print_swap_candidate(TheGraph *g
+                                 , const TheGraph::PathEvalutionConstraints &c
+                                 , const pathfinder::Path *path
+                                 , const evaluate_path_result &r)
+{
+    log_info("candidate path %s would yield %0.5f%%"
+             , log_path_nodes(path).c_str()
+             , (r.yieldRatio-1)*100);
+    log_info(" \\__ initial balance of %1% %2% (%3% Weis) "
+             "turned in %4% %5% (%6% Weis)"
+             , g->start_token->fromWei(c.initial_token_wei_balance)
+             , g->start_token->symbol
+             , c.initial_token_wei_balance
+             , r.token->fromWei(r.balance)
+             , r.token->symbol
+             , r.balance
+             );
+};
+
+
+
+
+struct ConstraintViolation {};
+
+
+static evaluate_path_result evaluate_path(TheGraph *g
+                            , const TheGraph::PathEvalutionConstraints &c
+                            , const pathfinder::Path *path)
+{
+    balance_t    balance = c.initial_token_wei_balance;
+    const Token *token   = g->start_token;
+
+    log_trace("evaluating path %1%", log_path_nodes(path, true));
+
+    // walk the swap path:
+    for (unsigned int i = 0; i < path->size(); ++i)
+    {
+        // excuse the following assert soup. They are only intended to
+        // early catch of inconsistencies in debug builds. None is functional.
+        auto swap = path->get(i);
+        assert(swap != nullptr);
+        auto pool = swap->pool;
+        assert(pool != nullptr);
+
+        assert(token == swap->tokenSrc);
+        assert(token == pool->token0 || token == pool->token1);
+
+        log_trace(" \\__ current token is %1%", token->symbol);
+
+        log_trace(" \\__ current balance is %1% (%2% Weis)"
+                  , token->fromWei(balance)
+                  , balance);
+        try {
+            balance = pool->SwapExactTokensForTokens(token, balance);
+        } catch (...)
+        {
+            log_trace(" \\__ ERROR: unable to actually run the calculation. bailing out of this one");
+            // TODO: mark the pool bad
+            throw ConstraintViolation();
+        };
+
+        token = swap->tokenDest;
+        assert(token != nullptr);
+        log_trace(" \\__ after the swap, the new balance would be %1% %2% (%3% Weis)"
+                  , token->fromWei(balance)
+                  , token->symbol
+                  , balance);
+
+
+    }
+    if (token != g->start_token)
+    {
+        log_error("BROKEN SWAP: it's not circular. start_token is %1%,"
+                  " terminal token is %2%"
+                  , g->start_token->symbol
+                  , token->symbol);
+
+        throw ConstraintViolation();
+    }
+
+
+    double yieldRatio = balance.convert_to<double>() / c.initial_token_wei_balance.convert_to<double>();
+    if (yieldRatio > 1.0f)
+    {
+        log_trace(" \\__ after the final swap, the realized gain would be %0.5f%%"
+                  , (yieldRatio-1)*100.0);
+    }
+    else {
+        log_trace(" \\__ after the final swap, the realized loss would be %0.5f%%"
+                  , (1-yieldRatio)*100.0);
+    }
+    if (balance > c.initial_token_wei_balance)
+    {
+        auto gap = balance - c.initial_token_wei_balance;
+        log_trace(" \\__ the operation gains %0.5f %s"
+                  , token->fromWei(gap)
+                  , token->symbol.c_str());
+        log_trace("         \\__ or +%1% %2% Weis :)"
+                  , gap
+                  , token->symbol);
+    }
+    else {
+        auto gap = c.initial_token_wei_balance - balance;
+        log_trace(" \\__ the operation loses %0.5f %s"
+                  , token->fromWei(gap)
+                  , token->symbol.c_str());
+        log_trace("         \\__ or -%1% %2% Weis :("
+                  , gap
+                  , token->symbol);
+    }
+    if (c.convenience_min_threshold >= 0 && yieldRatio < c.convenience_min_threshold)
+    {
+        log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
+        throw ConstraintViolation();
+    }
+
+    if (c.convenience_max_threshold >= 0 && yieldRatio > c.convenience_max_threshold)
+    {
+        log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
+        throw ConstraintViolation();
+    }
+
+    assert(token == g->start_token);
+
+    return evaluate_path_result{yieldRatio, token, balance};
+}
+
+void TheGraph::debug_evaluate_known_paths(const PathEvalutionConstraints &c)
+{
+    struct LimitReached {};
+
+    check_constrants_consistency(this, c);
 
     unsigned int ctr = 0;
     unsigned int matches = 0;
@@ -397,149 +607,11 @@ void TheGraph::debug_evaluate_known_paths(const PathEvalutionConstraints &c)
     {
         // @note: loop body is a try block
 
-        ctr++;
-        if (c.limit > 0 && ctr >= c.limit)
-        {
-            log_trace("loop limit reached (%1%)"
-                      , c.limit);
-            throw LimitReached();
-        }
-
-
-        balance_t    balance = c.initial_token_wei_balance;
-        const Token *token   = start_token;
-
-        // local functor: returns a string representation of the steps involved
-        // in the currently examined swap.  Only used for logging.
-        // returns a string
-        auto log_path_nodes = [&](bool include_addesses=false, bool include_tags=true) {
-            std::stringstream ss;
-            for (auto i = 0; i < path->size(); ++i)
-            {
-                auto swap = path->get(i);
-                if (i > 0) ss << ",";
-                ss << " " << swap->pool->exchange->name
-                   << "(" << swap->tokenSrc->symbol
-                   << "-" << swap->tokenDest->symbol;
-                if (include_tags) ss << ", " << swap->pool->tag;
-                if (include_addesses) ss << ", " << swap->pool->address;
-                ss << ")";
-            }
-            return ss.str();
-        };
-
-        log_trace("evaluating path %1%", log_path_nodes(true));
-
-        // walk the swap path:
-        for (unsigned int i = 0; i < path->size(); ++i)
-        {
-            // excuse the following assert soup. They are only intended to
-            // early catch of inconsistencies in debug builds. None is functional.
-            auto swap = path->get(i);
-            assert(swap != nullptr);
-            auto pool = swap->pool;
-            assert(pool != nullptr);
-
-            assert(token == swap->tokenSrc);
-            assert(token == pool->token0 || token == pool->token1);
-
-            log_trace(" \\__ current token is %1%", token->symbol);
-
-            log_trace(" \\__ current balance is %1% (%2% Weis)"
-                      , token->fromWei(balance)
-                      , balance);
-            if (c.max_lp_reserves_stress > 0)
-            {
-                auto stress = pool->estimateSwapStress(token, balance);
-                log_trace(" \\__ swap attempt would induce a %0.03f%% "
-                          "reserves stress on the pool"
-                          , (stress * 100.0));
-                if (stress > c.max_lp_reserves_stress)
-                {
-                    log_trace(" \\__ swap stress would induce excessive "
-                              "reserves unbalance on the pool (path skipped)");
-                    throw ConstraintViolation();
-                }
-            }
-            auto ncpool = const_cast<LiquidityPool*>(pool);
-            balance = ncpool->simpleSwap(token, balance);
-            token = swap->tokenDest;
-            assert(token != nullptr);
-            log_trace(" \\__ after the swap, the new balance would be %1% %2% (%3% Weis)"
-                      , token->fromWei(balance)
-                      , token->symbol
-                      , balance);
-
-
-        }
-        if (token != start_token)
-        {
-            log_error("BROKEN SWAP: it's not circular. start_token is %1%,"
-                      " terminal token is %2%"
-                      , start_token->symbol
-                      , token->symbol);
-
-            throw ConstraintViolation();
-        }
-
-
-        double yieldRatio = balance.convert_to<double>() - c.initial_token_wei_balance.convert_to<double>();
-        log_trace(" \\__ after the final swap yield would be %0.5f%%"
-                  , yieldRatio*100.0);
-        if (balance > c.initial_token_wei_balance)
-        {
-            auto gap = balance - c.initial_token_wei_balance;
-            log_trace(" \\__ the operation gains %0.5f %s"
-                      , token->fromWei(gap)
-                      , token->symbol.c_str());
-            log_trace("         \\__ or +%1% %2% Weis :)"
-                      , gap
-                      , token->symbol);
-        }
-        else {
-            auto gap = c.initial_token_wei_balance - balance;
-            log_trace(" \\__ the operation loses %0.5f %s"
-                      , token->fromWei(gap)
-                      , token->symbol.c_str());
-            log_trace("         \\__ or -%1% %2% Weis :("
-                      , gap
-                      , token->symbol);
-        }
-        if (c.convenience_min_threshold >= 0 && yieldRatio < c.convenience_min_threshold)
-        {
-            log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
-            throw ConstraintViolation();
-        }
-
-        if (c.convenience_max_threshold >= 0 && yieldRatio > c.convenience_max_threshold)
-        {
-            log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
-            throw ConstraintViolation();
-        }
-
-        assert(token == start_token);
-
-        auto print_swap_candidate = [&]() {
-            log_info("mathing path %s would yield %0.5f%%"
-                     , log_path_nodes().c_str()
-                     , yieldRatio*100);
-            if (c.initial_token_wei_balance != 0)
-            {
-                log_info(" \\__ initial balance of %1% %2% (%3% Weis) "
-                         "turned in %4% %5% (%6% Weis)"
-                         , start_token->fromWei(c.initial_token_wei_balance)
-                         , start_token->symbol
-                         , c.initial_token_wei_balance
-                         , token->fromWei(balance)
-                         , token->symbol
-                         , balance
-                         );
-            }
-        };
-
+        auto r = evaluate_path(this, c, path);
+        assert(r.token != nullptr);
 
         matches++;
-        print_swap_candidate();
+        print_swap_candidate(this, c, path, r);
 
         if (c.match_limit > 0 && matches >= c.match_limit)
         {
@@ -554,6 +626,41 @@ void TheGraph::debug_evaluate_known_paths(const PathEvalutionConstraints &c)
 
 }
 
+void TheGraph::add_lp_of_interest(const LiquidityPool *pool)
+{
+    lp_of_interest.emplace(const_cast<LiquidityPool*>(pool));
+}
+
+void TheGraph::clear_lp_of_interest()
+{
+    for (auto pool: lp_of_interest)
+    {
+        pool->leave_predicted_state(true);
+    }
+    lp_of_interest.clear();
+}
+
+void TheGraph::evaluate_paths_of_interest(const PathEvalutionConstraints &c)
+{
+    check_constrants_consistency(this, c);
+
+    for (auto pool: lp_of_interest)
+    {
+        auto r = paths_index->paths.equal_range(pool);
+        for (auto i = r.first; i != r.second; i++)
+        {
+            try {
+            auto r = evaluate_path(this, c, i->second);
+            assert(r.token != nullptr);
+            print_swap_candidate(this, c, i->second, r);
+
+            } catch (ConstraintViolation&) { continue; }
+
+        }
+        pool->leave_predicted_state(true);
+    }
+
+}
 
 
 } // namespace model

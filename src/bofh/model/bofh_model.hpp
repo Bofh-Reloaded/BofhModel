@@ -17,7 +17,9 @@
 #include "bofh_model_fwd.hpp"
 #include "bofh_types.hpp"
 #include "bofh_entity_idx_fwd.hpp"
+#include "bofh_amm_estimation.hpp"
 #include <boost/noncopyable.hpp>
+#include <set>
 #include <memory>
 #include "../pathfinder/swaps_idx_fwd.hpp"
 
@@ -151,13 +153,13 @@ struct Token: Entity, Ref<Token>
  */
 struct Exchange: Entity, Ref<Exchange> {
     const string name;
+    std::unique_ptr<amm::Estimator> estimator;
+
     Exchange(datatag_t tag_
              , const address_t &address_
-             , const string &name_)
-        : Entity(TYPE_EXCHANGE, tag_, address_)
-        , name(name_)
-        {}
+             , const string &name_);
     Exchange(const Exchange &) = delete;
+
 };
 
 
@@ -181,6 +183,17 @@ struct Exchange: Entity, Ref<Exchange> {
  */
 struct LiquidityPool: Entity, Ref<LiquidityPool>
 {
+    struct busy_error: std::runtime_error
+    {
+        using std::runtime_error::runtime_error;
+    };
+
+    struct LPReservesSnapshot {
+        const balance_t reserve0;
+        const balance_t reserve1;
+        int ctr = 0;
+    };
+
     typedef double rate_t;
 
     const Exchange* exchange;
@@ -188,6 +201,7 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
     Token* token1;
     balance_t reserve0;
     balance_t reserve1;
+    std::unique_ptr<LPReservesSnapshot> snapshot;
 
     LiquidityPool(datatag_t tag_
                   , const address_t &address_
@@ -202,59 +216,25 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
 
     void setReserve(const Token *token, const balance_t &reserve);
     void setReserves(const balance_t &reserve0, const balance_t &reserve1);
-    const balance_t &getReserve(const Token *token);
+    const balance_t &getReserve(const Token *token) const noexcept;
 
     /**
-     * @brief do the math and simulate a swap
-     * @param tokenIn MUST be one of the two affering tokens: either token0 or token1
-     * @param amountIn amount of @p tokenIn balance to be converted to the other token
-     * @param updateReserves if true, makes the swap "happen" by updating the reserves. This updates the LP
-     * @return the balance that the swap yields, for the counterpart of @p tokenIn
-     * @note the implementation is LP dependent. Some pools apply fees. This methods attempts to simulate that.
-     * @warning probably unnecessary code. Keeping this as a conceptual reference of what may happen inside a real LP
+     * @brief calculates the cost to buy a given wantedAmount of wantedToken
      */
-    balance_t simpleSwap(const Token *tokenIn
-                         , const balance_t &amountIn
-                         , bool updateReserves=false);
+    balance_t SwapTokensForExactTokens(const Token *wantedToken, const balance_t &wantedAmount) const;
 
     /**
-     * @brief same as simpleSwap() but uses simplifies float-only maths, and doesn't update reserves
+     * @brief calculates the token balance received for in return for selling sentAmount of tokenSent
      */
-    double simpleSwapF(const Token *tokenIn, double amountIn) const noexcept;
+    balance_t SwapExactTokensForTokens(const Token *tokenSent, const balance_t &sentAmount) const;
 
-    /**
-     * @brief calculate the current swap ratio
-     *
-     * 1 * units of tokenIn would result in <return> amount of tokenOut
-     *
-     * @param tokenIn MUST be one of the two affering tokens: either token0 or token1
-     */
-    double swapRatio(const Token *tokenIn) const noexcept;
 
-    /**
-     * @brief estimate would-be swap stress
-     *
-     * Returns a ratio estimate (result >= 0.0f) expressing how much
-     * a swap execution would stress the pool's reserves.
-     *
-     * This call is intended help flagging dangerous unbalanced paths.
-     */
-    double estimateSwapStress(const Token *tokenIn, const balance_t &amountIn) const;
 
-    /**
-     * swap fees amount expressed in unitary value (1=100%, 0.03=3%, 0.0003=0.03%)
-     */
-    double fees() const noexcept { return 0.0003; }
-
-private:
-    balance_t k; // cached value of reserve0*reserve1. Updated by setReserve().
-                 // in AAM compliant swaps this must remain constant in time
-
-    // i'm keeping cache values in floating point format.
-    // Don't really known which one is best for us. Keeping both for now.
-    double fk;
-    double freserve0;
-    double freserve1;
+    void enter_predicted_state(const balance_t &amount0In
+                               , const balance_t &amount1In
+                               , const balance_t &amount0Out
+                               , const balance_t &amount1Out);
+    void leave_predicted_state(bool force=false);
 };
 
 
@@ -458,6 +438,11 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
      */
     void debug_evaluate_known_paths(const PathEvalutionConstraints &constraints);
 
+
+    void add_lp_of_interest(const LiquidityPool *pool);
+    void clear_lp_of_interest();
+    void evaluate_paths_of_interest(const PathEvalutionConstraints &constraints);
+    std::set<LiquidityPool*> lp_of_interest;
 
 };
 

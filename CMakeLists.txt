@@ -51,6 +51,8 @@ set(MODEL_SRC
     src/bofh/model/bofh_model.cpp
     src/bofh/model/bofh_model.hpp
     src/bofh/model/bofh_model_fwd.hpp
+    src/bofh/model/bofh_amm_estimation.hpp
+    src/bofh/model/bofh_amm_estimation.cpp
     src/bofh/pathfinder/finder_3way.hpp
     src/bofh/pathfinder/finder_3way.cpp
     src/bofh/pathfinder/swaps_idx.hpp
