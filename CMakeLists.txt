@@ -61,8 +61,24 @@ set(MODEL_SRC
     src/bofh/commons/bofh_log.cpp
     src/bofh/pathfinder/paths.hpp
     src/bofh/pathfinder/paths.cpp
+    src/3rd-party/hash-library/crc32.cpp
+    src/3rd-party/hash-library/crc32.h
+    src/3rd-party/hash-library/digest.cpp
+    src/3rd-party/hash-library/hash.h
+    src/3rd-party/hash-library/hmac.h
+    src/3rd-party/hash-library/keccak.cpp
+    src/3rd-party/hash-library/keccak.h
+    src/3rd-party/hash-library/md5.cpp
+    src/3rd-party/hash-library/md5.h
+    src/3rd-party/hash-library/sha1.cpp
+    src/3rd-party/hash-library/sha1.h
+    src/3rd-party/hash-library/sha256.cpp
+    src/3rd-party/hash-library/sha256.h
+    src/3rd-party/hash-library/sha3.cpp
+    src/3rd-party/hash-library/sha3.h
     )
 include_directories(src)
+
 # # Build library as a Python module. (Using Boost.Python)
 # add_library(bofh_model SHARED
 #     )
@@ -76,6 +92,8 @@ add_library(bofh_model_ext MODULE
     src/bofh/model/bofh_model_py_ext.cpp
     )
 
+add_library(bofh_model STATIC EXCLUDE_FROM_ALL ${MODEL_SRC})
+
 #target_link_libraries(bofh_model_ext bofh_model)
 target_include_directories(bofh_model_ext PRIVATE ${Python_INCLUDE_DIRS})
 set_target_properties(bofh_model_ext PROPERTIES PREFIX "") # build library without "lib{x}" name
@@ -83,12 +101,15 @@ target_link_libraries(bofh_model_ext ${Boost_LIBRARIES})
 install(TARGETS bofh_model_ext DESTINATION ${Python_SITELIB})
 
 
+target_include_directories(bofh_model PRIVATE ${Python_INCLUDE_DIRS})
+target_link_libraries(bofh_model ${Boost_LIBRARIES})
+
 enable_testing()
 
 
 function(create_test test_name)
     add_executable(${test_name} EXCLUDE_FROM_ALL ${ARGN})
-    #target_link_libraries(${test_name} bofh_model_ext)
+    target_link_libraries(${test_name} bofh_model)
     add_test(${test_name} ${test_name})
 endfunction()
 

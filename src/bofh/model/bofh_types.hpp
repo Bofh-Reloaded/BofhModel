@@ -42,7 +42,7 @@ typedef bignum::uint256_t balance_t;
  */
 struct address_size {
     typedef uint32_t word;
-    static constexpr unsigned size_bits = 320;
+    static constexpr unsigned size_bits = 160;
     static constexpr unsigned nibs = size_bits / 4;
     static constexpr unsigned word_size = sizeof(word)*8;
     static constexpr unsigned word_nibs = word_size / 4;

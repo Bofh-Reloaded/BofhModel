@@ -20,8 +20,9 @@ void test_ctor_def(void)
 void test_ctor_fromstr(void)
 {
     std::string input = "0x5369f69c74d1d7bf70d5d402b92e66551edd05e7";
+    std::string checksummed = "0x5369F69C74d1D7Bf70d5D402b92E66551Edd05e7";
     address_t a0(input.c_str());
-    if (to_string(a0) != input)
+    if (to_string(a0) != checksummed)
     {
         throw std::runtime_error("test_ctor_fromstr");
     }
