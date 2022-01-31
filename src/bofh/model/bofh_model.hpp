@@ -21,6 +21,7 @@
 #include <boost/noncopyable.hpp>
 #include <set>
 #include <memory>
+#include <mutex>
 #include "../pathfinder/swaps_idx_fwd.hpp"
 
 
@@ -262,6 +263,8 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
     std::unique_ptr<idx::SwapIndex>   swap_index;
     std::unique_ptr<pathfinder::idx::SwapPathsIndex> paths_index;
     Token *start_token = nullptr;
+    std::mutex m_update_mutex;
+    typedef std::lock_guard<std::mutex> lock_guard_t;
 
     TheGraph();
 
@@ -297,20 +300,37 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
                            , bool is_stablecoin);
 
     /**
-     * @brief Introduce a new LP edge into the graph, if not existing.
+     * @brief Introduce a new LP edge into the graph, if not existing. (low level)
      * If the pair already exists, do nothing and return its reference.
      * @param exchange
      * @param address
      * @param token0
      * @param token1
      * @param rate
-     * @return reference to the LP
+     * @return reference to the LP, or NULL in case of error
      */
-    const LiquidityPool *add_lp(datatag_t tag
+    const LiquidityPool *add_lp_ll(datatag_t tag
                                 , const char *address
                                 , const Exchange* exchange
                                 , Token* token0
                                 , Token* token1);
+    /**
+     * @brief Introduce a new LP edge into the graph, if not existing.
+     *
+     * All validations are done in-code. This saves some time at init time.
+     * @param tag
+     * @param address
+     * @param exchange
+     * @param token0
+     * @param token1
+     * @return reference to the LP, or NULL in case of error
+     */
+    const LiquidityPool *add_lp(datatag_t tag
+                                , const char *address
+                                , datatag_t exchange
+                                , datatag_t token0
+                                , datatag_t token1);
+
 
     /**
      * @brief fetch a known token node by address

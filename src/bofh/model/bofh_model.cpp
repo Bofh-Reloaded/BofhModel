@@ -224,6 +224,7 @@ const Exchange *TheGraph::add_exchange(datatag_t tag
                                        , const string &name
                                        )
 {
+    lock_guard_t lock_guard(m_update_mutex);
     auto ptr = std::make_unique<Exchange>(tag, address, name);
     auto item = entity_index->emplace(ptr.get());
     if (already_exists(item))
@@ -247,6 +248,7 @@ const Token *TheGraph::add_token(datatag_t tag
                                  , unsigned int decimals
                                  , bool is_stablecoin)
 {
+    lock_guard_t lock_guard(m_update_mutex);
     auto ptr = std::make_unique<Token>(tag
                                        , address
                                        , name
@@ -274,7 +276,7 @@ const Token *TheGraph::lookup_token(datatag_t tag)
 }
 
 
-const LiquidityPool *TheGraph::add_lp(datatag_t tag
+const LiquidityPool *TheGraph::add_lp_ll(datatag_t tag
                                       , const char *address
                                       , const Exchange* exchange
                                       , Token* token0
@@ -288,12 +290,13 @@ const LiquidityPool *TheGraph::add_lp(datatag_t tag
                                                , exchange
                                                , token0
                                                , token1);
+    lock_guard_t lock_guard(m_update_mutex);
+
     auto item = entity_index->emplace(ptr.get());
     if (already_exists(item))
     {
         return nullptr;
     }
-
     auto lp = reinterpret_cast<LiquidityPool*>(ptr.release());
 
     // create OperableSwap objects
@@ -302,6 +305,23 @@ const LiquidityPool *TheGraph::add_lp(datatag_t tag
 
     return lp;
 }
+
+const LiquidityPool *TheGraph::add_lp(datatag_t tag
+                                      , const char *address
+                                      , datatag_t exchange_
+                                      , datatag_t token0_
+                                      , datatag_t token1_)
+{
+    auto exchange = lookup_exchange(exchange_);
+    auto token0 = const_cast<Token*>(lookup_token(token0_));
+    auto token1 = const_cast<Token*>(lookup_token(token1_));
+    if (exchange == nullptr || token0 == nullptr || token1 == nullptr)
+    {
+        return nullptr;
+    }
+    return add_lp_ll(tag, address, exchange, token0, token1);
+}
+
 
 const LiquidityPool *TheGraph::lookup_lp(const address_t &address)
 {
@@ -358,6 +378,7 @@ static auto clear_existing_paths_if_any = [](TheGraph *graph)
 
 void TheGraph::calculate_paths()
 {
+    lock_guard_t lock_guard(m_update_mutex);
     using Path = pathfinder::Path;
 
     clear_existing_paths_if_any(this);
@@ -597,6 +618,7 @@ static evaluate_path_result evaluate_path(TheGraph *g
 
 void TheGraph::debug_evaluate_known_paths(const PathEvalutionConstraints &c)
 {
+    lock_guard_t lock_guard(m_update_mutex);
     struct LimitReached {};
 
     check_constrants_consistency(this, c);
@@ -628,11 +650,13 @@ void TheGraph::debug_evaluate_known_paths(const PathEvalutionConstraints &c)
 
 void TheGraph::add_lp_of_interest(const LiquidityPool *pool)
 {
+    lock_guard_t lock_guard(m_update_mutex);
     lp_of_interest.emplace(const_cast<LiquidityPool*>(pool));
 }
 
 void TheGraph::clear_lp_of_interest()
 {
+    lock_guard_t lock_guard(m_update_mutex);
     for (auto pool: lp_of_interest)
     {
         pool->leave_predicted_state(true);
@@ -642,6 +666,7 @@ void TheGraph::clear_lp_of_interest()
 
 void TheGraph::evaluate_paths_of_interest(const PathEvalutionConstraints &c)
 {
+    lock_guard_t lock_guard(m_update_mutex);
     check_constrants_consistency(this, c);
 
     for (auto pool: lp_of_interest)

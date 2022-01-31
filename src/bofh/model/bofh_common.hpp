@@ -60,3 +60,4 @@ template<typename T> struct Ref
  * Idiomatically cast constness away from stuff
  */
 template<typename T> T& nonconst(const T& o) { return const_cast<T&>(o); }
+

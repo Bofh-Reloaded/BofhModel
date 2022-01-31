@@ -183,6 +183,9 @@ class BasicScopedCursor:
     def get_int(self):
         return self.curs.fetchone()[0]
 
+    def get_one(self):
+        return self.curs.fetchone()[0]
+
     def get_all(self):
         while True:
             seq = self.curs.fetchmany()
@@ -277,7 +280,7 @@ class StatusScopedCursor(BasicScopedCursor):
                 yield i
 
 
-class SwapLogScopedCursor(BasicScopedCursor):
+class BalancesScopedCursor(BasicScopedCursor):
     def add_swap_log(self
                      , block_nr: int
                      , json_data
@@ -333,3 +336,22 @@ class SwapLogScopedCursor(BasicScopedCursor):
         except IntegrityError:
             # already existing
             self.execute("UPDATE pool_reserves SET reserve0 = ?, reserve1 = ? WHERE pool = ?", (reserve0, reserve1, pool_id))
+
+    def update_latest_blocknr(self, blockNr: int):
+        key = "block_number"
+        blockNr = str(blockNr)
+        try:
+            self.execute("INSERT INTO reserves_meta (key, value) VALUES (?, ?)", (key, blockNr))
+        except IntegrityError:
+            # already existing
+            self.execute("UPDATE reserves_meta SET value = ? WHERE key = ?", (blockNr, key))
+
+    def get_latest_blocknr(self) -> int:
+        key = "block_number"
+        try:
+            self.execute("SELECT value FROM reserves_meta WHERE key = ?", (key, ))
+            return int(self.get_one())
+        except :
+            return 0
+
+    latest_blocknr = property(get_latest_blocknr, update_latest_blocknr)

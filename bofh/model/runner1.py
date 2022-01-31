@@ -2,11 +2,14 @@ from asyncio import get_event_loop
 from random import choice
 from time import sleep
 
+from jsonrpc_base import TransportError
 from jsonrpc_websocket import Server
 
-from bofh.utils.misc import progress_printer, LogAdapter,Timer
-from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, log_topic_id, parse_data_parameters
+from bofh.utils.misc import progress_printer, LogAdapter, secs_to_human_repr, optimal_cpu_threads
+from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, log_topic_id, \
+    parse_data_parameters, bsc_block_age_secs
 
+DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS=600  # 10min because probably it takes longer to forward an existing snapshot than download another from scratch
 
 __doc__="""Start model runner.
 
@@ -17,19 +20,22 @@ Options:
   -d, --dsn=<connection_str>            DB dsn connection string [default: sqlite3://status.db]
   -c, --connection_url=<url>            Web3 RPC connection URL [default: %s]
   -n <n>                                number of pools to query before exit (benchmark mode)
-  -j <n>                                number of RPC data ingest workers, default one per hardware thread. Only used during initialization phase
+  -j <n>                                number of RPC data ingest workers, default one per hardware thread [default: %u]
   -v, --verbose                         debug output
   --chunk_size=<n>                      preloaded work chunk size per each worker [default: 100]
   --pred_polling_interval=<n>           Web3 prediction polling internal in millisecs [default: 1000]
-  --swap_log_db_dsn=<connection_str>    Prediction log swaps DB dsn connection string [default: none]
+  --reserves_db_dsn=<connection_str>    liquidity pools reserves DB dsn connection string [default: sqlite3://reserves.db]
   --start_token_address=<address>       on-chain address of start token [default: WBNB]
+  --max_reserves_snapshot_age_secs=<s>  max age of usable LP reserves DB snapshot (refuses to preload from DB if older) [default: %r]
+  --force_reuse_reserves_snapshot       disregard --max_reserves_snapshot_age_secs (use for debug purposes, avoids download of reserves)       
+  --do_not_update_reserves_from_chain    do not attempt to forward an existing reserves DB snapshot to the latest known block       
   --cli                                 preload status and stop at CLI (for debugging)
-""" % (Web3Connector.DEFAULT_URI_WSRPC, )
+""" % (Web3Connector.DEFAULT_URI_WSRPC, optimal_cpu_threads(), DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS)
 
 from dataclasses import dataclass
 from logging import getLogger, basicConfig
 
-from bofh.model.database import ModelDB, StatusScopedCursor, SwapLogScopedCursor
+from bofh.model.database import ModelDB, StatusScopedCursor, BalancesScopedCursor
 from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level, PathEvalutionConstraints
 
 
@@ -38,7 +44,7 @@ PREDICTION_LOG_TOPIC0_SYNC = log_topic_id("Sync(uint112,uint112)")
 WBNB_address = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c" # id=2
 TETHER_address = "0x55d398326f99059ff775485246999027b3197955" # id=4
 START_TOKEN = WBNB_address
-
+# PASSWORD ACCOUNT BSC: ws8734bnsiuDSD
 
 @dataclass
 class Args:
@@ -49,8 +55,11 @@ class Args:
     max_workers: int = 0
     chunk_size: int = 0
     pred_polling_interval: int = 0
-    swap_log_db_dsn: str = None
+    reserves_db_dsn: str = None
     start_token_address: str = None
+    max_reserves_snapshot_age_secs: int = 0
+    force_reuse_reserves_snapshot: bool = False
+    do_not_update_reserves_from_chain: bool = False
     cli: bool = False
 
     @staticmethod
@@ -72,8 +81,11 @@ class Args:
             , max_workers=int(cls.default(args["-j"], 0))
             , chunk_size=int(cls.default(args["--chunk_size"], 100))
             , pred_polling_interval=int(cls.default(args["--pred_polling_interval"], 1000))
-            , swap_log_db_dsn=cls.default(args["--swap_log_db_dsn"], None, suppress_list=["none"])
+            , reserves_db_dsn=cls.default(args["--reserves_db_dsn"], None, suppress_list=["none"])
             , start_token_address=cls.default(args["--start_token_address"], START_TOKEN, suppress_list=["WBNB"])
+            , max_reserves_snapshot_age_secs=int(args["--max_reserves_snapshot_age_secs"])
+            , force_reuse_reserves_snapshot=bool(cls.default(args["--force_reuse_reserves_snapshot"], 0))
+            , do_not_update_reserves_from_chain=bool(cls.default(args["--do_not_update_reserves_from_chain"], 0))
             , cli=bool(cls.default(args["--cli"], 0))
         )
 
@@ -125,13 +137,25 @@ class Runner:
         self.args = args
         self.db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=self.args.status_db_dsn)
         self.db.open_and_priming()
-        self.swap_log_db = None
-        if self.args.swap_log_db_dsn:
-            self.swap_log_db = ModelDB(schema_name="swap_log", cursor_factory=SwapLogScopedCursor, db_dsn=self.args.swap_log_db_dsn)
-            self.swap_log_db.open_and_priming()
+        self.reserves_db = None
+        if self.args.reserves_db_dsn:
+            self.reserves_db = ModelDB(schema_name="reserves"
+                                       , cursor_factory=BalancesScopedCursor
+                                       , db_dsn=self.args.reserves_db_dsn)
+            self.reserves_db.open_and_priming()
         self.pools = set()
         self.ioloop = get_event_loop()
+        self.reserves_latest_blocknr = 0
         # self.polling_started = Event()
+
+    @property
+    def w3(self):
+        try:
+            return self.__w3
+        except AttributeError:
+            self.__w3 = Web3Connector.get_connection(self.args.web3_rpc_url)
+        return self.__w3
+
 
     @property
     def pools_ctr(self):
@@ -169,6 +193,8 @@ class Runner:
                     print_progress()
             self.log.info("TOKENS set loaded, size is %r items", print_progress.ctr)
 
+
+
     def preload_pools(self):
         with self.db as curs:
             ctr = curs.count_pools()
@@ -176,18 +202,20 @@ class Runner:
                                               " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
                                               , on_same_line=True)
             with print_progress:
+
                 for id, address, exchange_id, token0_id, token1_id in curs.list_pools():
-                    t0 = self.graph.lookup_token(token0_id)
-                    t1 = self.graph.lookup_token(token1_id)
-                    if not t0 or not t1:
-                        if self.args.verbose:
-                            self.log.warning("disabling pool %s due to missing or disabled affering token "
-                                             "(token0=%r, token1=%r)", address, token0_id, token1_id)
-                        continue
-                    exchange = self.graph.lookup_exchange(exchange_id)
-                    assert exchange is not None
-                    pool = self.graph.add_lp(id, address, exchange, t0, t1)
                     print_progress()
+                    #t0 = self.graph.lookup_token(token0_id)
+                    #t1 = self.graph.lookup_token(token1_id)
+                    #if not t0 or not t1:
+                    #    if self.args.verbose:
+                    #        self.log.warning("disabling pool %s due to missing or disabled affering token "
+                    #                         "(token0=%r, token1=%r)", address, token0_id, token1_id)
+                    #    continue
+                    #exchange = self.graph.lookup_exchange(exchange_id)
+                    #assert exchange is not None
+                    #pool = self.graph.add_lp(id, address, exchange, t0, t1)
+                    pool = self.graph.add_lp(id, address, exchange_id, token0_id, token1_id)
                     if pool is None:
                         if self.args.verbose:
                             self.log.warning("integrity error: pool address is already not of a pool: "
@@ -198,6 +226,7 @@ class Runner:
                         self.log.info("stopping after loading %r pools, "
                                       "as per effect of -n cli parameter", print_progress.ctr)
                         break
+
             self.log.info("POOLS set loaded, size is %r items", print_progress.ctr)
             missing = print_progress.tot - print_progress.ctr
             if missing > 0:
@@ -205,13 +234,19 @@ class Runner:
                               "failed graph connectivity or other problems", missing, print_progress.tot)
 
     def preload_balances(self):
-        self.log.info("fetching balances via Web3...")
+        if not self.preload_balances_from_db():
+            self.download_reserves_snapshot_from_web3()
+        if not self.args.do_not_update_reserves_from_chain:
+            self.update_balances_from_web3()
+
+    def download_reserves_snapshot_from_web3(self):
+        self.log.info("downloading a new reserves snapshot from Web3")
         print_progress = progress_printer(self.pools_ctr
                                           , "fetching pool reserves {percent}% ({count} of {tot}"
                                             " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
                                           , on_same_line=True)
         with Web3PoolExecutor(connection_uri=self.args.web3_rpc_url, max_workers=self.args.max_workers) as executor:
-            self.log.info("fetching balances via Web3:"
+            self.log.info("concurrent reserves download via Web3:"
                      "\n\t- %r pool getReserve requests"
                      "\n\t- on Web3 servant at %s"
                      "\n\t- using %d workers"
@@ -222,9 +257,10 @@ class Runner:
                       , self.args.chunk_size
                       )
             curs = None
-            if self.swap_log_db:
-                curs = self.swap_log_db.cursor()
+            if self.reserves_db:
+                curs = self.reserves_db.cursor()
             try:
+                currentBlockNr = self.w3.eth.block_number
                 def pool_addresses_iter():
                     for p in self.pools:
                         yield str(p.address)
@@ -244,16 +280,41 @@ class Runner:
                         print_progress()
                     except:
                         self.log.exception("unable to query pool %s", pool_addr)
+                if curs:
+                    # update most-recent blocknr in db
+                    curs.latest_blocknr = currentBlockNr
             finally:
-                if self.swap_log_db:
-                    self.swap_log_db.commit()
+                if self.reserves_db:
+                    self.reserves_db.commit()
             executor.shutdown(wait=True)
 
     def preload_balances_from_db(self):
-        assert self.swap_log_db
+        if not self.reserves_db:
+            self.log.warning("unable to preload reserves from DB (no database specified. "
+                             "Please use --reserves_db_dsn=<dsn>)")
+            return
+        with self.reserves_db as curs:
+            latest_blocknr = curs.latest_blocknr
+            current_blocknr = self.w3.eth.block_number
+            age = current_blocknr-latest_blocknr
+            if not latest_blocknr or age < 0:
+                self.log.warning("unable to preload reserves from DB (latest block number not set in DB, or invalid)")
+                return
+            age_secs = bsc_block_age_secs(age)
+            self.log.info("reserves DB snapshot is for block %u (%d blocks old), which is %s old"
+                          , latest_blocknr
+                          , age
+                          , secs_to_human_repr(age_secs))
+            if not self.args.force_reuse_reserves_snapshot:
+                if age_secs > self.args.max_reserves_snapshot_age_secs:
+                    self.log.warning("reserves DB snapshot is too old (older than --max_reserves_snapshot_age_secs=%r)"
+                                     , self.args.max_reserves_snapshot_age_secs)
+                    return
+            else:
+                self.log.warning(
+                    "forcing reuse of existing reserves DB snapshot (as per --force_reuse_reserves_snapshot)")
 
-        self.log.info("fetching balances previously saved in db...")
-        with self.swap_log_db as curs:
+            self.log.info("fetching LP reserves previously saved in db")
             nr = curs.execute("SELECT COUNT(1) FROM pool_reserves").get_int()
             with progress_printer(nr, "fetching pool reserves {percent}% ({count} of {tot}"
                                        " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
@@ -273,6 +334,57 @@ class Runner:
                     ok += 1
                 self.log.info("%r records read, reserves loaded for %r pools, %r discarded"
                               , print_progress.ctr, ok, disc)
+            self.reserves_latest_blocknr = latest_blocknr
+            return True
+
+    def reserves_parse_blocknr(self, blocknr):
+        block = self.w3.eth.get_block(blocknr)
+        if not block:
+            return
+        txs = block.get("transactions")
+        if not txs:
+            return
+
+        curs = None
+        if self.reserves_db:
+            curs = self.reserves_db.cursor()
+        try:
+            for txh in txs:
+                txr = self.w3.eth.get_transaction_receipt(txh)
+                if not txr:
+                    continue
+                logs = txr.get("logs")
+                if not logs:
+                    continue
+                for log in logs:
+                    topics = log.get("topics")
+                    address = log.get("address")
+                    if address and topics and topics[0] == PREDICTION_LOG_TOPIC0_SYNC:
+                        pool = self.graph.lookup_lp(address)
+                        if not pool:
+                            continue
+                        self.update_pool_reserves_by_tx_sync_log(pool, log["data"], curs)
+            if self.reserves_db:
+                self.reserves_db.commit()
+        except:
+            if self.reserves_db:
+                self.reserves_db.rollback()
+            raise
+
+    def update_balances_from_web3(self):
+        while True:
+            current_block = self.w3.eth.block_number
+            if self.reserves_latest_blocknr >= current_block:
+                self.log.info("LP balances updated to current block (%u)", current_block)
+                break
+            next_block = self.reserves_latest_blocknr + 1
+            to_go = current_block - self.reserves_latest_blocknr
+            self.log.info("loading reserves from block %r (%r block to go) ... ", next_block, to_go)
+            self.reserves_parse_blocknr(next_block)
+            self.reserves_latest_blocknr = next_block
+            if self.reserves_db:
+                with self.reserves_db as curs:
+                    curs.latest_blocknr = current_block
 
     def __serve_eth_consPredictLogs(self, result):
         if result and result.get("logs"):
@@ -345,8 +457,8 @@ class Runner:
                                           , tokenIn.address, tokenOut.address, rate
                                           , reserveInBefore, reserveOutBefore, reserveInAfter, reserveOutAfter
                                           , reserveInPctGain)
-                            if self.swap_log_db:
-                                with self.swap_log_db as curs:
+                            if self.reserves_db:
+                                with self.reserves_db as curs:
                                     curs.add_swap_log(
                                         block_nr=self.latestBlockNumber
                                         , json_data=log
@@ -385,6 +497,9 @@ class Runner:
                     if blockNumber <= self.latestBlockNumber:
                         continue
                     self.latestBlockNumber = blockNumber
+                except TransportError:
+                    # server disconnected
+                    raise
                 except:
                     self.log.exception("Error during eth_consPredictLogs() RPC execution")
                     continue
@@ -410,6 +525,24 @@ class Runner:
     def poll_prediction(self):
         self.ioloop.run_until_complete(self.prediction_polling_task())
 
+    def update_pool_reserves_by_tx_sync_log(self, pool, data, curs=None):
+        try:
+            r0, r1 = parse_data_parameters(data)
+        except:
+            self.log.exception("unable to decode sync log data")
+            return
+        if self.args.verbose:
+            self.log.info("use Sync event to update reserves of pool %r: %s(%s-%s), reserve=%r, reserve1=%r"
+                          , pool.address
+                          , pool.exchange.name
+                          , pool.token0.symbol
+                          , pool.token1.symbol
+                          , r0
+                          , r1)
+        pool.setReserves(r0, r1)
+        if curs:
+            curs.add_pool_reserve(pool.tag, r0, r1)
+
     def digest_prediction_payload(self, payload):
         assert isinstance(payload, dict)
         logs = payload["logs"]
@@ -426,21 +559,8 @@ class Runner:
                 continue
             topic0 = log["topic0"]
             if topic0 == PREDICTION_LOG_TOPIC0_SYNC:
-                data = log["data"]
-                try:
-                    r0, r1 = parse_data_parameters(data)
-                except:
-                    self.log.exception("unable to decode sync log data")
-                    continue
-                if self.args.verbose:
-                    self.log.info("use Sync event to update reserves of pool %r: %s(%s-%s), reserve=%r, reserve1=%r"
-                                   , address
-                                   , pool.exchange.name
-                                   , pool.token0.symbol
-                                   , pool.token1.symbol
-                                   , r0
-                                   , r1)
-                pool.setReserves(r0, r1)
+                pool.enter_predicted_state(0, 0, 0, 0)
+                self.update_pool_reserves_by_tx_sync_log(pool, log["data"])
                 continue
             if topic0 == PREDICTION_LOG_TOPIC0_SWAP:
                 data = log["data"]
@@ -462,8 +582,55 @@ class Runner:
                 self.graph.add_lp_of_interest(pool)
                 continue
 
+    def load(self):
+        self.preload_exchanges()
+        self.preload_tokens()
+        start_token = self.graph.lookup_token(self.args.start_token_address)
+        if not start_token:
+            msg = "start_token not found: address %s is unknown or not of a token" % self.args.start_token_address
+            self.log.error(msg)
+            raise RuntimeError(msg)
+        else:
+            self.log.info("start_token is %s (%s)", start_token.symbol, start_token.address)
+        self.preload_pools()
+        self.graph.calculate_paths()
+        self.preload_balances()
+        self.log.info("GRAPH LOAD COMPLETE :-)")
 
 
+"""
+    def chiamaIlCoso(self, tokens, constraint):
+        import web3
+        to_checksum_address()
+address = '0xE2C2b4DDA45bb4B70D718954148a181d760D515A'
+abi = [{'inputs': [{'internalType': 'address[]',
+        'name': 'tokenPath',
+        'type': 'address[]'},
+       {'internalType': 'address', 'name': 'startToken', 'type': 'address'},
+       {'internalType': 'uint256', 'name': 'initialAmount', 'type': 'uint256'},
+       {'internalType': 'uint256', 'name': 'minProfit', 'type': 'uint256'}],
+      'name': 'doCakeInternalSwaps',
+      'outputs': [],
+      'stateMutability': 'nonpayable',
+      'type': 'function'}]
+def path_to_token_array():
+    res = [str(self.graph.start_token.address)]
+    for i in range(path.size()):
+        swap = path.get(i)
+        res.append(str(swap.tokenDest.address))
+    return res
+initial_amount = int(str(constraint.initial_token_wei_balance))
+min_profit = int(initial_amount * 0.01)
+w3 = Web3Connector.get_connection(self.args.web3_rpc_url)
+contract_instance = w3.eth.contract(address=address, abi=abi)
+tx_hash = contract_instance.functions.doCakeInternalSwaps(
+    tokens
+    , str(self.graph.start_token.address)
+    , initial_amount
+    , min_profit
+).transact()
+self.log.info("SWAP contract invocation: %s", tx_hash)
+"""
 
 def main():
     basicConfig(level="INFO")
@@ -471,21 +638,22 @@ def main():
     log_register_sink(LogAdapter(level="DEBUG"))
     args = Args.from_cmdline(__doc__)
     runner = Runner(args)
-    runner.preload_exchanges()
-    runner.preload_tokens()
-    start_token = runner.graph.lookup_token(args.start_token_address)
-    assert start_token
-    runner.graph.start_token = start_token
-    runner.preload_pools()
-    while args.cli:
+    if args.cli:
         from IPython import embed
         embed()
-    runner.graph.calculate_paths()
-    runner.preload_balances()
-    print("LOAD COMPLETE")
-    runner.poll_prediction()
-    while True:
-        sleep(10)
+    else:
+        runner.load()
+        runner.poll_prediction()
+"""
+tokens = ["0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", "0xbB8203e945866A1f3Eced6e5B22679E5A540be91", "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82", "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"]
+constraint = PathEvalutionConstraints()
+constraint.initial_token_wei_balance = int(int(str(runner.graph.start_token.toWei(1))) / 10)
+
+runner.chiamaIlCoso(tokens, constraint) 
+INFO:bofh_model:candidate path Polkadot(0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c-0xbb8203e945866a1f3eced6e5b22679e5a540be91, 493597), 
+Polkadot(0xbb8203e945866a1f3eced6e5b22679e5a540be91-0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82, 494733), 
+Polkadot(0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82-0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c, 11) would yield 3.61716%
+"""
 
 
 if __name__ == '__main__':
