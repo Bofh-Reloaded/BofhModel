@@ -1,4 +1,5 @@
 from asyncio import get_event_loop
+from concurrent.futures import ThreadPoolExecutor
 from random import choice
 from time import sleep
 
@@ -9,7 +10,8 @@ from bofh.utils.misc import progress_printer, LogAdapter, secs_to_human_repr, op
 from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, log_topic_id, \
     parse_data_parameters, bsc_block_age_secs
 
-DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS=600  # 10min because probably it takes longer to forward an existing snapshot than download another from scratch
+DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS=3600  # 1hr because probably it would probably take longer to forward the
+                                             # existing snapshot rather than downloading from scratch
 
 __doc__="""Start model runner.
 
@@ -193,8 +195,6 @@ class Runner:
                     print_progress()
             self.log.info("TOKENS set loaded, size is %r items", print_progress.ctr)
 
-
-
     def preload_pools(self):
         with self.db as curs:
             ctr = curs.count_pools()
@@ -286,6 +286,7 @@ class Runner:
             finally:
                 if self.reserves_db:
                     self.reserves_db.commit()
+                self.reserves_latest_blocknr = currentBlockNr
             executor.shutdown(wait=True)
 
     def preload_balances_from_db(self):
@@ -372,19 +373,29 @@ class Runner:
             raise
 
     def update_balances_from_web3(self):
-        while True:
-            current_block = self.w3.eth.block_number
-            if self.reserves_latest_blocknr >= current_block:
-                self.log.info("LP balances updated to current block (%u)", current_block)
-                break
-            next_block = self.reserves_latest_blocknr + 1
-            to_go = current_block - self.reserves_latest_blocknr
-            self.log.info("loading reserves from block %r (%r block to go) ... ", next_block, to_go)
-            self.reserves_parse_blocknr(next_block)
-            self.reserves_latest_blocknr = next_block
-            if self.reserves_db:
-                with self.reserves_db as curs:
-                    curs.latest_blocknr = current_block
+        per_thread_queue_size = self.args.max_workers * 10
+        current_block = self.w3.eth.block_number
+        nr = current_block - self.reserves_latest_blocknr
+        with progress_printer(nr, "rolling forward pool reserves {percent}% ({count} of {tot}"
+                                  " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
+                                  , on_same_line=True) as print_progress:
+            while True:
+                current_block = self.w3.eth.block_number
+                nr = current_block - self.reserves_latest_blocknr
+                print_progress.tot = nr
+                if nr <= 0:
+                    self.log.info("LP balances updated to current block (%u)", current_block)
+                    break
+                target = min(self.reserves_latest_blocknr+per_thread_queue_size, current_block+1)
+                with ThreadPoolExecutor(max_workers=self.args.max_workers) as executor:
+                    for next_block in range(self.reserves_latest_blocknr, target):
+                        self.log.debug("loading reserves from block %r ... ", next_block)
+                        print_progress()
+                        executor.submit(self.reserves_parse_blocknr, next_block)
+                    executor.shutdown()
+                    self.reserves_latest_blocknr = next_block
+                    with self.reserves_db as curs:
+                        curs.latest_blocknr = next_block
 
     def __serve_eth_consPredictLogs(self, result):
         if result and result.get("logs"):
