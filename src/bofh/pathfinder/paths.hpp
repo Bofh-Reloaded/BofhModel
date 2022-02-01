@@ -1,8 +1,11 @@
 #pragma once
 
 #include <bofh/model/bofh_model_fwd.hpp>
+#include <bofh/model/bofh_types.hpp>
 #include <functional>
 #include <cstring>
+#include <iostream>
+#include <vector>
 
 namespace bofh {
 namespace pathfinder {
@@ -70,8 +73,30 @@ struct Path: std::array<const OperableSwap *, MAX_PATHS>
      * This saves on memory and time.
      */
     typedef std::function<void(const Path *)> listener_t;
+
+    std::string print_addr() const;
+    std::string print_symbols() const;
 };
 
+struct PathResult {
+    const pathfinder::Path   *path;
+    const model::Token       *start_token;
+    model::balance_t          initial_balance;
+    const model::Token       *token;
+    model::balance_t          balance;
+    double                    yieldPercent;
+
+    bool operator==(const PathResult &o) const noexcept
+    {
+        return path == o.path;
+    }
+
+    std::string infos() const;
+};
+typedef std::vector<PathResult> PathResultList;
+
+std::ostream& operator<< (std::ostream& stream, const Path& o);
+std::ostream& operator<< (std::ostream& stream, const PathResult& o);
 
 
 

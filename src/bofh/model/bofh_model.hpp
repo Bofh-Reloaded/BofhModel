@@ -23,6 +23,7 @@
 #include <memory>
 #include <mutex>
 #include "../pathfinder/swaps_idx_fwd.hpp"
+#include "../pathfinder/paths.hpp"
 
 
 namespace bofh {
@@ -451,17 +452,22 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
         unsigned int limit=0;
     };
 
+
+    using PathResult = pathfinder::PathResult;
+    using PathResultList = pathfinder::PathResultList;
+
     /**
      * Evaluate all known paths for convenience (debug usage. Just prints output)
      *
      * The function enumerates all known paths that match the specified constraints.
      */
-    void debug_evaluate_known_paths(const PathEvalutionConstraints &constraints);
+    PathResultList debug_evaluate_known_paths(const PathEvalutionConstraints &constraints);
 
 
     void add_lp_of_interest(const LiquidityPool *pool);
     void clear_lp_of_interest();
-    void evaluate_paths_of_interest(const PathEvalutionConstraints &constraints);
+    PathResultList evaluate_paths_of_interest(const PathEvalutionConstraints &constraints);
+    PathResult evaluate_path(const PathEvalutionConstraints &constraints, const pathfinder::Path *path) const;
     std::set<LiquidityPool*> lp_of_interest;
 
 };

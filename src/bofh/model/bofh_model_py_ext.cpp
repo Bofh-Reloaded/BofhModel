@@ -9,6 +9,7 @@
 #include "bofh_entity_idx.hpp"
 #include "../pathfinder/finder_3way.hpp"
 #include "../pathfinder/swaps_idx.hpp"
+#include "../pathfinder/paths.hpp"
 #include "../commons/bofh_log.hpp"
 
 
@@ -201,11 +202,31 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     class_<Path>("Path", init<Path::value_type, Path::value_type, Path::value_type>())
             .def(init<Path::value_type, Path::value_type, Path::value_type, Path::value_type>())
             .def("size"                 , &Path::size)
-//            .def("estimate_profit_ratio", &Path::estimate_profit_ratio)
-            .def("get"                  , &Path::get, dont_manage_returned_pointer());
+            .def("print_addr"           , &Path::print_addr)
+            .def("print_symbols"        , &Path::print_symbols)
+            .def("get"                  , &Path::get, dont_manage_returned_pointer())
+            .def(self_ns::repr(self_ns::self))
+            .def(self_ns::str(self_ns::self))
+            ;
     register_ptr_to_python<const Path*>();
     register_ptr_to_python<Path*>();
 
+    class_<PathResult>("PathResult")
+            .def_readonly("yieldPercent"    , &PathResult::yieldPercent)
+            .def_readonly("balance"         , &PathResult::balance)
+            .def_readonly("token"           , &PathResult::token)
+            .def_readonly("initial_balance" , &PathResult::initial_balance)
+            .def_readonly("start_token"     , &PathResult::start_token)
+            .def_readonly("path"            , &PathResult::path)
+            .def("infos"                    , &PathResult::infos)
+            .def(self_ns::repr(self_ns::self))
+            .def(self_ns::str(self_ns::self))
+            ;
+    register_ptr_to_python<const PathResult*>();
+    register_ptr_to_python<PathResult*>();
+
+    class_<PathResultList>("PathResultList")
+            .def(vector_indexing_suite<PathResultList>());
 
     class_<TheGraph::PathEvalutionConstraints>("PathEvalutionConstraints")
             .def_readwrite("initial_token_wei_balance"  , &TheGraph::PathEvalutionConstraints::initial_token_wei_balance)
@@ -217,7 +238,6 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             ;
     register_ptr_to_python<const TheGraph::PathEvalutionConstraints*>();
     register_ptr_to_python<TheGraph::PathEvalutionConstraints*>();
-
 
     class_<TheGraph, dont_make_copies>("TheGraph")
             .def_readwrite("start_token" , &TheGraph::start_token)

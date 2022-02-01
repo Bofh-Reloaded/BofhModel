@@ -7,6 +7,7 @@ from jsonrpc_base import TransportError
 from jsonrpc_websocket import Server
 
 from bofh.utils.misc import progress_printer, LogAdapter, secs_to_human_repr, optimal_cpu_threads
+from bofh.utils.solidity import get_abi
 from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, log_topic_id, \
     parse_data_parameters, bsc_block_age_secs
 
@@ -20,7 +21,7 @@ Usage: bofh.model.runner1 [options]
 Options:
   -h  --help
   -d, --dsn=<connection_str>            DB dsn connection string [default: sqlite3://status.db]
-  -c, --connection_url=<url>            Web3 RPC connection URL [default: %s]
+  -c, --connection_url=<url>            Web3 RPC connection URL [default: LOCAL_WS_RPC]
   -n <n>                                number of pools to query before exit (benchmark mode)
   -j <n>                                number of RPC data ingest workers, default one per hardware thread [default: %u]
   -v, --verbose                         debug output
@@ -32,7 +33,7 @@ Options:
   --force_reuse_reserves_snapshot       disregard --max_reserves_snapshot_age_secs (use for debug purposes, avoids download of reserves)       
   --do_not_update_reserves_from_chain    do not attempt to forward an existing reserves DB snapshot to the latest known block       
   --cli                                 preload status and stop at CLI (for debugging)
-""" % (Web3Connector.DEFAULT_URI_WSRPC, optimal_cpu_threads(), DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS)
+""" % (optimal_cpu_threads(), DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS)
 
 from dataclasses import dataclass
 from logging import getLogger, basicConfig
@@ -79,12 +80,12 @@ class Args:
             status_db_dsn = args["--dsn"]
             , verbose=bool(cls.default(args["--verbose"], 0))
             , pools_limit=int(cls.default(args["-n"], 0))
-            , web3_rpc_url=cls.default(args["--connection_url"], 0)
+            , web3_rpc_url=cls.default(args["--connection_url"], "", suppress_list=["LOCAL_WS_RPC"])
             , max_workers=int(cls.default(args["-j"], 0))
             , chunk_size=int(cls.default(args["--chunk_size"], 100))
             , pred_polling_interval=int(cls.default(args["--pred_polling_interval"], 1000))
             , reserves_db_dsn=cls.default(args["--reserves_db_dsn"], None, suppress_list=["none"])
-            , start_token_address=cls.default(args["--start_token_address"], START_TOKEN, suppress_list=["WBNB"])
+            , start_token_address=cls.default(args["--start_token_address"], "", suppress_list=["WBNB"])
             , max_reserves_snapshot_age_secs=int(args["--max_reserves_snapshot_age_secs"])
             , force_reuse_reserves_snapshot=bool(cls.default(args["--force_reuse_reserves_snapshot"], 0))
             , do_not_update_reserves_from_chain=bool(cls.default(args["--do_not_update_reserves_from_chain"], 0))
@@ -148,7 +149,23 @@ class Runner:
         self.pools = set()
         self.ioloop = get_event_loop()
         self.reserves_latest_blocknr = 0
+        self.align_settings_in_db()
         # self.polling_started = Event()
+
+    def align_settings_in_db(self):
+        with self.db as curs:
+            if not self.args.start_token_address or self.args.start_token_address == START_TOKEN:
+                self.args.start_token_address = curs.get_meta("start_token_address", START_TOKEN)
+            curs.set_meta("start_token_address", self.args.start_token_address)
+            if not self.args.web3_rpc_url:
+                self.args.web3_rpc_url = curs.get_meta("web3_rpc_url", Web3Connector.DEFAULT_URI_WSRPC)
+            curs.set_meta("web3_rpc_url", self.args.web3_rpc_url)
+            if not self.args.pred_polling_interval or self.args.pred_polling_interval == 1000:
+                self.args.pred_polling_interval = curs.get_meta("pred_polling_interval", 1000, cast=int)
+            curs.set_meta("pred_polling_interval", self.args.pred_polling_interval)
+            if not self.args.max_reserves_snapshot_age_secs or self.args.max_reserves_snapshot_age_secs == DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS:
+                self.args.max_reserves_snapshot_age_secs = curs.get_meta("max_reserves_snapshot_age_secs", DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS, cast=int)
+            curs.set_meta("max_reserves_snapshot_age_secs", self.args.max_reserves_snapshot_age_secs)
 
     @property
     def w3(self):
@@ -491,13 +508,20 @@ class Runner:
                         self.log.exception("unexpected swap data. check this out")
                         continue
 
-    async def prediction_polling_task(self):
-        # await self.polling_started.wait()
+    def get_constraints(self):
         constraint = PathEvalutionConstraints()
         constraint.initial_token_wei_balance = self.graph.start_token.toWei(1)
+        return constraint
+
+    async def prediction_polling_task(self, constraint=None):
+        # await self.polling_started.wait()
+        if constraint is None:
+            constraint = self.get_constraints()
         log_set_level(log_level.info)
         self.latestBlockNumber = 0
+        res = []
 
+        self.log.info("entering prediction polling loop...")
         server = Server(self.args.web3_rpc_url)
         try:
             await server.ws_connect()
@@ -507,6 +531,7 @@ class Runner:
                     blockNumber = result["blockNumber"]
                     if blockNumber <= self.latestBlockNumber:
                         continue
+                    self.log.info("prediction results are in for block %r", blockNumber)
                     self.latestBlockNumber = blockNumber
                 except TransportError:
                     # server disconnected
@@ -520,9 +545,16 @@ class Runner:
                     except:
                         self.log.exception("Error during parsing of eth_consPredictLogs() results")
                     try:
-                        self.graph.evaluate_paths_of_interest(constraint)
+                        matches = self.graph.evaluate_paths_of_interest(constraint)
+                        if constraint.match_limit:
+                            for m in matches:
+                                res.append(m)
+                                if len(res) >= constraint.match_limit:
+                                    return res
                     except:
                         self.log.exception("Error during execution of TheGraph::evaluate_paths_of_interest()")
+                    finally:
+                        self.graph.clear_lp_of_interest()
                 finally:
                     # forget about predicted states. go back to normal
                     self.graph.clear_lp_of_interest()
@@ -531,10 +563,11 @@ class Runner:
         except:
             self.log.exception("Error in prediction polling thread")
         finally:
+            self.log.info("prediction polling loop terminated")
             await server.close()
 
-    def poll_prediction(self):
-        self.ioloop.run_until_complete(self.prediction_polling_task())
+    def search_opportunities_by_prediction(self, constraint=None):
+        return self.ioloop.run_until_complete(self.prediction_polling_task(constraint))
 
     def update_pool_reserves_by_tx_sync_log(self, pool, data, curs=None):
         try:
@@ -603,10 +636,85 @@ class Runner:
             raise RuntimeError(msg)
         else:
             self.log.info("start_token is %s (%s)", start_token.symbol, start_token.address)
+            self.graph.start_token = start_token
         self.preload_pools()
         self.graph.calculate_paths()
         self.preload_balances()
-        self.log.info("GRAPH LOAD COMPLETE :-)")
+        self.log.info("  *********************************")
+        self.log.info("  ***  GRAPH LOAD COMPLETE :-)  ***")
+        self.log.info("  *********************************")
+
+    SWAP_CONSTRACT_ADDRESS = '0xE2C2b4DDA45bb4B70D718954148a181d760D515A'
+    SWAP_CONSTRACT_ADDRESS = '0x90aacf2da6AB1f32Ff728F1e6Bdde14a5ed48046' # latest
+    SWAP_CONTRACT_TESTNET = "0x2C5997ed76a0a00F164ddA4F828FFdBdf317bE51"
+
+    SWAP_CONTRACT_ABI = [{'inputs': [{'internalType': 'address[]',
+                            'name': 'tokenPath',
+                            'type': 'address[]'},
+                           {'internalType': 'address', 'name': 'startToken', 'type': 'address'},
+                           {'internalType': 'uint256', 'name': 'initialAmount', 'type': 'uint256'},
+                           {'internalType': 'uint256', 'name': 'minProfit', 'type': 'uint256'}],
+                'name': 'doCakeInternalSwaps',
+                'outputs': [],
+                'stateMutability': 'nonpayable',
+                'type': 'function'}]
+
+    HELLO_WORLD_ADDRESS = "0x0ce0293C0f86392a2726C9189E2c706a13617a33" # Mainnet
+    HELLO_WORLD_TESTNET = "0x9548595672d35578B298BC08E65FE82f92E5A36C" # Testnet
+    HELLO_WORLD_ABI = [{'inputs': [{'internalType': 'uint256', 'name': 'a', 'type': 'uint256'},
+             {'internalType': 'uint256', 'name': 'b', 'type': 'uint256'}],
+              'name': 'add',
+              'outputs': [{'internalType': 'uint256', 'name': '', 'type': 'uint256'}],
+              'stateMutability': 'nonpayable',
+              'type': 'function'},
+             {'inputs': [],
+              'name': 'hello',
+              'outputs': [],
+              'stateMutability': 'nonpayable',
+              'type': 'function'}]
+
+    def costruisci_invocabile_da_path(self, path):
+        wbnb_amount = 0.1
+        min_profit_pct = 1
+        address_vector = [str(self.graph.start_token.address)]
+        for i in range(path.size()):
+            swap = path.get(i)
+            address_vector.append(str(swap.tokenDest.address))
+        self.log.info("address vector is %r", address_vector)
+        initial_amount = int(str(self.graph.start_token.toWei(wbnb_amount)))
+        return self.costruisci_invocabile_da_parametri(address_vector, initial_amount, min_profit_pct)
+
+    def costruisci_invocabile_da_parametri(self, address_vector, initial_amount, min_profit_pct):
+        min_profit = int(initial_amount * (100+min_profit_pct)) // 100
+        contract_instance = self.w3.eth.contract(address=self.SWAP_CONSTRACT_ADDRESS, abi=self.SWAP_CONTRACT_ABI)
+        call = contract_instance.functions.doCakeInternalSwaps(
+            address_vector
+            , address_vector[0]
+            , initial_amount
+            , min_profit
+        )
+        return call
+
+    def chiama_hello_world(self):
+        contract_instance = self.w3.eth.contract(address=self.HELLO_WORLD_ADDRESS, abi=self.HELLO_WORLD_ABI)
+        return contract_instance.functions.hello()
+
+    def chiama_add(self, a, b):
+        contract_instance = self.w3.eth.contract(address=self.HELLO_WORLD_ADDRESS, abi=self.HELLO_WORLD_ABI)
+        return contract_instance.functions.add(a, b)
+
+    ACCOUNT_CREDS = '0xF567a3B93AF6Aa3ef8A084014b2fbc2C17D21A00', "skajhn398abn.SASA" # pkey, password
+
+    def call(self, name, address, abi, *args):
+        contract_instance = self.w3.eth.contract(address=address, abi=get_abi(abi))
+        callable = getattr(contract_instance.functions, name)
+        return callable(*args).call()
+
+    def transact(self, name, address, abi, *args):
+        contract_instance = self.w3.eth.contract(address=address, abi=get_abi(abi))
+        self.w3.geth.personal.unlock_account(*self.ACCOUNT_CREDS, 120)
+        callable = getattr(contract_instance.functions, name)
+        return callable(*args).transact({"from": self.ACCOUNT_CREDS[0]})
 
 
 """
@@ -614,7 +722,7 @@ class Runner:
         import web3
         to_checksum_address()
 address = '0xE2C2b4DDA45bb4B70D718954148a181d760D515A'
-abi = [{'inputs': [{'internalType': 'address[]',
+contracts = [{'inputs': [{'internalType': 'address[]',
         'name': 'tokenPath',
         'type': 'address[]'},
        {'internalType': 'address', 'name': 'startToken', 'type': 'address'},
@@ -633,7 +741,7 @@ def path_to_token_array():
 initial_amount = int(str(constraint.initial_token_wei_balance))
 min_profit = int(initial_amount * 0.01)
 w3 = Web3Connector.get_connection(self.args.web3_rpc_url)
-contract_instance = w3.eth.contract(address=address, abi=abi)
+contract_instance = w3.eth.contract(address=address, contracts=contracts)
 tx_hash = contract_instance.functions.doCakeInternalSwaps(
     tokens
     , str(self.graph.start_token.address)
@@ -654,7 +762,7 @@ def main():
         embed()
     else:
         runner.load()
-        runner.poll_prediction()
+        runner.search_opportunities_by_prediction()
 """
 tokens = ["0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", "0xbB8203e945866A1f3Eced6e5B22679E5A540be91", "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82", "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"]
 constraint = PathEvalutionConstraints()

@@ -28,7 +28,7 @@ CREATE INDEX swap_logs_block_nr_idx ON swap_logs(block_nr);
 CREATE UNIQUE INDEX pool_reserves_pool_idx ON pool_reserves(pool);
 -- we seem to perform a lot of counting and joining upon these columns. I'm adding two indexes:
 CREATE INDEX swap_logs_tokenIn_idx ON swap_logs(tokenIn);
-CREATE INDEX swap_logs_tokenOut_idx ON swap_logs(tokenOut
+CREATE INDEX swap_logs_tokenOut_idx ON swap_logs(tokenOut);
 
 CREATE TABLE reserves_meta (
     key TEXT NOT NULL PRIMARY KEY,

@@ -4,9 +4,8 @@ from logging import getLogger
 from sqlite3 import IntegrityError
 
 from attr import dataclass
-from docopt import docopt
 from glob import glob
-from os.path import realpath, dirname, join, exists, basename
+from os.path import realpath, dirname, join, basename
 
 schemadir = join(dirname(realpath(__file__)), "schema")
 
@@ -198,6 +197,7 @@ class BasicScopedCursor:
 class StatusScopedCursor(BasicScopedCursor):
     MAX_TOKEN_NAME_LEN = 64
     MAX_TOKEN_SYMBOL_LEN = 64
+    META_TABLE = "status_meta"
 
     def add_token(self, address, name=None, ignore_duplicates=False):
         assert self.conn is not None
@@ -211,10 +211,10 @@ class StatusScopedCursor(BasicScopedCursor):
             self.execute("SELECT id FROM tokens WHERE address = ?", (address,))
         return self.get_int()
 
-    def add_exchange(self, name=None, ignore_duplicates=False):
+    def add_exchange(self, router_address, name=None, ignore_duplicates=False):
         assert self.conn is not None
         try:
-            self.execute("INSERT INTO exchanges (name) VALUES (?)", (name,))
+            self.execute("INSERT INTO exchanges (router_address, name) VALUES (?, ?)", (router_address, name,))
             self.execute("SELECT last_insert_rowid()")
         except IntegrityError:
             # already existing
@@ -278,6 +278,29 @@ class StatusScopedCursor(BasicScopedCursor):
                 return
             for i in seq:
                 yield i
+
+    RAISE_ERROR=object()
+
+    def get_meta(self, key, default=RAISE_ERROR, cast=None):
+        try:
+            v = self.execute("SELECT value FROM %s WHERE key = ?" % self.META_TABLE, (key,)).get_one()
+            if cast:
+                v = cast(v)
+            return v
+        except:
+            if default is self.RAISE_ERROR:
+                raise KeyError("missing key in %s: %s" % (self.META_TABLE, key))
+            return default
+
+    def set_meta(self, key, value, cast=str):
+        try:
+            value = cast(value)
+            self.execute("INSERT INTO %s (key, value) VALUES (?, ?)" % self.META_TABLE, (key, value))
+        except IntegrityError:
+            self.execute("UPDATE %s SET value = ? WHERE key = ?" % self.META_TABLE, (value, key))
+
+
+
 
 
 class BalancesScopedCursor(BasicScopedCursor):

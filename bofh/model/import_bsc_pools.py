@@ -1,6 +1,6 @@
 """Import BSC pools from legacy bsc_pools.json datafile.
 
-Usage: bofh.model.import_bsc_pools [options] <bsc_pools_json_file>
+Usage: bofh.model.import_bsc_pools [options] <router_address> <bsc_pools_json_file>
 
 Options:
   -h  --help
@@ -16,7 +16,7 @@ from bofh.model.database import ModelDB, StatusScopedCursor
 import json
 
 
-def import_pools_and_tokens_from_json_coso(filepath, db: ModelDB, ignore_duplicates=False):
+def import_pools_and_tokens_from_json_coso(router_address, filepath, db: ModelDB, ignore_duplicates=False):
     opener = open
     if filepath.endswith(".gz"):
         import gzip
@@ -28,7 +28,7 @@ def import_pools_and_tokens_from_json_coso(filepath, db: ModelDB, ignore_duplica
     with db as curs:
         for k, v in data.items():
             for ex_name, exchange in v.items():
-                exchange_id = curs.add_exchange(ex_name)
+                exchange_id = curs.add_exchange(router_address, ex_name)
                 for pool in exchange["pools"]:
                     token0 = pool["token0"]
                     token1 = pool["token1"]
@@ -61,7 +61,8 @@ def main():
     basicConfig(level=arguments["--verbose"] and "DEBUG" or "INFO")
     db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=arguments["--dsn"])
     db.open_and_priming()
-    import_pools_and_tokens_from_json_coso(arguments["<bsc_pools_json_file>"]
+    import_pools_and_tokens_from_json_coso(arguments["<router_address>"]
+                                           , arguments["<bsc_pools_json_file>"]
                                            , db
                                            , ignore_duplicates=arguments["--skip_duplicates"])
 

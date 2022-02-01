@@ -462,11 +462,6 @@ static void check_constrants_consistency(TheGraph *g, const TheGraph::PathEvalut
 }
 
 
-struct evaluate_path_result {
-    double yieldRatio;
-    const Token *token;
-    balance_t balance;
-};
 
 
 // local functor: returns a string representation of the steps involved
@@ -492,15 +487,15 @@ static std::string log_path_nodes(const pathfinder::Path *path, bool include_add
 static void print_swap_candidate(TheGraph *g
                                  , const TheGraph::PathEvalutionConstraints &c
                                  , const pathfinder::Path *path
-                                 , const evaluate_path_result &r)
+                                 , const TheGraph::PathResult &r)
 {
     log_info("candidate path %s would yield %0.5f%%"
              , log_path_nodes(path).c_str()
-             , (r.yieldRatio-1)*100);
+             , (r.yieldPercent-1)*100);
     log_info(" \\__ initial balance of %1% %2% (%3% Weis) "
              "turned in %4% %5% (%6% Weis)"
-             , g->start_token->fromWei(c.initial_token_wei_balance)
-             , g->start_token->symbol
+             , r.start_token->fromWei(r.initial_balance)
+             , r.start_token->symbol
              , c.initial_token_wei_balance
              , r.token->fromWei(r.balance)
              , r.token->symbol
@@ -514,12 +509,63 @@ static void print_swap_candidate(TheGraph *g
 struct ConstraintViolation {};
 
 
-static evaluate_path_result evaluate_path(TheGraph *g
-                            , const TheGraph::PathEvalutionConstraints &c
-                            , const pathfinder::Path *path)
+
+TheGraph::PathResultList TheGraph::debug_evaluate_known_paths(const PathEvalutionConstraints &c)
+{
+    lock_guard_t lock_guard(m_update_mutex);
+    struct LimitReached {};
+    TheGraph::PathResultList res;
+
+    check_constrants_consistency(this, c);
+
+    unsigned int ctr = 0;
+    unsigned int matches = 0;
+    for (auto path: paths_index->holder) try
+    {
+        // @note: loop body is a try block
+
+        auto r = evaluate_path(c, path);
+        assert(r.token != nullptr);
+
+        matches++;
+        print_swap_candidate(this, c, path, r);
+        res.emplace_back(r);
+
+        if (c.match_limit > 0 && matches >= c.match_limit)
+        {
+            log_trace("match limit reached (%1%)"
+                      , c.match_limit);
+            throw LimitReached();
+        }
+
+    }
+    catch (ConstraintViolation&) { continue; }
+    catch (LimitReached &) { break; }
+
+    return res;
+}
+
+void TheGraph::add_lp_of_interest(const LiquidityPool *pool)
+{
+    lock_guard_t lock_guard(m_update_mutex);
+    lp_of_interest.emplace(const_cast<LiquidityPool*>(pool));
+}
+
+void TheGraph::clear_lp_of_interest()
+{
+    lock_guard_t lock_guard(m_update_mutex);
+    for (auto pool: lp_of_interest)
+    {
+        pool->leave_predicted_state(true);
+    }
+    lp_of_interest.clear();
+}
+
+TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
+                                             , const pathfinder::Path *path) const
 {
     balance_t    balance = c.initial_token_wei_balance;
-    const Token *token   = g->start_token;
+    const Token *token   = start_token;
 
     log_trace("evaluating path %1%", log_path_nodes(path, true));
 
@@ -559,11 +605,11 @@ static evaluate_path_result evaluate_path(TheGraph *g
 
 
     }
-    if (token != g->start_token)
+    if (token != start_token)
     {
         log_error("BROKEN SWAP: it's not circular. start_token is %1%,"
                   " terminal token is %2%"
-                  , g->start_token->symbol
+                  , start_token->symbol
                   , token->symbol);
 
         throw ConstraintViolation();
@@ -611,63 +657,22 @@ static evaluate_path_result evaluate_path(TheGraph *g
         throw ConstraintViolation();
     }
 
-    assert(token == g->start_token);
+    assert(token == start_token);
 
-    return evaluate_path_result{yieldRatio, token, balance};
+    return TheGraph::PathResult{
+                path
+                , path->get(0)->tokenSrc
+                , c.initial_token_wei_balance
+                , token
+                , balance
+                , yieldRatio};
 }
 
-void TheGraph::debug_evaluate_known_paths(const PathEvalutionConstraints &c)
-{
-    lock_guard_t lock_guard(m_update_mutex);
-    struct LimitReached {};
-
-    check_constrants_consistency(this, c);
-
-    unsigned int ctr = 0;
-    unsigned int matches = 0;
-    for (auto path: paths_index->holder) try
-    {
-        // @note: loop body is a try block
-
-        auto r = evaluate_path(this, c, path);
-        assert(r.token != nullptr);
-
-        matches++;
-        print_swap_candidate(this, c, path, r);
-
-        if (c.match_limit > 0 && matches >= c.match_limit)
-        {
-            log_trace("match limit reached (%1%)"
-                      , c.match_limit);
-            throw LimitReached();
-        }
-
-    }
-    catch (ConstraintViolation&) { continue; }
-    catch (LimitReached &) { break; }
-
-}
-
-void TheGraph::add_lp_of_interest(const LiquidityPool *pool)
-{
-    lock_guard_t lock_guard(m_update_mutex);
-    lp_of_interest.emplace(const_cast<LiquidityPool*>(pool));
-}
-
-void TheGraph::clear_lp_of_interest()
-{
-    lock_guard_t lock_guard(m_update_mutex);
-    for (auto pool: lp_of_interest)
-    {
-        pool->leave_predicted_state(true);
-    }
-    lp_of_interest.clear();
-}
-
-void TheGraph::evaluate_paths_of_interest(const PathEvalutionConstraints &c)
+TheGraph::PathResultList TheGraph::evaluate_paths_of_interest(const PathEvalutionConstraints &c)
 {
     lock_guard_t lock_guard(m_update_mutex);
     check_constrants_consistency(this, c);
+    TheGraph::PathResultList res;
 
     for (auto pool: lp_of_interest)
     {
@@ -675,16 +680,16 @@ void TheGraph::evaluate_paths_of_interest(const PathEvalutionConstraints &c)
         for (auto i = r.first; i != r.second; i++)
         {
             try {
-            auto r = evaluate_path(this, c, i->second);
-            assert(r.token != nullptr);
-            print_swap_candidate(this, c, i->second, r);
-
+                const pathfinder::Path *path = i->second;
+                auto r = evaluate_path(c, path);
+                assert(r.token != nullptr);
+                print_swap_candidate(this, c, path, r);
+                res.emplace_back(r);
             } catch (ConstraintViolation&) { continue; }
 
         }
-        pool->leave_predicted_state(true);
     }
-
+    return res;
 }
 
 
