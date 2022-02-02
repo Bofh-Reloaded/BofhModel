@@ -646,7 +646,7 @@ class Runner:
 
     SWAP_CONSTRACT_ADDRESS = '0xE2C2b4DDA45bb4B70D718954148a181d760D515A'
     SWAP_CONSTRACT_ADDRESS = '0x90aacf2da6AB1f32Ff728F1e6Bdde14a5ed48046' # latest
-    SWAP_CONTRACT_TESTNET = "0x2C5997ed76a0a00F164ddA4F828FFdBdf317bE51"
+    SWAP_CONTRACT_TESTNET = "0x2156749DE47e4f55C0da8A2e01c081FBCf174e81"
 
     SWAP_CONTRACT_ABI = [{'inputs': [{'internalType': 'address[]',
                             'name': 'tokenPath',
@@ -716,6 +716,9 @@ class Runner:
         callable = getattr(contract_instance.functions, name)
         return callable(*args).transact({"from": self.ACCOUNT_CREDS[0]})
 
+    def approva_fondi_al_contratto(self, token_addr, contract_addr, amount):
+        self.transact("approve", token_addr, "IGenericFungibleToken",
+                        contract_addr, amount)
 
 """
     def chiamaIlCoso(self, tokens, constraint):
