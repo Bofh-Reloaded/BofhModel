@@ -103,6 +103,8 @@ class Runner:
         self.args = args
         self.db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=self.args.status_db_dsn)
         self.db.open_and_priming()
+        self.pools_cache = dict()  # addr->db_id
+        self.tokens_cache = dict()  # addr->db_id
 
     @property
     def w3(self):
@@ -112,9 +114,17 @@ class Runner:
             self.__w3 = Web3Connector.get_connection(self.args.web3_rpc_url)
         return self.__w3
 
+    def preload_existing_from_db(self):
+        with self.db as curs:
+            for id, addr in curs.execute("SELECT id, address FROM tokens").get_all():
+                self.tokens_cache[addr] = id
+            self.log.info("%u tokens preloaded from db", len(self.tokens_cache))
+            for id, addr in curs.execute("SELECT id, address FROM pools").get_all():
+                self.pools_cache[addr] = id
+            self.log.info("%u pools preloaded from db", len(self.pools_cache))
+
     def __call__(self):
         with self.db as curs:
-            tokens_addr_to_id = dict()
             exchange_id = curs.add_exchange(self.args.router_address, self.args.exchange_name, ignore_duplicates=True)
             self.log.info("reaching out to router at address %s", self.args.router_address)
             router = self.w3.eth.contract(address=self.args.router_address, abi=get_abi("IGenericRouter"))
@@ -134,23 +144,26 @@ class Runner:
                         for i in range(pairs_nr):
                             yield factory_addr, i
                     for pair_idx, pair_address in executor1.map(getPair, args(), chunksize=executor1.max_workers*100):
+                        if progress():
+                            self.db.commit()
+                        if pair_address in self.pools_cache:
+                            continue
                         res = executor2.submit(getTokens, pair_idx, pair_address).result()
                         if not res:
                             continue
                         pool_id, pool_addr, token0, token1 = res
-                        tid0 = tokens_addr_to_id.get(token0)
+                        tid0 = self.tokens_cache.get(token0)
                         if tid0 is None:
-                            tid0 = tokens_addr_to_id[token0] = curs.add_token(token0, ignore_duplicates=True)
-                        tid1 = tokens_addr_to_id.get(token1)
+                            tid0 = self.tokens_cache[token0] = curs.add_token(token0, ignore_duplicates=True)
+                        tid1 = self.tokens_cache.get(token1)
                         if tid1 is None:
-                            tid1 = tokens_addr_to_id[token1] = curs.add_token(token1, ignore_duplicates=True)
-                        curs.add_swap(address=pool_addr
-                                      , exchange_id=exchange_id
-                                      , token0_id=tid0
-                                      , token1_id=tid1
-                                      , ignore_duplicates=True)
-                        if progress():
-                            self.db.commit()
+                            tid1 = self.tokens_cache[token1] = curs.add_token(token1, ignore_duplicates=True)
+                        pid = curs.add_swap(address=pool_addr
+                                            , exchange_id=exchange_id
+                                            , token0_id=tid0
+                                            , token1_id=tid1
+                                            , ignore_duplicates=True)
+                        self.pools_cache[pool_addr] = pid
                     executor1.shutdown()
                     executor2.shutdown()
 
@@ -161,6 +174,7 @@ def main():
     basicConfig(level="INFO")
     args = Args.from_cmdline(__doc__)
     runner = Runner(args)
+    runner.preload_existing_from_db()
     runner()
 
 

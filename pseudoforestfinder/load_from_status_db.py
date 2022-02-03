@@ -60,13 +60,18 @@ class IdealPool:
                 self.reserve0 = tokenInReserveBefore + tokenInNecessaryAmount
         return tokenInNecessaryAmount
 
+class Cached:
+    status_db_fpath=None
 
 def load_graph_from_db_directory(dp_dump_directory=None):
-    while not dp_dump_directory or not isdir(dp_dump_directory) or not isfile(join(dp_dump_directory, STATUS_DB)):
-        dp_dump_directory = input("Enter DB directory (expected files: status.db and prediction_swaps.db) > ")
+    status_db = Cached.status_db_fpath
+    if not status_db:
+        while not dp_dump_directory or not isdir(dp_dump_directory) or not isfile(join(dp_dump_directory, STATUS_DB)):
+            dp_dump_directory = input("Enter DB directory (expected files: status.db and prediction_swaps.db) > ")
 
-    # 1. open the thing, list all tokens and all swaps
-    status_db = join(dp_dump_directory, STATUS_DB)
+        # 1. open the thing, list all tokens and all swaps
+        status_db = join(dp_dump_directory, STATUS_DB)
+        Cached.status_db_fpath = status_db
     conn = sqlite3.connect(status_db)
     curs = conn.cursor()
     G = nx.MultiDiGraph()
@@ -142,6 +147,48 @@ def load_predicted_swap_events(dp_dump_directory=None, start_from_blocknr=0):
         rec = curs.fetchone()
         if not rec: break
         yield dict(tokenIn=rec[0], tokenOut=rec[1], balanceIn=int(rec[2]), balanceOut=int(rec[3]))
+
+def get_start_node_id(dp_dump_directory=None):
+    status_db = Cached.status_db_fpath
+    if not status_db:
+        while not dp_dump_directory or not isdir(dp_dump_directory) or not isfile(join(dp_dump_directory, STATUS_DB)):
+            dp_dump_directory = input("Enter DB directory (expected files: status.db and prediction_swaps.db) > ")
+
+        # 1. open the thing, list all tokens and all swaps
+        status_db = join(dp_dump_directory, STATUS_DB)
+        Cached.status_db_fpath = status_db
+    conn = sqlite3.connect(status_db)
+    curs = conn.cursor()
+    curs.execute(f"select id from tokens where address in (select value from status_meta where key = 'start_token_address')")
+    res = None
+    for i in curs.fetchone():
+        res = i
+    conn.close()
+    if not isinstance(res, int):
+        raise RuntimeError("start_token_address not saved in db")
+    return res
+
+def get_stable_nodes_id(dp_dump_directory=None):
+    status_db = Cached.status_db_fpath
+    if not status_db:
+        while not dp_dump_directory or not isdir(dp_dump_directory) or not isfile(join(dp_dump_directory, STATUS_DB)):
+            dp_dump_directory = input("Enter DB directory (expected files: status.db and prediction_swaps.db) > ")
+
+        # 1. open the thing, list all tokens and all swaps
+        status_db = join(dp_dump_directory, STATUS_DB)
+        Cached.status_db_fpath = status_db
+    conn = sqlite3.connect(status_db)
+    curs = conn.cursor()
+    curs.execute(f"select id from tokens where is_stabletoken")
+    res = []
+    while True:
+        rec = curs.fetchone()
+        if not rec: break
+        res.append(rec[0])
+    conn.close()
+    if not res:
+        raise RuntimeError("stable_tokens not saved in db")
+    return res
 
 
 if __name__ == '__main__':

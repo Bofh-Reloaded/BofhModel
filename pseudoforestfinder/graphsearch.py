@@ -11,7 +11,7 @@ Spyder Editor
 
 #the_graph = load_graph_from_json_coso()
 import sys
-from load_from_status_db import load_graph_from_db_directory
+from load_from_status_db import load_graph_from_db_directory, get_start_node_id, get_stable_nodes_id
 from load_from_status_db import load_predicted_swap_events
 
 the_graph = load_graph_from_db_directory("./dbswap/dbswap")
@@ -188,8 +188,19 @@ print("number of nodes: ", G.number_of_nodes())
 print("number of edges: ", G.number_of_edges())
 
 #stable_nodes = [i for i in range(1, 626199)]    
-stable_nodes = [420608,4, 377192, 2, 5, 258, 489332, 451609, 611173, 604407, 538538, 623880, 374437, 3, 13, 515506, 31, 34, 29]
-start_node = 2
+start_node = get_start_node_id()
+stable_nodes = get_stable_nodes_id()
+try:
+    start_node = get_start_node_id()
+    stable_nodes = get_stable_nodes_id()
+    print("using db start_node", start_node)
+    print("using db stable_nodes", stable_nodes)
+except:
+    stable_nodes = [420608, 4, 377192, 2, 5, 258, 489332, 451609, 611173, 604407, 538538, 623880, 374437, 3, 13, 515506,
+                    31, 34, 29]
+    start_node = 2
+    print("using hardwired start_node", start_node)
+    print("using hardwired stable_nodes", stable_nodes)
 #print("List of predecessors is", set(G.predecessors(1)))
 #print(nx.is_directed(G))
 #nx.draw(the_graph, pos=nx.circular_layout(the_graph), node_color='r', edge_color='b') #draw graph 
