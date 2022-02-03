@@ -1,11 +1,12 @@
 from asyncio import get_event_loop
+from concurrent.futures import Future
 
 from jsonrpc_base import ProtocolError
 
 from bofh.utils.misc import progress_printer, optimal_cpu_threads
 from bofh.utils.solidity import get_abi
 from bofh.utils.web3 import Web3Connector, JSONRPCConnector, method_id, encode_uint, Web3PoolExecutor, \
-    parse_data_address
+    parse_data_address, parse_data_parameters
 
 __doc__="""Start model runner.
 
@@ -15,6 +16,7 @@ Options:
   -h  --help
   -d, --dsn=<connection_str>            DB dsn connection string [default: sqlite3://status.db]
   -c, --connection_url=<url>            Web3 RPC connection URL [default: %s]
+  --reserves                            download/refresh reserves
   -j <n>                                number of RPC data ingest workers, default one per hardware thread [default: %u]
   -v, --verbose                         debug output
 """ % (Web3Connector.DEFAULT_URI_WSRPC, optimal_cpu_threads())
@@ -31,6 +33,7 @@ class Args:
     status_db_dsn: str = None
     verbose: bool = False
     web3_rpc_url: str = None
+    reserves: bool = False
     max_workers: int = 0
     exchange_name: str = None
     router_address: str = None
@@ -50,49 +53,64 @@ class Args:
             status_db_dsn = args["--dsn"]
             , verbose=bool(cls.default(args["--verbose"], 0))
             , web3_rpc_url=cls.default(args["--connection_url"], 0)
+            , reserves=bool(cls.default(args["--reserves"], 0))
             , max_workers=int(cls.default(args["-j"], 0))
             , exchange_name=args["<exchange_name>"]
             , router_address=args["<router_address>"]
         )
 
 
-def getPair(args):
-    factory_address, pair_idx = args
-    try:
-        exe = getPair.exe
-        ioloop = getPair.ioloop
-        mid = getPair.mid
-    except AttributeError:
-        exe = getPair.exe = JSONRPCConnector.get_connection()
-        ioloop = getPair.ioloop = get_event_loop()
-        mid = getPair.mid = method_id("allPairs(uint256)")
-    for i in range(4):  # make two attempts
-        data = mid+encode_uint(pair_idx)
-        fut = exe.eth_call({"to": factory_address, "data": data}, "latest")
-        res = ioloop.run_until_complete(fut)
-        return pair_idx, parse_data_address(res)
+class RPCtasks:
+    def __init__(self):
+        self.exe = JSONRPCConnector.get_connection()
+        self.ioloop = get_event_loop()
+        self.mid_getPair = method_id("allPairs(uint256)")
+        self.mid_t0 = method_id("token0()")
+        self.mid_t1 = method_id("token1()")
+        self.mid_getReserves = method_id("getReserves()")
 
+    def getPair(self, factory_address, pair_idx): # returns pool_addr
+        data = self.mid_getPair+encode_uint(pair_idx)
+        fut = self.exe.eth_call({"to": factory_address, "data": data}, "latest")
+        res = self.ioloop.run_until_complete(fut)
+        return parse_data_address(res)
 
-def getTokens(pool_id, pool_addr):
-    try:
-        exe = getPair.exe
-        ioloop = getPair.ioloop
-        t0 = getPair.t0
-        t1 = getPair.t1
-    except AttributeError:
-        exe = getPair.exe = JSONRPCConnector.get_connection()
-        ioloop = getPair.ioloop = get_event_loop()
-        t0 = getPair.t0 = method_id("token0()")
-        t1 = getPair.t1 = method_id("token0()")
-    for i in range(4):  # make two attempts
+    def getTokens(self, pool_addr):  # returns pool_id, pool_addr, token0addr, token1addr
+        fut = self.exe.eth_call({"to": pool_addr, "data": self.mid_t0}, "latest")
+        res0 = self.ioloop.run_until_complete(fut)
+        fut = self.exe.eth_call({"to": pool_addr, "data": self.mid_t1}, "latest")
+        res1 = self.ioloop.run_until_complete(fut)
+        return pool_addr, parse_data_address(res0), parse_data_address(res1)
+
+    def getReserves(self, pool_id, pool_addr):  # returns pool_id, reserve0, reserve1, latestBlockNr
+        fut = self.exe.eth_call({"to": pool_addr, "data": self.mid_getReserves}, "latest")
+        res3 = self.ioloop.run_until_complete(fut)
+        reserve0, reserve1, lastblockN = parse_data_parameters(res3)
+        return pool_id, reserve0, reserve1, lastblockN
+
+    @classmethod
+    def instance(cls):
         try:
-            fut = exe.eth_call({"to": pool_addr, "data": t0}, "latest")
-            res0 = ioloop.run_until_complete(fut)
-            fut = exe.eth_call({"to": pool_addr, "data": t1}, "latest")
-            res1 = ioloop.run_until_complete(fut)
-            return pool_id, pool_addr, parse_data_address(res0), parse_data_address(res1)
+            return cls._instance
+        except AttributeError:
+            cls._instance = cls()
+        return cls._instance
+
+
+def do_work(a):
+    factory_address, pool_id, get_reserves = a
+    for i in range(4):  # try multiple times
+        try:
+            rpc = RPCtasks.instance()
+            pool_addr = rpc.getPair(factory_address, pool_id)
+            _, token0, token1 = rpc.getTokens(pool_addr)
+            if get_reserves:
+                _, reserve0, reserve1, blocknr = rpc.getReserves(pool_id, pool_addr)
+            else:
+                reserve0, reserve1, blocknr = None, None
+            return pool_id, pool_addr, token0, token1, reserve0, reserve1, blocknr
         except ProtocolError:
-            return None
+            pass
 
 
 
@@ -105,6 +123,7 @@ class Runner:
         self.db.open_and_priming()
         self.pools_cache = dict()  # addr->db_id
         self.tokens_cache = dict()  # addr->db_id
+        self.latest_blocknr = 0
 
     @property
     def w3(self):
@@ -134,40 +153,47 @@ class Runner:
             factory = self.w3.eth.contract(address=factory_addr, abi=get_abi("IGenericFactory"))
             pairs_nr = factory.functions.allPairsLength().call()
             self.log.info("according to factory, %r pairs exist", pairs_nr)
+
             with progress_printer(pairs_nr, "downloading pairs {percent}% ({count} of {tot}"
                                             " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
                                             , on_same_line=True) as progress:
-                with Web3PoolExecutor(connection_uri=self.args.web3_rpc_url, max_workers=self.args.max_workers) as executor1, \
-                        Web3PoolExecutor(connection_uri=self.args.web3_rpc_url, max_workers=self.args.max_workers) as executor2 \
-                        :
-                    def args():
+                with Web3PoolExecutor(
+                        connection_uri=self.args.web3_rpc_url
+                        , max_workers=self.args.max_workers) as executor:
+                    def sequence():
                         for i in range(pairs_nr):
-                            yield factory_addr, i
-                    for pair_idx, pair_address in executor1.map(getPair, args(), chunksize=executor1.max_workers*100):
+                            yield factory_addr, i, self.args.reserves
+                    for res in executor.map(do_work, sequence(), chunksize=100):
                         if progress():
                             self.db.commit()
-                        if pair_address in self.pools_cache:
-                            continue
-                        res = executor2.submit(getTokens, pair_idx, pair_address).result()
                         if not res:
+                            # the call failed
                             continue
-                        pool_id, pool_addr, token0, token1 = res
-                        tid0 = self.tokens_cache.get(token0)
-                        if tid0 is None:
-                            tid0 = self.tokens_cache[token0] = curs.add_token(token0, ignore_duplicates=True)
-                        tid1 = self.tokens_cache.get(token1)
-                        if tid1 is None:
-                            tid1 = self.tokens_cache[token1] = curs.add_token(token1, ignore_duplicates=True)
-                        pid = curs.add_swap(address=pool_addr
-                                            , exchange_id=exchange_id
-                                            , token0_id=tid0
-                                            , token1_id=tid1
-                                            , ignore_duplicates=True)
-                        self.pools_cache[pool_addr] = pid
-                    executor1.shutdown()
-                    executor2.shutdown()
+                        pool_id, pool_addr, token0, token1, reserve0, reserve1, blocknr = res
+                        pid = self.pools_cache.get(pool_addr)
+                        if pid is None:
+                            if token0 == token1:
+                                self.log.warning("pool %s appears to be circular on token %s: skipped", pool_addr,
+                                                 token0)
+                                continue
+                            tid0 = self.tokens_cache.get(token0)
+                            if tid0 is None:
+                                tid0 = self.tokens_cache[token0] = curs.add_token(token0, ignore_duplicates=True)
+                            tid1 = self.tokens_cache.get(token1)
+                            if tid1 is None:
+                                tid1 = self.tokens_cache[token1] = curs.add_token(token1, ignore_duplicates=True)
+                            pid = curs.add_swap(address=pool_addr
+                                                , exchange_id=exchange_id
+                                                , token0_id=tid0
+                                                , token1_id=tid1
+                                                , ignore_duplicates=True)
+                            self.pools_cache[pool_addr] = pid
+                        if reserve0 and reserve1 and blocknr:
+                            curs.add_pool_reserve(pid, reserve0, reserve1)
+                            if blocknr > self.latest_blocknr:
+                                self.latest_blocknr = blocknr
 
-
+            curs.reserves_block_number = self.latest_blocknr
 
 
 def main():

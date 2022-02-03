@@ -27,7 +27,6 @@ Options:
   -v, --verbose                         debug output
   --chunk_size=<n>                      preloaded work chunk size per each worker [default: 100]
   --pred_polling_interval=<n>           Web3 prediction polling internal in millisecs [default: 1000]
-  --reserves_db_dsn=<connection_str>    liquidity pools reserves DB dsn connection string [default: sqlite3://reserves.db]
   --start_token_address=<address>       on-chain address of start token [default: WBNB]
   --max_reserves_snapshot_age_secs=<s>  max age of usable LP reserves DB snapshot (refuses to preload from DB if older) [default: %r]
   --force_reuse_reserves_snapshot       disregard --max_reserves_snapshot_age_secs (use for debug purposes, avoids download of reserves)       
@@ -58,7 +57,6 @@ class Args:
     max_workers: int = 0
     chunk_size: int = 0
     pred_polling_interval: int = 0
-    reserves_db_dsn: str = None
     start_token_address: str = None
     max_reserves_snapshot_age_secs: int = 0
     force_reuse_reserves_snapshot: bool = False
@@ -84,7 +82,6 @@ class Args:
             , max_workers=int(cls.default(args["-j"], 0))
             , chunk_size=int(cls.default(args["--chunk_size"], 100))
             , pred_polling_interval=int(cls.default(args["--pred_polling_interval"], 1000))
-            , reserves_db_dsn=cls.default(args["--reserves_db_dsn"], None, suppress_list=["none"])
             , start_token_address=cls.default(args["--start_token_address"], "", suppress_list=["WBNB"])
             , max_reserves_snapshot_age_secs=int(args["--max_reserves_snapshot_age_secs"])
             , force_reuse_reserves_snapshot=bool(cls.default(args["--force_reuse_reserves_snapshot"], 0))
@@ -140,15 +137,8 @@ class Runner:
         self.args = args
         self.db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=self.args.status_db_dsn)
         self.db.open_and_priming()
-        self.reserves_db = None
-        if self.args.reserves_db_dsn:
-            self.reserves_db = ModelDB(schema_name="reserves"
-                                       , cursor_factory=BalancesScopedCursor
-                                       , db_dsn=self.args.reserves_db_dsn)
-            self.reserves_db.open_and_priming()
         self.pools = set()
         self.ioloop = get_event_loop()
-        self.reserves_latest_blocknr = 0
         self.align_settings_in_db()
         # self.polling_started = Event()
 
@@ -273,46 +263,35 @@ class Runner:
                       , self.args.max_workers
                       , self.args.chunk_size
                       )
-            curs = None
-            if self.reserves_db:
-                curs = self.reserves_db.cursor()
-            try:
-                currentBlockNr = self.w3.eth.block_number
-                def pool_addresses_iter():
-                    for p in self.pools:
-                        yield str(p.address)
-                for pool_addr, reserve0, reserve1, blockTimestampLast in executor.map(getReserves, pool_addresses_iter(), chunksize=self.args.chunk_size):
-                    try:
-                        if reserve0 is None or reserve1 is None:
-                            continue
-                        pair = self.graph.lookup_lp(pool_addr)
-                        if not pair:
-                            raise IndexError("unknown pool: %s" % pool_addr)
-                        # reset pool reserves
-                        pair.setReserves(reserve0, reserve1)
-                        if curs:
+            with self.db as curs:
+                try:
+                    currentBlockNr = self.w3.eth.block_number
+                    def pool_addresses_iter():
+                        for p in self.pools:
+                            yield str(p.address)
+                    for pool_addr, reserve0, reserve1, blockTimestampLast in executor.map(getReserves, pool_addresses_iter(), chunksize=self.args.chunk_size):
+                        try:
+                            if reserve0 is None or reserve1 is None:
+                                continue
+                            pair = self.graph.lookup_lp(pool_addr)
+                            if not pair:
+                                raise IndexError("unknown pool: %s" % pool_addr)
+                            # reset pool reserves
+                            pair.setReserves(reserve0, reserve1)
                             pool = self.graph.lookup_lp(pool_addr)
                             assert pool
                             curs.add_pool_reserve(pool.tag, reserve0, reserve1)
-                        print_progress()
-                    except:
-                        self.log.exception("unable to query pool %s", pool_addr)
-                if curs:
-                    # update most-recent blocknr in db
-                    curs.latest_blocknr = currentBlockNr
-            finally:
-                if self.reserves_db:
-                    self.reserves_db.commit()
-                self.reserves_latest_blocknr = currentBlockNr
+                            print_progress()
+                        except:
+                            self.log.exception("unable to query pool %s", pool_addr)
+                        curs.reserves_block_number = currentBlockNr
+                finally:
+                    curs.reserves_block_number = currentBlockNr
             executor.shutdown(wait=True)
 
     def preload_balances_from_db(self):
-        if not self.reserves_db:
-            self.log.warning("unable to preload reserves from DB (no database specified. "
-                             "Please use --reserves_db_dsn=<dsn>)")
-            return
-        with self.reserves_db as curs:
-            latest_blocknr = curs.latest_blocknr
+        with self.db as curs:
+            latest_blocknr = curs.reserves_block_number
             current_blocknr = self.w3.eth.block_number
             age = current_blocknr-latest_blocknr
             if not latest_blocknr or age < 0:
@@ -340,7 +319,7 @@ class Runner:
 
                 ok = 0
                 disc = 0
-                for poolid, reserve0, reserve1 in curs.execute("SELECT pool, reserve0, reserve1 FROM pool_reserves").get_all():
+                for poolid, reserve0, reserve1 in curs.execute("SELECT id, reserve0, reserve1 FROM reserves").get_all():
                     pool = self.graph.lookup_lp(poolid)
                     print_progress()
                     if not pool:
@@ -352,7 +331,6 @@ class Runner:
                     ok += 1
                 self.log.info("%r records read, reserves loaded for %r pools, %r discarded"
                               , print_progress.ctr, ok, disc)
-            self.reserves_latest_blocknr = latest_blocknr
             return True
 
     def reserves_parse_blocknr(self, blocknr):
@@ -363,150 +341,51 @@ class Runner:
         if not txs:
             return
 
-        curs = None
-        if self.reserves_db:
-            curs = self.reserves_db.cursor()
-        try:
-            for txh in txs:
-                txr = self.w3.eth.get_transaction_receipt(txh)
-                if not txr:
-                    continue
-                logs = txr.get("logs")
-                if not logs:
-                    continue
-                for log in logs:
-                    topics = log.get("topics")
-                    address = log.get("address")
-                    if address and topics and topics[0] == PREDICTION_LOG_TOPIC0_SYNC:
-                        pool = self.graph.lookup_lp(address)
-                        if not pool:
-                            continue
-                        self.update_pool_reserves_by_tx_sync_log(pool, log["data"], curs)
-            if self.reserves_db:
-                self.reserves_db.commit()
-        except:
-            if self.reserves_db:
-                self.reserves_db.rollback()
-            raise
+        with self.db as curs:
+            try:
+                for txh in txs:
+                    txr = self.w3.eth.get_transaction_receipt(txh)
+                    if not txr:
+                        continue
+                    logs = txr.get("logs")
+                    if not logs:
+                        continue
+                    for log in logs:
+                        topics = log.get("topics")
+                        address = log.get("address")
+                        if address and topics and topics[0] == PREDICTION_LOG_TOPIC0_SYNC:
+                            pool = self.graph.lookup_lp(address)
+                            if not pool:
+                                continue
+                            self.update_pool_reserves_by_tx_sync_log(pool, log["data"], curs)
+            except:
+                self.db.rollback()
+                raise
 
     def update_balances_from_web3(self):
         per_thread_queue_size = self.args.max_workers * 10
         current_block = self.w3.eth.block_number
-        nr = current_block - self.reserves_latest_blocknr
-        with progress_printer(nr, "rolling forward pool reserves {percent}% ({count} of {tot}"
-                                  " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
-                                  , on_same_line=True) as print_progress:
-            while True:
-                current_block = self.w3.eth.block_number
-                nr = current_block - self.reserves_latest_blocknr
-                print_progress.tot = nr
-                if nr <= 0:
-                    self.log.info("LP balances updated to current block (%u)", current_block)
-                    break
-                target = min(self.reserves_latest_blocknr+per_thread_queue_size, current_block+1)
-                with ThreadPoolExecutor(max_workers=self.args.max_workers) as executor:
-                    for next_block in range(self.reserves_latest_blocknr, target):
-                        self.log.debug("loading reserves from block %r ... ", next_block)
-                        print_progress()
-                        executor.submit(self.reserves_parse_blocknr, next_block)
-                    executor.shutdown()
-                    self.reserves_latest_blocknr = next_block
-                    with self.reserves_db as curs:
-                        curs.latest_blocknr = next_block
-
-    def __serve_eth_consPredictLogs(self, result):
-        if result and result.get("logs"):
-            blockNumber = result["blockNumber"]
-            if blockNumber > self.latestBlockNumber:
-                self.latestBlockNumber = blockNumber
-                self.log.info("block %r, found %r log predictions" % (self.latestBlockNumber, len(result["logs"])))
-                for log in result["logs"]:
-                    pool_addr = log["address"]
-                    if not pool_addr:
-                        continue
-                    pool = self.graph.lookup_lp(pool_addr)
-                    if not pool:
-                        if self.args.verbose:
-                            self.log.info("unknown pool of interest: %s", pool_addr)
-                        continue
-                    self.log.info("pool of interest: %s", pool_addr)
-                    continue
-                    try:
-                        amount0In, amount1In, amount0Out, amount1Out = parse_data_parameters(log["data"])
-                    except:
-                        self.log.exception("unable to decode swap log data")
-                        continue
-                    try:
-                        if amount0In > 0 and amount1In > 0:
-                            raise RuntimeError("inconsistent swap. Should not be possible: "
-                                               "amount0In > 0 and amount1In > 0 (%r, %r)" %
-                                               (amount0In, amount1In))
-                        if amount0Out > 0 and amount1Out > 0:
-                            raise RuntimeError(
-                                "inconsistent swap. Should not be possible: amount0Out > 0 and amount1Out > 0 (%r, %r)" %
-                                (amount0Out, amount1Out))
-                        checks_out = False
-                        if amount0In > 0:
-                            if amount1Out == 0:
-                                raise RuntimeError(
-                                    "inconsistent swap. amount0In > 0 but amount1Out == 0 (%r, %r)" %
-                                    (amount0In, amount1Out))
-                            tokenIn = pool.token0
-                            tokenOut = pool.token1
-                            balanceIn = amount0In
-                            balanceOut = amount1Out
-                            reserveInBefore = int(str(pool.reserve0))
-                            reserveOutBefore = int(str(pool.reserve1))
-                            checks_out = True
-
-                        if amount1In > 0:
-                            if amount0Out == 0:
-                                raise RuntimeError(
-                                    "inconsistent swap. amount1In > 0 but amount0Out == 0 (%r, %r)" %
-                                    (amount1In, amount0Out))
-                            tokenIn = pool.token1
-                            tokenOut = pool.token0
-                            balanceIn = amount1In
-                            balanceOut = amount0Out
-                            reserveInBefore = int(str(pool.reserve1))
-                            reserveOutBefore = int(str(pool.reserve0))
-                            checks_out = True
-                        if checks_out:
-                            reserveInAfter = reserveInBefore + balanceIn
-                            reserveOutAfter = reserveOutBefore - balanceOut
-                            reserveInPctGain = (100 * balanceIn) / reserveInBefore
-                            reserveOutPctLoss = (100 * balanceOut) / reserveOutBefore
-                            rate = balanceOut / balanceIn
-                            self.log.info("pool %s swaps %r %s toward %r %s, "
-                                          "effective %s/%s swap rate is %02.05f, "
-                                          "reserves changed from %r/%r to %r/%r, "
-                                          "this swap affects %02.10f%% of the stored liquidity"
-                                          , pool_addr, balanceIn, tokenIn.address, balanceOut, tokenOut.address
-                                          , tokenIn.address, tokenOut.address, rate
-                                          , reserveInBefore, reserveOutBefore, reserveInAfter, reserveOutAfter
-                                          , reserveInPctGain)
-                            if self.reserves_db:
-                                with self.reserves_db as curs:
-                                    curs.add_swap_log(
-                                        block_nr=self.latestBlockNumber
-                                        , json_data=log
-                                        , pool_id=pool.tag
-                                        , tokenIn=tokenIn.tag
-                                        , tokenOut=tokenIn.tag
-                                        , poolAddr=str(pool.address)
-                                        , tokenInAddr=str(tokenIn.address)
-                                        , tokenOutAddr=str(tokenOut.address)
-                                        , balanceIn=balanceIn
-                                        , balanceOut=balanceOut
-                                        , reserveInBefore=reserveInBefore
-                                        , reserveOutBefore=reserveOutBefore
-                                    )
-                        else:
-                            self.log.warning("swap parameters don't check out. ignored")
-
-                    except:
-                        self.log.exception("unexpected swap data. check this out")
-                        continue
+        with self.db as curs:
+            latest_read = curs.reserves_block_number
+            nr = current_block - latest_read
+            with progress_printer(nr, "rolling forward pool reserves {percent}% ({count} of {tot}"
+                                      " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
+                                      , on_same_line=True) as print_progress:
+                while True:
+                    nr = current_block - latest_read
+                    print_progress.tot = nr
+                    if nr <= 0:
+                        self.log.info("LP balances updated to current block (%u)", current_block)
+                        break
+                    target = min(latest_read+per_thread_queue_size, current_block+1)
+                    with ThreadPoolExecutor(max_workers=self.args.max_workers) as executor:
+                        for next_block in range(latest_read, target):
+                            self.log.debug("loading reserves from block %r ... ", next_block)
+                            if print_progress():
+                                self.db.commit()
+                            executor.submit(self.reserves_parse_blocknr, next_block)
+                            curs.reserves_block_number = latest_read = next_block
+                        executor.shutdown()
 
     def get_constraints(self):
         constraint = PathEvalutionConstraints()

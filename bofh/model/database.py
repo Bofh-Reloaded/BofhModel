@@ -2,6 +2,7 @@ import json
 from functools import cached_property
 from logging import getLogger
 from sqlite3 import IntegrityError
+from threading import Lock
 
 from attr import dataclass
 from glob import glob
@@ -50,6 +51,7 @@ class ModelDB:
         self.driver_name, self.db_dsn = self._split_dsn(db_dsn)
         self.driver = __import__(self.driver_name)
         self.just_initialized = False
+        self.lock = Lock()
 
     def open_and_priming(self):
         if not self.exists:
@@ -102,7 +104,7 @@ class ModelDB:
         if self.conn is not None:
             return
         self.log.debug("opening database at %s", self.db_dsn)
-        self.conn = self.driver.connect(self.db_dsn)
+        self.conn = self.driver.connect(self.db_dsn, check_same_thread=False)
 
     @property
     def current_schema_version(self):
@@ -158,7 +160,7 @@ class ModelDB:
 
     def cursor(self):
         assert self.conn is not None
-        return self.cursor_factory(self.conn)
+        return self.cursor_factory(self, self.conn)
 
     def commit(self):
         self.conn.commit()
@@ -170,28 +172,33 @@ class ModelDB:
 class BasicScopedCursor:
     BLOCK_FETCH_SIZE=1000
 
-    def __init__(self, conn):
+    def __init__(self, parent, conn):
+        self.lock = parent.lock
         self.conn = conn
         self.curs = self.conn.cursor()
         self.curs.arraysize = self.BLOCK_FETCH_SIZE
 
     def execute(self, *a, **ka):
-        self.curs.execute(*a, **ka)
-        return self
+        with self.lock:
+            self.curs.execute(*a, **ka)
+            return self
 
     def get_int(self):
-        return self.curs.fetchone()[0]
+        with self.lock:
+            return self.curs.fetchone()[0]
 
     def get_one(self):
-        return self.curs.fetchone()[0]
+        with self.lock:
+            return self.curs.fetchone()[0]
 
     def get_all(self):
         while True:
-            seq = self.curs.fetchmany()
-            if not seq:
-                return
-            for i in seq:
-                yield i
+            with self.lock:
+                seq = self.curs.fetchmany()
+                if not seq:
+                    return
+                for i in seq:
+                    yield i
 
 
 class StatusScopedCursor(BasicScopedCursor):
@@ -300,7 +307,26 @@ class StatusScopedCursor(BasicScopedCursor):
             self.execute("UPDATE %s SET value = ? WHERE key = ?" % self.META_TABLE, (value, key))
 
 
+    def update_latest_blocknr(self, blockNr: int):
+        key = "reserves_block_number"
+        self.set_meta(key, blockNr)
 
+    def get_latest_blocknr(self) -> int:
+        key = "reserves_block_number"
+        return self.get_meta(key, cast=int, default=0)
+
+    reserves_block_number = property(get_latest_blocknr, update_latest_blocknr)
+
+    def add_pool_reserve(self, pool_id, reserve0, reserve1):
+        assert self.conn is not None
+        if isinstance(reserve0, int): reserve0 = str(reserve0)
+        if isinstance(reserve1, int): reserve1 = str(reserve1)
+        try:
+            self.execute("INSERT INTO pool_reserves (id, reserve0, reserve1) VALUES (?, ?, ?)", (pool_id, reserve0, reserve1))
+            self.execute("SELECT last_insert_rowid()")
+        except IntegrityError:
+            # already existing
+            self.execute("UPDATE pool_reserves SET reserve0 = ?, reserve1 = ? WHERE id = ?", (reserve0, reserve1, pool_id))
 
 
 class BalancesScopedCursor(BasicScopedCursor):
@@ -360,21 +386,3 @@ class BalancesScopedCursor(BasicScopedCursor):
             # already existing
             self.execute("UPDATE pool_reserves SET reserve0 = ?, reserve1 = ? WHERE pool = ?", (reserve0, reserve1, pool_id))
 
-    def update_latest_blocknr(self, blockNr: int):
-        key = "block_number"
-        blockNr = str(blockNr)
-        try:
-            self.execute("INSERT INTO reserves_meta (key, value) VALUES (?, ?)", (key, blockNr))
-        except IntegrityError:
-            # already existing
-            self.execute("UPDATE reserves_meta SET value = ? WHERE key = ?", (blockNr, key))
-
-    def get_latest_blocknr(self) -> int:
-        key = "block_number"
-        try:
-            self.execute("SELECT value FROM reserves_meta WHERE key = ?", (key, ))
-            return int(self.get_one())
-        except :
-            return 0
-
-    latest_blocknr = property(get_latest_blocknr, update_latest_blocknr)
