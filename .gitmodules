@@ -1,3 +1,6 @@
 [submodule "bofh.utils"]
 	path = bofh.utils
 	url = git@github.com:Bofh-Reloaded/BofhUtils.git
+[submodule "bofh.contract"]
+	path = bofh.contract
+	url = git@github.com:Bofh-Reloaded/BofhContract.git

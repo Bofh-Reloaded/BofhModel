@@ -1,13 +1,15 @@
 from asyncio import get_event_loop
 from concurrent.futures import ThreadPoolExecutor
+from os.path import dirname, realpath, join
 from random import choice
 from time import sleep
 
+from eth_utils import to_checksum_address
 from jsonrpc_base import TransportError
 from jsonrpc_websocket import Server
 
 from bofh.utils.misc import progress_printer, LogAdapter, secs_to_human_repr, optimal_cpu_threads
-from bofh.utils.solidity import get_abi
+from bofh.utils.solidity import get_abi, add_solidity_search_path
 from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, log_topic_id, \
     parse_data_parameters, bsc_block_age_secs
 
@@ -40,13 +42,15 @@ from logging import getLogger, basicConfig
 from bofh.model.database import ModelDB, StatusScopedCursor, BalancesScopedCursor
 from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level, PathEvalutionConstraints
 
+# add bofh.contract/contracts to get_abi() seach path:
+add_solidity_search_path(join(dirname(dirname(dirname(realpath(__file__)))), "bofh.contract", "contracts"))
+
 
 PREDICTION_LOG_TOPIC0_SWAP = log_topic_id("Swap(address,uint256,uint256,uint256,uint256,address)")
 PREDICTION_LOG_TOPIC0_SYNC = log_topic_id("Sync(uint112,uint112)")
 WBNB_address = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c" # id=2
 TETHER_address = "0x55d398326f99059ff775485246999027b3197955" # id=4
 START_TOKEN = WBNB_address
-# PASSWORD ACCOUNT BSC: ws8734bnsiuDSD
 
 @dataclass
 class Args:
@@ -523,32 +527,6 @@ class Runner:
         self.log.info("  ***  GRAPH LOAD COMPLETE :-)  ***")
         self.log.info("  *********************************")
 
-    SWAP_CONTRACT_ADDRESS = '0x316aE8a748e9D4032F4e1db184A4B5e1ad7F93c3' # latest
-
-    SWAP_CONTRACT_ABI = [{'inputs': [{'internalType': 'address[]',
-                            'name': 'tokenPath',
-                            'type': 'address[]'},
-                           {'internalType': 'address', 'name': 'startToken', 'type': 'address'},
-                           {'internalType': 'uint256', 'name': 'initialAmount', 'type': 'uint256'},
-                           {'internalType': 'uint256', 'name': 'minProfit', 'type': 'uint256'}],
-                'name': 'doCakeInternalSwaps',
-                'outputs': [],
-                'stateMutability': 'nonpayable',
-                'type': 'function'}]
-
-    HELLO_WORLD_ADDRESS = "0x0ce0293C0f86392a2726C9189E2c706a13617a33" # Mainnet
-    HELLO_WORLD_TESTNET = "0x9548595672d35578B298BC08E65FE82f92E5A36C" # Testnet
-    HELLO_WORLD_ABI = [{'inputs': [{'internalType': 'uint256', 'name': 'a', 'type': 'uint256'},
-             {'internalType': 'uint256', 'name': 'b', 'type': 'uint256'}],
-              'name': 'add',
-              'outputs': [{'internalType': 'uint256', 'name': '', 'type': 'uint256'}],
-              'stateMutability': 'nonpayable',
-              'type': 'function'},
-             {'inputs': [],
-              'name': 'hello',
-              'outputs': [],
-              'stateMutability': 'nonpayable',
-              'type': 'function'}]
 
     def costruisci_invocabile_da_path(self, path):
         wbnb_amount = 0.1
@@ -561,69 +539,101 @@ class Runner:
         initial_amount = int(str(self.graph.start_token.toWei(wbnb_amount)))
         return self.costruisci_invocabile_da_parametri(address_vector, initial_amount, min_profit_pct)
 
-    def costruisci_invocabile_da_parametri(self, address_vector, initial_amount, min_profit_pct):
-        min_profit = int(initial_amount * (100+min_profit_pct)) // 100
-        contract_instance = self.w3.eth.contract(address=self.SWAP_CONTRACT_ADDRESS, abi=self.SWAP_CONTRACT_ABI)
-        call = contract_instance.functions.doCakeInternalSwaps(
-            address_vector
-            , address_vector[0]
-            , initial_amount
-            , min_profit
-        )
-        return call
+    SWAP_CONTRACT_ADDRESS = '0xF11e70E0Af6D0a032147369A85E2aDBA881FB727'
+    SWAP_CONTRACT_ADDRESS = '0x6320C0C8057b46a1660CaDBC482f34637b30f342'
+    SWAP_CONTRACT_ADDRESS = '0xc7f824D3Dd28493e9fa4aAE1545D256997Bc4DBE'
+    SWAP_CONTRACT_ADDRESS = '0x21E433bA868B94A22128A8E2208BAD49AD73eD84'
+    SWAP_CONTRACT_ADDRESS = '0x86EeD7B9B398380d113163D0505115Da6BFaE6c2'
+    SWAP_CONTRACT_ADDRESS = '0x30151bff48c445D0451b87eDADaf21BA16cBF00E'
+    SWAP_CONTRACT_ADDRESS = '0x89FD75CBb35267DDA9Bd6d31CdE86607a06dcFAa'
 
-    def chiama_hello_world(self):
-        contract_instance = self.w3.eth.contract(address=self.HELLO_WORLD_ADDRESS, abi=self.HELLO_WORLD_ABI)
-        return contract_instance.functions.hello()
 
-    def chiama_add(self, a, b):
-        contract_instance = self.w3.eth.contract(address=self.HELLO_WORLD_ADDRESS, abi=self.HELLO_WORLD_ABI)
-        return contract_instance.functions.add(a, b)
-
+    TOKEN_ADDR = "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd"
     ACCOUNT_CREDS = '0xF567a3B93AF6Aa3ef8A084014b2fbc2C17D21A00', "skajhn398abn.SASA" # pkey, password
 
     def call(self, name, address, abi, *args):
+        address = to_checksum_address(address)
         contract_instance = self.w3.eth.contract(address=address, abi=get_abi(abi))
         callable = getattr(contract_instance.functions, name)
         return callable(*args).call({"from": self.ACCOUNT_CREDS[0]})
 
     def transact(self, name, address, abi, *args):
+        address = to_checksum_address(address)
         contract_instance = self.w3.eth.contract(address=address, abi=get_abi(abi))
         self.w3.geth.personal.unlock_account(*self.ACCOUNT_CREDS, 120)
         callable = getattr(contract_instance.functions, name)
-        print("args:", args)
         return callable(*args).transact({"from": self.ACCOUNT_CREDS[0]})
 
-    def approva_fondi_al_contratto(self, token_addr, contract_addr, amount):
-        self.transact("approve", token_addr, "IGenericFungibleToken",
-                        contract_addr, amount)
+    def aggiungi_fondi(self, amount, caddr=None):
+        if caddr is None:
+            caddr = self.SWAP_CONTRACT_ADDRESS
+        self.transact("approve", self.TOKEN_ADDR, "IGenericFungibleToken", caddr, amount)
+        self.transact("adoptAllowance", caddr, "BofhContract")
+
+    def preleva_fondi(self, caddr=None):
+        if caddr is None:
+            caddr = self.SWAP_CONTRACT_ADDRESS
+        self.transact("withdrawFunds", caddr, "BofhContract")
+
+    def kill_contract(self, caddr=None):
+        if caddr is None:
+            caddr = self.SWAP_CONTRACT_ADDRESS
+        self.transact("kill", caddr, "BofhContract")
+
+    def contract_balance(self, caddr=None):
+        if caddr is None:
+            caddr = self.SWAP_CONTRACT_ADDRESS
+        return self.call("balanceOf", self.TOKEN_ADDR, "IGenericFungibleToken", caddr)
 
 
 
 
-    def chiama_multiswap1(self, addr=SWAP_CONTRACT_ADDRESS):
+
+    def chiama_multiswap1(self, caddr=None):
+        if caddr is None:
+            caddr = self.SWAP_CONTRACT_ADDRESS
+        args = self.test_payload
+        #self.transact("withdrawFunds", "0x9aa063A00809D21388f8f9Dcc415Be866aCDCC0a", "BofhContract")
+        print(self.call("multiswap1", caddr, "BofhContract", args))
+
+    @staticmethod
+    def pack_args_payload(pools: list, fees: list, initialAmount: int, expectedAmount: int):
+        assert len(pools) == len(fees)
+        assert len(pools) <= 4
+        args = []
+        fee_word = 0
+        shl = 0
+        for feePPM in fees:
+            fee_word |= ((feePPM & 0xffffffff) << shl)
+            shl += 32
+        amounts_word = \
+            ((initialAmount & 0xffffffffffffffffffffffffffffffff) << 0) | \
+            ((expectedAmount & 0xffffffffffffffffffffffffffffffff) << 128)
+        for addr in pools:
+            args.append(int(str(addr), 16))
+        args.append(fee_word)
+        args.append(amounts_word)
+        return args
+
+    @property
+    def test_payload(self):
         pools = [
             "0xf7735324b1ad67b34d5958ed2769cffa98a62dff", # WBNB <-> USDT
             "0xaf9399f70d896da0d56a4b2cbf95f4e90a6b99e8", # USDT <-> DAI
             "0xc64c507d4ba4cab02840cecd5878cb7219e81fe0", # DAI <-> WBNB
         ]
-        feePPM = 20000
+        feePPM = [20000+i for i in range(len(pools))]
         initialAmount = 10**16 # 0.01 WBNB
-        expectedAmount = 0
-        args = []
-        for addr in pools:
-            args.append(int(str(addr), 16))
-        fees = ((feePPM << 0) & 0xffffffff) | \
-               ((feePPM << 32) & 0xffffffff) | \
-               ((feePPM << 64) & 0xffffffff) | \
-               ((feePPM << 96) & 0xffffffff)
-        args.append(fees)
-        args.append(
-            ((initialAmount & 0xffffffffffffffffffffffffffffffff) << 0) |
-            ((expectedAmount & 0xffffffffffffffffffffffffffffffff) << 128)
-        )
-        #self.transact("withdrawFunds", "0x9aa063A00809D21388f8f9Dcc415Be866aCDCC0a", "BofhContract")
-        print(self.call("multiswap1", self.SWAP_CONTRACT_ADDRESS, "BofhContract", args))
+        expectedAmount = 10**16+1
+        return self.pack_args_payload(pools, feePPM, initialAmount, expectedAmount)
+
+    def call_test(self, name, *a, caddr=None):
+        if caddr is None:
+            caddr = self.SWAP_CONTRACT_ADDRESS
+        args = self.test_payload
+        print(self.call(name, caddr, "BofhContract", args, *a))
+
+
 
 
 """
