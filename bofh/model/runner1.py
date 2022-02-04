@@ -523,9 +523,7 @@ class Runner:
         self.log.info("  ***  GRAPH LOAD COMPLETE :-)  ***")
         self.log.info("  *********************************")
 
-    SWAP_CONSTRACT_ADDRESS = '0xE2C2b4DDA45bb4B70D718954148a181d760D515A'
-    SWAP_CONSTRACT_ADDRESS = '0x90aacf2da6AB1f32Ff728F1e6Bdde14a5ed48046' # latest
-    SWAP_CONTRACT_TESTNET = "0x2156749DE47e4f55C0da8A2e01c081FBCf174e81"
+    SWAP_CONTRACT_ADDRESS = '0x316aE8a748e9D4032F4e1db184A4B5e1ad7F93c3' # latest
 
     SWAP_CONTRACT_ABI = [{'inputs': [{'internalType': 'address[]',
                             'name': 'tokenPath',
@@ -565,7 +563,7 @@ class Runner:
 
     def costruisci_invocabile_da_parametri(self, address_vector, initial_amount, min_profit_pct):
         min_profit = int(initial_amount * (100+min_profit_pct)) // 100
-        contract_instance = self.w3.eth.contract(address=self.SWAP_CONSTRACT_ADDRESS, abi=self.SWAP_CONTRACT_ABI)
+        contract_instance = self.w3.eth.contract(address=self.SWAP_CONTRACT_ADDRESS, abi=self.SWAP_CONTRACT_ABI)
         call = contract_instance.functions.doCakeInternalSwaps(
             address_vector
             , address_vector[0]
@@ -587,17 +585,46 @@ class Runner:
     def call(self, name, address, abi, *args):
         contract_instance = self.w3.eth.contract(address=address, abi=get_abi(abi))
         callable = getattr(contract_instance.functions, name)
-        return callable(*args).call()
+        return callable(*args).call({"from": self.ACCOUNT_CREDS[0]})
 
     def transact(self, name, address, abi, *args):
         contract_instance = self.w3.eth.contract(address=address, abi=get_abi(abi))
         self.w3.geth.personal.unlock_account(*self.ACCOUNT_CREDS, 120)
         callable = getattr(contract_instance.functions, name)
+        print("args:", args)
         return callable(*args).transact({"from": self.ACCOUNT_CREDS[0]})
 
     def approva_fondi_al_contratto(self, token_addr, contract_addr, amount):
         self.transact("approve", token_addr, "IGenericFungibleToken",
                         contract_addr, amount)
+
+
+
+
+    def chiama_multiswap1(self, addr=SWAP_CONTRACT_ADDRESS):
+        pools = [
+            "0xf7735324b1ad67b34d5958ed2769cffa98a62dff", # WBNB <-> USDT
+            "0xaf9399f70d896da0d56a4b2cbf95f4e90a6b99e8", # USDT <-> DAI
+            "0xc64c507d4ba4cab02840cecd5878cb7219e81fe0", # DAI <-> WBNB
+        ]
+        feePPM = 20000
+        initialAmount = 10**16 # 0.01 WBNB
+        expectedAmount = 0
+        args = []
+        for addr in pools:
+            args.append(int(str(addr), 16))
+        fees = ((feePPM << 0) & 0xffffffff) | \
+               ((feePPM << 32) & 0xffffffff) | \
+               ((feePPM << 64) & 0xffffffff) | \
+               ((feePPM << 96) & 0xffffffff)
+        args.append(fees)
+        args.append(
+            ((initialAmount & 0xffffffffffffffffffffffffffffffff) << 0) |
+            ((expectedAmount & 0xffffffffffffffffffffffffffffffff) << 128)
+        )
+        #self.transact("withdrawFunds", "0x9aa063A00809D21388f8f9Dcc415Be866aCDCC0a", "BofhContract")
+        print(self.call("multiswap1", self.SWAP_CONTRACT_ADDRESS, "BofhContract", args))
+
 
 """
     def chiamaIlCoso(self, tokens, constraint):
