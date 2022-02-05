@@ -1,15 +1,19 @@
 from asyncio import get_event_loop
 from concurrent.futures import ThreadPoolExecutor
+from os import environ
 from os.path import dirname, realpath, join
 from random import choice
 from time import sleep
 
+from web3.exceptions import ContractLogicError
+
+from bofh.utils.deploy_contract import deploy_contract
 from eth_utils import to_checksum_address
 from jsonrpc_base import TransportError
 from jsonrpc_websocket import Server
 
 from bofh.utils.misc import progress_printer, LogAdapter, secs_to_human_repr, optimal_cpu_threads
-from bofh.utils.solidity import get_abi, add_solidity_search_path
+from bofh.utils.solidity import get_abi, add_solidity_search_path, find_contract
 from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, log_topic_id, \
     parse_data_parameters, bsc_block_age_secs
 
@@ -23,7 +27,7 @@ Usage: bofh.model.runner1 [options]
 Options:
   -h  --help
   -d, --dsn=<connection_str>            DB dsn connection string [default: sqlite3://status.db]
-  -c, --connection_url=<url>            Web3 RPC connection URL [default: LOCAL_WS_RPC]
+  -c, --connection_url=<url>            Web3 RPC connection URL [default: %s]
   -n <n>                                number of pools to query before exit (benchmark mode)
   -j <n>                                number of RPC data ingest workers, default one per hardware thread [default: %u]
   -v, --verbose                         debug output
@@ -32,9 +36,10 @@ Options:
   --start_token_address=<address>       on-chain address of start token [default: WBNB]
   --max_reserves_snapshot_age_secs=<s>  max age of usable LP reserves DB snapshot (refuses to preload from DB if older) [default: %r]
   --force_reuse_reserves_snapshot       disregard --max_reserves_snapshot_age_secs (use for debug purposes, avoids download of reserves)       
-  --do_not_update_reserves_from_chain    do not attempt to forward an existing reserves DB snapshot to the latest known block       
+  --do_not_update_reserves_from_chain   do not attempt to forward an existing reserves DB snapshot to the latest known block
+  --contract_address=<address>          set contract counterpart address [default: BOFH_CONTRACT_ADDRESS]
   --cli                                 preload status and stop at CLI (for debugging)
-""" % (optimal_cpu_threads(), DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS)
+""" % (JSONRPCConnector.connection_uri(), optimal_cpu_threads(), DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS)
 
 from dataclasses import dataclass
 from logging import getLogger, basicConfig
@@ -50,7 +55,9 @@ PREDICTION_LOG_TOPIC0_SWAP = log_topic_id("Swap(address,uint256,uint256,uint256,
 PREDICTION_LOG_TOPIC0_SYNC = log_topic_id("Sync(uint112,uint112)")
 WBNB_address = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c" # id=2
 TETHER_address = "0x55d398326f99059ff775485246999027b3197955" # id=4
-START_TOKEN = WBNB_address
+START_TOKEN = to_checksum_address(WBNB_address)
+DEFAULT_SWAP_CONTRACT_ADDRESS = '0x89FD75CBb35267DDA9Bd6d31CdE86607a06dcFAa'
+ENV_SWAP_CONTRACT_ADDRESS = environ.get("BOFH_CONTRACT_ADDRESS", DEFAULT_SWAP_CONTRACT_ADDRESS)
 
 @dataclass
 class Args:
@@ -65,6 +72,7 @@ class Args:
     max_reserves_snapshot_age_secs: int = 0
     force_reuse_reserves_snapshot: bool = False
     do_not_update_reserves_from_chain: bool = False
+    contract_address: str = None
     cli: bool = False
 
     @staticmethod
@@ -82,7 +90,7 @@ class Args:
             status_db_dsn = args["--dsn"]
             , verbose=bool(cls.default(args["--verbose"], 0))
             , pools_limit=int(cls.default(args["-n"], 0))
-            , web3_rpc_url=cls.default(args["--connection_url"], "", suppress_list=["LOCAL_WS_RPC"])
+            , web3_rpc_url=cls.default(args["--connection_url"], "", suppress_list=[JSONRPCConnector.connection_uri()])
             , max_workers=int(cls.default(args["-j"], 0))
             , chunk_size=int(cls.default(args["--chunk_size"], 100))
             , pred_polling_interval=int(cls.default(args["--pred_polling_interval"], 1000))
@@ -90,6 +98,7 @@ class Args:
             , max_reserves_snapshot_age_secs=int(args["--max_reserves_snapshot_age_secs"])
             , force_reuse_reserves_snapshot=bool(cls.default(args["--force_reuse_reserves_snapshot"], 0))
             , do_not_update_reserves_from_chain=bool(cls.default(args["--do_not_update_reserves_from_chain"], 0))
+            , contract_address=cls.default(args["--contract_address"], ENV_SWAP_CONTRACT_ADDRESS, suppress_list=["BOFH_CONTRACT_ADDRESS"])
             , cli=bool(cls.default(args["--cli"], 0))
         )
 
@@ -149,8 +158,8 @@ class Runner:
     def align_settings_in_db(self):
         with self.db as curs:
             if not self.args.start_token_address or self.args.start_token_address == START_TOKEN:
-                self.args.start_token_address = curs.get_meta("start_token_address", START_TOKEN)
-            curs.set_meta("start_token_address", self.args.start_token_address)
+                self.args.start_token_address = to_checksum_address(curs.get_meta("start_token_address", START_TOKEN))
+            curs.set_meta("start_token_address", to_checksum_address(self.args.start_token_address))
             if not self.args.web3_rpc_url:
                 self.args.web3_rpc_url = curs.get_meta("web3_rpc_url", Web3Connector.DEFAULT_URI_WSRPC)
             curs.set_meta("web3_rpc_url", self.args.web3_rpc_url)
@@ -160,6 +169,19 @@ class Runner:
             if not self.args.max_reserves_snapshot_age_secs or self.args.max_reserves_snapshot_age_secs == DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS:
                 self.args.max_reserves_snapshot_age_secs = curs.get_meta("max_reserves_snapshot_age_secs", DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS, cast=int)
             curs.set_meta("max_reserves_snapshot_age_secs", self.args.max_reserves_snapshot_age_secs)
+            if not self.args.contract_address or self.args.contract_address == ENV_SWAP_CONTRACT_ADDRESS:
+                self.args.contract_address = curs.get_meta("contract_address", ENV_SWAP_CONTRACT_ADDRESS)
+            curs.set_meta("contract_address", self.args.contract_address)
+
+    def _get_contract_address(self):
+        return self.args.contract_address
+
+    def _set_contract_address(self, addr):
+        with self.db as curs:
+            curs.set_meta("contract_address", addr)
+        self.args.contract_address = addr
+
+    contract_address = property(_get_contract_address, _set_contract_address)
 
     @property
     def w3(self):
@@ -539,62 +561,67 @@ class Runner:
         initial_amount = int(str(self.graph.start_token.toWei(wbnb_amount)))
         return self.costruisci_invocabile_da_parametri(address_vector, initial_amount, min_profit_pct)
 
-    SWAP_CONTRACT_ADDRESS = '0xF11e70E0Af6D0a032147369A85E2aDBA881FB727'
-    SWAP_CONTRACT_ADDRESS = '0x6320C0C8057b46a1660CaDBC482f34637b30f342'
-    SWAP_CONTRACT_ADDRESS = '0xc7f824D3Dd28493e9fa4aAE1545D256997Bc4DBE'
-    SWAP_CONTRACT_ADDRESS = '0x21E433bA868B94A22128A8E2208BAD49AD73eD84'
-    SWAP_CONTRACT_ADDRESS = '0x86EeD7B9B398380d113163D0505115Da6BFaE6c2'
-    SWAP_CONTRACT_ADDRESS = '0x30151bff48c445D0451b87eDADaf21BA16cBF00E'
-    SWAP_CONTRACT_ADDRESS = '0x89FD75CBb35267DDA9Bd6d31CdE86607a06dcFAa'
-
 
     TOKEN_ADDR = "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd"
     ACCOUNT_CREDS = '0xF567a3B93AF6Aa3ef8A084014b2fbc2C17D21A00', "skajhn398abn.SASA" # pkey, password
 
-    def call(self, name, address, abi, *args):
+    def call(self, name, *args, address=None, abi=None):
+        if address is None:
+            address = self.contract_address
         address = to_checksum_address(address)
+        if abi is None:
+            abi = "BofhContract"
         contract_instance = self.w3.eth.contract(address=address, abi=get_abi(abi))
         callable = getattr(contract_instance.functions, name)
         return callable(*args).call({"from": self.ACCOUNT_CREDS[0]})
 
-    def transact(self, name, address, abi, *args):
+    def transact(self, name, *args, address=None, abi=None):
+        if address is None:
+            address = self.contract_address
         address = to_checksum_address(address)
+        if abi is None:
+            abi = "BofhContract"
         contract_instance = self.w3.eth.contract(address=address, abi=get_abi(abi))
         self.w3.geth.personal.unlock_account(*self.ACCOUNT_CREDS, 120)
         callable = getattr(contract_instance.functions, name)
         return callable(*args).transact({"from": self.ACCOUNT_CREDS[0]})
 
-    def aggiungi_fondi(self, amount, caddr=None):
-        if caddr is None:
-            caddr = self.SWAP_CONTRACT_ADDRESS
-        self.transact("approve", self.TOKEN_ADDR, "IGenericFungibleToken", caddr, amount)
-        self.transact("adoptAllowance", caddr, "BofhContract")
+    def add_funding(self, amount):
+        caddr = self.contract_address
+        self.log.info("approving %u of balance to on contract at %s, then calling adoptAllowance()", amount, caddr)
+        self.transact("approve", caddr, amount, address=self.TOKEN_ADDR, abi="IGenericFungibleToken")
+        self.transact("adoptAllowance")
 
-    def preleva_fondi(self, caddr=None):
-        if caddr is None:
-            caddr = self.SWAP_CONTRACT_ADDRESS
-        self.transact("withdrawFunds", caddr, "BofhContract")
+    def repossess_funding(self):
+        caddr = self.contract_address
+        self.log.info("calling withdrawFunds() on contract at %s", caddr)
+        self.transact("approve", caddr, 0, address=self.TOKEN_ADDR, abi="IGenericFungibleToken")
+        self.transact("withdrawFunds")
 
-    def kill_contract(self, caddr=None):
-        if caddr is None:
-            caddr = self.SWAP_CONTRACT_ADDRESS
-        self.transact("kill", caddr, "BofhContract")
+    def kill_contract(self):
+        caddr = self.contract_address
+        self.transact("approve", caddr, 0, address=self.TOKEN_ADDR, abi="IGenericFungibleToken")
+        self.log.info("calling kill() on contract at %s", caddr)
+        self.transact("kill")
 
-    def contract_balance(self, caddr=None):
-        if caddr is None:
-            caddr = self.SWAP_CONTRACT_ADDRESS
+    def contract_balance(self):
+        caddr = self.contract_address
         return self.call("balanceOf", self.TOKEN_ADDR, "IGenericFungibleToken", caddr)
 
+    def redeploy_contract(self, fpath="BofhContract.sol"):
+        try:
+            self.kill_contract()
+        except ContractLogicError:
+            self.log.exception("unable to kill existing contract at %s", self.contract_address)
+        fpath = find_contract(fpath)
+        self.log.info("attempting to deploy contract from %s", fpath)
+        self.contract_address = deploy_contract(*self.ACCOUNT_CREDS, fpath,
+                                                self.args.start_token_address)
+        self.log.info("new contract address is established at %s", self.contract_address)
 
-
-
-
-    def chiama_multiswap1(self, caddr=None):
-        if caddr is None:
-            caddr = self.SWAP_CONTRACT_ADDRESS
-        args = self.test_payload
+    def chiama_multiswap1(self):
         #self.transact("withdrawFunds", "0x9aa063A00809D21388f8f9Dcc415Be866aCDCC0a", "BofhContract")
-        print(self.call("multiswap1", caddr, "BofhContract", args))
+        return self.call("multiswap1", self.test_payload)
 
     @staticmethod
     def pack_args_payload(pools: list, fees: list, initialAmount: int, expectedAmount: int):
@@ -623,52 +650,18 @@ class Runner:
             "0xc64c507d4ba4cab02840cecd5878cb7219e81fe0", # DAI <-> WBNB
         ]
         feePPM = [20000+i for i in range(len(pools))]
-        initialAmount = 10**16 # 0.01 WBNB
-        expectedAmount = 10**16+1
+        initialAmount = 10**15 # 0.001 WBNB
+        expectedAmount = 10**15+1
         return self.pack_args_payload(pools, feePPM, initialAmount, expectedAmount)
 
     def call_test(self, name, *a, caddr=None):
         if caddr is None:
-            caddr = self.SWAP_CONTRACT_ADDRESS
+            caddr = self.contract_address
         args = self.test_payload
         print(self.call(name, caddr, "BofhContract", args, *a))
 
 
 
-
-"""
-    def chiamaIlCoso(self, tokens, constraint):
-        import web3
-        to_checksum_address()
-address = '0xE2C2b4DDA45bb4B70D718954148a181d760D515A'
-contracts = [{'inputs': [{'internalType': 'address[]',
-        'name': 'tokenPath',
-        'type': 'address[]'},
-       {'internalType': 'address', 'name': 'startToken', 'type': 'address'},
-       {'internalType': 'uint256', 'name': 'initialAmount', 'type': 'uint256'},
-       {'internalType': 'uint256', 'name': 'minProfit', 'type': 'uint256'}],
-      'name': 'doCakeInternalSwaps',
-      'outputs': [],
-      'stateMutability': 'nonpayable',
-      'type': 'function'}]
-def path_to_token_array():
-    res = [str(self.graph.start_token.address)]
-    for i in range(path.size()):
-        swap = path.get(i)
-        res.append(str(swap.tokenDest.address))
-    return res
-initial_amount = int(str(constraint.initial_token_wei_balance))
-min_profit = int(initial_amount * 0.01)
-w3 = Web3Connector.get_connection(self.args.web3_rpc_url)
-contract_instance = w3.eth.contract(address=address, contracts=contracts)
-tx_hash = contract_instance.functions.doCakeInternalSwaps(
-    tokens
-    , str(self.graph.start_token.address)
-    , initial_amount
-    , min_profit
-).transact()
-self.log.info("SWAP contract invocation: %s", tx_hash)
-"""
 
 def main():
     basicConfig(level="INFO")
@@ -682,16 +675,6 @@ def main():
     else:
         runner.load()
         runner.search_opportunities_by_prediction()
-"""
-tokens = ["0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", "0xbB8203e945866A1f3Eced6e5B22679E5A540be91", "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82", "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"]
-constraint = PathEvalutionConstraints()
-constraint.initial_token_wei_balance = int(int(str(runner.graph.start_token.toWei(1))) / 10)
-
-runner.chiamaIlCoso(tokens, constraint) 
-INFO:bofh_model:candidate path Polkadot(0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c-0xbb8203e945866a1f3eced6e5b22679e5a540be91, 493597), 
-Polkadot(0xbb8203e945866a1f3eced6e5b22679e5a540be91-0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82, 494733), 
-Polkadot(0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82-0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c, 11) would yield 3.61716%
-"""
 
 
 if __name__ == '__main__':
