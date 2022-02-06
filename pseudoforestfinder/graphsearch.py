@@ -82,38 +82,57 @@ def get_edge_weight(graph,start,end,key):
     return dict[0][key]
 
 def get_edge_pool(graph,start,end,key):
-    dict = graph[start][end]
-    mypool = dict[0][key]
+    pools = []
+    edges = graph[start][end]
+    for edge in edges:
+        mypool = edge[key]
     #print(mypool.address)
-    if mypool.reserve1 == 0 :
-        raise Exception ('Found empty reserve in liquidity pool') 
-    #ratio = mypool.reserve0/mypool.reserve1
-    ratio = mypool
-    #if ratio >= mypool.reserve0:
-        #exchange for next swap my pool.reserve0
-    #else #exchange ratio 
-    return ratio
+        if mypool.reserve1 == 0:
+            continue
+
+        pools.append(mypool)
+
+    if len(pools) == 0
+        raise Exception ('Found empty reserve in liquidity pool')
+
+    return pools
 
 #Computes the revenue for a triangular exchange
 def compute_weights_in_path(path,graph,fee):
     amount = sys.maxsize
-    
+    pools = []
+    path_amount = 0
+
     try:
-        start_pool = get_edge_pool(graph, path[0], path[1], 'pool')
-        start_amount = max_flux(start_pool)
+        max_amount = 0
+        max_pool = None
+        for start_pool in get_edge_pool(graph, path[0], path[1], 'pool'):
+            start_amount = max_flux(start_pool)
+            if max_amount < start_amount:
+                max_amount = start_amount
+                max_pool = start_pool
+
+        start_amount = max_amount
+        pools.append(max_pool)
+
         if start_amount == 0:
             return (-2,0,0)
         for x in range(0,len(path)-1):
-         
-            pool = get_edge_pool(graph, path[x], path[x+1], "pool")
-        #if pool_cost == -1:
-         #   return -1
-        #cost = cost * pool_cost
-            amount = min(amount,max_flux(pool))            
-            amount = gain_per_edge(pool, amount, fee)
+            max_amount = 0
+            max_pool = None
+            for pool in get_edge_pool(graph, path[x], path[x+1], "pool")
+                amount = min(amount, max_flux(pool))
+                amount = gain_per_edge(pool, amount, fee)
+                if max_amount < amount:
+                    max_amount = amount
+                    max_pool = pool
+
+            amount = max_amount
+            pools.append(max_pool)
+
     except:
         return (-1,0,0)
-    return ((amount/start_amount), amount, start_amount)
+    return ((amount/start_amount), amount, start_amount, pools)
 
 
 def gain_per_edge(pool,amount,fee):
