@@ -92,7 +92,7 @@ def get_edge_pool(graph,start,end,key):
 
         pools.append(mypool)
 
-    if len(pools) == 0
+    if len(pools) == 0:
         raise Exception ('Found empty reserve in liquidity pool')
 
     return pools
@@ -121,7 +121,7 @@ def compute_weights_in_path(path,graph,fee):
         for x in range(0,len(path)-1):
             max_amount = 0
             max_pool = None
-            for pool in get_edge_pool(graph, path[x], path[x+1], "pool")
+            for pool in get_edge_pool(graph, path[x], path[x+1], "pool"):
                 amount = min(amount, max_flux(pool))
                 amount = gain_per_edge(pool, amount, fee)
                 if max_amount < amount:
