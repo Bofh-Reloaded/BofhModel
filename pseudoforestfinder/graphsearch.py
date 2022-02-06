@@ -7,7 +7,7 @@ Spyder Editor
 #import networkx as nx
 
 ##uncomment if using loaded matrix
-#from load_bsc_pools_graph import load_graph_from_json_coso 
+#from load_bsc_pools_graph import load_graph_from_json_coso
 
 #the_graph = load_graph_from_json_coso()
 import sys
@@ -117,6 +117,7 @@ def compute_weights_in_path(path,graph,fee):
 
         if start_amount == 0:
             return (-2,0,0)
+
         for x in range(0,len(path)-1):
             max_amount = 0
             max_pool = None
@@ -140,7 +141,7 @@ def gain_per_edge(pool,amount,fee):
 
 def max_flux(pool):
     return abs(pool.reserve1 - pool.reserve0)/3
-    
+
 #not used for now - to be debugged
 def automagical_formula_3_way (r1,r2,path, graph, delta):
     dict = graph[path[0]][path[1]]
@@ -160,7 +161,7 @@ def automagical_formula_3_way (r1,r2,path, graph, delta):
         return -1
     gain = (r1 * r2 * ((r1**2 * r2**2 * b1 * c2 * a3)/(b2*c3+r1*r2*b1*c3*r1**2*r2**2*b1*c2)/((a1*b2*c3))/(b2*c3+r1*r2*b1*c3+r1**2*r2**2*b1*c2)+r1*delta)-1)*delta
     return gain
-    
+
 def read_paths_from_file (file):
     buffer = open(file, "r")
     content = buffer.read()
@@ -175,7 +176,7 @@ def extract_differences (file1, file2) :
     if len(list1) > len(list2):
         return set(list1) - set(list2)
     return set(list2) - set(list1)
-    
+
 #Generating the graph of example on draw.io
 #G = nx.MultiDiGraph()
 
@@ -206,7 +207,7 @@ G = the_graph
 print("number of nodes: ", G.number_of_nodes())
 print("number of edges: ", G.number_of_edges())
 
-#stable_nodes = [i for i in range(1, 626199)]    
+#stable_nodes = [i for i in range(1, 626199)]
 start_node = get_start_node_id()
 stable_nodes = get_stable_nodes_id()
 try:
@@ -222,10 +223,10 @@ except:
     print("using hardwired stable_nodes", stable_nodes)
 #print("List of predecessors is", set(G.predecessors(1)))
 #print(nx.is_directed(G))
-#nx.draw(the_graph, pos=nx.circular_layout(the_graph), node_color='r', edge_color='b') #draw graph 
+#nx.draw(the_graph, pos=nx.circular_layout(the_graph), node_color='r', edge_color='b') #draw graph
 #pred=G.predecessors(1)
 #for x in range(1,506626):
-#    for path in nx.all_simple_paths(the_graph, source=x, target=6): 
+#    for path in nx.all_simple_paths(the_graph, source=x, target=6):
 #        print(len(path))
 #        if len(path)<7:
        #     print(path, " cost is:", the_graph.subgraph(path).size(weight="weight"))
@@ -262,6 +263,6 @@ print ('The difference is: ',extract_differences('3waystest.txt','3waystestmod.t
     #print(analyzed_path)
 
 
-        
-    
-    
+
+
+
