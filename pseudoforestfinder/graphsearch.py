@@ -101,9 +101,7 @@ def get_edge_pool(graph,start,end,key):
 def compute_weights_in_path(path,graph,fee):
     amount = sys.maxsize
     pools = []
-    path_amount = 0
-
-    try:
+    #try:
         max_amount = 0
         max_pool = None
         for start_pool in get_edge_pool(graph, path[0], path[1], 'pool'):
@@ -116,7 +114,7 @@ def compute_weights_in_path(path,graph,fee):
         pools.append(max_pool)
 
         if start_amount == 0:
-            return (-2,0,0)
+            return (-2,0,0,[])
 
         for x in range(0,len(path)-1):
             max_amount = 0
@@ -131,8 +129,8 @@ def compute_weights_in_path(path,graph,fee):
             amount = max_amount
             pools.append(max_pool)
 
-    except:
-        return (-1,0,0)
+    #except:
+        #return (-1,0,0,[])
     return ((amount/start_amount), amount, start_amount, pools)
 
 
@@ -208,8 +206,7 @@ print("number of nodes: ", G.number_of_nodes())
 print("number of edges: ", G.number_of_edges())
 
 #stable_nodes = [i for i in range(1, 626199)]
-start_node = get_start_node_id()
-stable_nodes = get_stable_nodes_id()
+
 try:
     start_node = get_start_node_id()
     stable_nodes = get_stable_nodes_id()
@@ -246,14 +243,14 @@ print("Printing the list of possible paths and their cost:")
 arbitrage_opportunity = []
 with open('3waystest.txt','w') as file:
     for analyzed_path in possible_paths_3:
-        weight,amount,start_amount = compute_weights_in_path(analyzed_path, G,0.003)
+        weight,amount,start_amount,pools = compute_weights_in_path(analyzed_path, G,0.003)
         #print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
         #print(analyzed_path)
         #file.write(repr(analyzed_path) + " total unbalance: " + repr(compute_weights_in_path(analyzed_path, G)) + '\n')
         #file.write(repr(analyzed_path) + " total unbalance: " + repr(compute_weights_in_path(analyzed_path, G,0.003)) + '\n')
-        print(f" {analyzed_path}", file=file)
-        if 0 and  weight >= 1:
-            print(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:.3} -> {amount:.3}", file=file)
+        #print(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:} -> {amount:}, {pools}", file=file)
+        if 1 or weight >= 1:
+            print(f" {analyzed_path} total unbalance: {weight:} : {start_amount:} -> {amount:}, {pools}", file=file)
             arbitrage_opportunity.append(analyzed_path)
 print ('The difference is: ',extract_differences('3waystest.txt','3waystestmod.txt' ))
 #print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths_4))
