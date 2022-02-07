@@ -628,17 +628,11 @@ class Runner:
         assert len(pools) == len(fees)
         assert len(pools) <= 4
         args = []
-        fee_word = 0
-        shl = 0
-        for feePPM in fees:
-            fee_word |= ((feePPM & 0xffffffff) << shl)
-            shl += 32
+        for addr, fee in zip(pools, fees):
+            args.append(int(str(addr), 16) | (fee << 160))
         amounts_word = \
             ((initialAmount & 0xffffffffffffffffffffffffffffffff) << 0) | \
             ((expectedAmount & 0xffffffffffffffffffffffffffffffff) << 128)
-        for addr in pools:
-            args.append(int(str(addr), 16))
-        args.append(fee_word)
         args.append(amounts_word)
         return args
 
@@ -651,7 +645,7 @@ class Runner:
         ]
         feePPM = [20000+i for i in range(len(pools))]
         initialAmount = 10**15 # 0.001 WBNB
-        expectedAmount = 10**15+1
+        expectedAmount = 0 #10**15+1
         return self.pack_args_payload(pools, feePPM, initialAmount, expectedAmount)
 
     def call_test(self, name, *a, caddr=None):
@@ -668,13 +662,13 @@ def main():
     log_set_level(log_level.debug)
     log_register_sink(LogAdapter(level="DEBUG"))
     args = Args.from_cmdline(__doc__)
-    runner = Runner(args)
+    bofh = Runner(args)
     if args.cli:
         from IPython import embed
         embed()
     else:
-        runner.load()
-        runner.search_opportunities_by_prediction()
+        bofh.load()
+        bofh.search_opportunities_by_prediction()
 
 
 if __name__ == '__main__':
