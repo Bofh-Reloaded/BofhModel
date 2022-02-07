@@ -123,7 +123,6 @@ class Runner:
         self.db.open_and_priming()
         self.pools_cache = dict()  # addr->db_id
         self.tokens_cache = dict()  # addr->db_id
-        self.latest_blocknr = 0
 
     @property
     def w3(self):
@@ -153,6 +152,7 @@ class Runner:
             factory = self.w3.eth.contract(address=factory_addr, abi=get_abi("IGenericFactory"))
             pairs_nr = factory.functions.allPairsLength().call()
             self.log.info("according to factory, %r pairs exist", pairs_nr)
+            start_blocknumber = self.w3.eth.block_number
 
             with progress_printer(pairs_nr, "downloading pairs {percent}% ({count} of {tot}"
                                             " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
@@ -190,10 +190,7 @@ class Runner:
                             self.pools_cache[pool_addr] = pid
                         if reserve0 and reserve1 and blocknr:
                             curs.add_pool_reserve(pid, reserve0, reserve1)
-                            if blocknr > self.latest_blocknr:
-                                self.latest_blocknr = blocknr
-
-            curs.reserves_block_number = self.latest_blocknr
+            curs.reserves_block_number = start_blocknumber
 
 
 def main():

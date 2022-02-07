@@ -7,7 +7,7 @@ export CMAKE_VERSION=${CMAKE_VERSION-3.21.0}
 export TOOLCHAIN_ROOT=${TOOLCHAIN_ROOT-/toolchain}
 export BUILD_ROOT=${BUILD_ROOT-~/build}
 export BOOST_COMPONENTS=--with-python
-export DEB_PACKAGES="build-essential git wget libffi-dev libbz2-dev libncurses-dev libsqlite3-dev libssl-dev uuid-dev zlib1g-dev libreadline-dev lzma-dev libgdbm-dev g++ gdb less inetutils-ping vim"
+export DEB_PACKAGES="build-essential git wget libffi-dev libbz2-dev libncurses-dev libsqlite3-dev libssl-dev uuid-dev zlib1g-dev libreadline-dev lzma-dev libgdbm-dev g++ gdb less inetutils-ping vim sqlite3"
 export PATH=${TOOLCHAIN_ROOT}/bin:${PATH}
 export SRC_ROOT=${SRC_ROOT-.}
 

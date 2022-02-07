@@ -3,4 +3,7 @@ networkx
 web3~=5.24.0
 websockets~=9.1
 jsonrpc-websocket==3.1.1
+tabulate==0.8.9
+autobahn==22.1.1
+Twisted==22.1.0
 ipython

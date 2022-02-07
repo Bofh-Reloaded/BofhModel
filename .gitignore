@@ -181,3 +181,4 @@ cython_debug/
 /boost/
 /.venv/
 .qtc_clangd/
+/.env

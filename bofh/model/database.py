@@ -191,6 +191,10 @@ class BasicScopedCursor:
         with self.lock:
             return self.curs.fetchone()[0]
 
+    def get(self):
+        with self.lock:
+            return self.curs.fetchone()
+
     def get_all(self):
         while True:
             with self.lock:

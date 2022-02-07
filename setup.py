@@ -21,10 +21,12 @@ CLASSIFIERS = [
 ENTRY_POINTS={'console_scripts':[
     'bofh.model.initdb = bofh.model.initdb:main',
     'bofh.model.runner1 = bofh.model.runner1:main',
+    'bofh.model.download_exchange = bofh.model.download_exchange:main',
     'bofh.model.verify_swap_tx = bofh.model.verify_swap_tx:main',
     'bofh.model.read_token_data = bofh.model.read_token_data:main',
     'bofh.model.import_bsc_pools = bofh.model.import_bsc_pools:main',
     'bofh.model.import_ctpgo_pools = bofh.model.import_ctpgo_pools:main',
+    'bofh.model.manage_stabletokens = bofh.model.manage_stabletokens:main',
 ] }
 
 from setuptools import setup, find_packages

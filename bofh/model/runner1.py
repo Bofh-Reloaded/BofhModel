@@ -3,10 +3,14 @@ from concurrent.futures import ThreadPoolExecutor
 from os import environ
 from os.path import dirname, realpath, join
 from random import choice
+from threading import Thread, Lock
 from time import sleep
 
+from web3._utils.filters import LogFilter, construct_event_filter_params
+from web3.contract import ContractEvents, ContractEvent
 from web3.exceptions import ContractLogicError
 
+from bofh.model.modules.event_listener import EventLogListenerFactory
 from bofh.utils.deploy_contract import deploy_contract
 from eth_utils import to_checksum_address
 from jsonrpc_base import TransportError
@@ -38,6 +42,8 @@ Options:
   --force_reuse_reserves_snapshot       disregard --max_reserves_snapshot_age_secs (use for debug purposes, avoids download of reserves)       
   --do_not_update_reserves_from_chain   do not attempt to forward an existing reserves DB snapshot to the latest known block
   --contract_address=<address>          set contract counterpart address [default: BOFH_CONTRACT_ADDRESS]
+  --wallet_address=<address>            funding wallet address [default: BOFH_WALLET_ADDRESS]
+  --wallet_password=<pass>               funding wallet address [default: BOFH_WALLET_PASSWD]
   --cli                                 preload status and stop at CLI (for debugging)
 """ % (JSONRPCConnector.connection_uri(), optimal_cpu_threads(), DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS)
 
@@ -56,8 +62,14 @@ PREDICTION_LOG_TOPIC0_SYNC = log_topic_id("Sync(uint112,uint112)")
 WBNB_address = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c" # id=2
 TETHER_address = "0x55d398326f99059ff775485246999027b3197955" # id=4
 START_TOKEN = to_checksum_address(WBNB_address)
+
 DEFAULT_SWAP_CONTRACT_ADDRESS = '0x89FD75CBb35267DDA9Bd6d31CdE86607a06dcFAa'
+DEFAULT_BOFH_WALLET_ADDRESS = '0xF567a3B93AF6Aa3ef8A084014b2fbc2C17D21A00'
+DEFAULT_BOFH_WALLET_PASSWD = 'skajhn398abn.SASA'
+
 ENV_SWAP_CONTRACT_ADDRESS = environ.get("BOFH_CONTRACT_ADDRESS", DEFAULT_SWAP_CONTRACT_ADDRESS)
+ENV_BOFH_WALLET_ADDRESS = environ.get("BOFH_WALLET_ADDRESS", DEFAULT_BOFH_WALLET_ADDRESS)
+ENV_BOFH_WALLET_PASSWD = environ.get("BOFH_WALLET_PASSWD", DEFAULT_BOFH_WALLET_PASSWD)
 
 @dataclass
 class Args:
@@ -73,6 +85,8 @@ class Args:
     force_reuse_reserves_snapshot: bool = False
     do_not_update_reserves_from_chain: bool = False
     contract_address: str = None
+    wallet_address: str = None
+    wallet_password: str = None
     cli: bool = False
 
     @staticmethod
@@ -99,6 +113,8 @@ class Args:
             , force_reuse_reserves_snapshot=bool(cls.default(args["--force_reuse_reserves_snapshot"], 0))
             , do_not_update_reserves_from_chain=bool(cls.default(args["--do_not_update_reserves_from_chain"], 0))
             , contract_address=cls.default(args["--contract_address"], ENV_SWAP_CONTRACT_ADDRESS, suppress_list=["BOFH_CONTRACT_ADDRESS"])
+            , wallet_address=cls.default(args["--wallet_address"], ENV_BOFH_WALLET_ADDRESS, suppress_list=["BOFH_WALLET_ADDRESS"])
+            , wallet_password=cls.default(args["--wallet_password"], ENV_BOFH_WALLET_PASSWD, suppress_list=["BOFH_WALLET_PASSWD"])
             , cli=bool(cls.default(args["--cli"], 0))
         )
 
@@ -153,6 +169,7 @@ class Runner:
         self.pools = set()
         self.ioloop = get_event_loop()
         self.align_settings_in_db()
+        self.status_lock = Lock()
         # self.polling_started = Event()
 
     def align_settings_in_db(self):
@@ -172,6 +189,12 @@ class Runner:
             if not self.args.contract_address or self.args.contract_address == ENV_SWAP_CONTRACT_ADDRESS:
                 self.args.contract_address = curs.get_meta("contract_address", ENV_SWAP_CONTRACT_ADDRESS)
             curs.set_meta("contract_address", self.args.contract_address)
+            if not self.args.wallet_address or self.args.wallet_address == ENV_BOFH_WALLET_ADDRESS:
+                self.args.wallet_address = curs.get_meta("wallet_address", ENV_BOFH_WALLET_ADDRESS)
+            curs.set_meta("wallet_address", self.args.wallet_address)
+            if not self.args.wallet_password or self.args.wallet_password == ENV_BOFH_WALLET_PASSWD:
+                self.args.wallet_password = curs.get_meta("wallet_password", ENV_BOFH_WALLET_PASSWD)
+            curs.set_meta("wallet_password", self.args.wallet_password)
 
     def _get_contract_address(self):
         return self.args.contract_address
@@ -191,6 +214,13 @@ class Runner:
             self.__w3 = Web3Connector.get_connection(self.args.web3_rpc_url)
         return self.__w3
 
+    @property
+    def jsonrpc(self):
+        try:
+            return self.__jsonrpc
+        except AttributeError:
+            self.__jsonrpc = JSONRPCConnector.get_connection(self.args.web3_rpc_url)
+        return self.__jsonrpc
 
     @property
     def pools_ctr(self):
@@ -345,7 +375,7 @@ class Runner:
 
                 ok = 0
                 disc = 0
-                for poolid, reserve0, reserve1 in curs.execute("SELECT id, reserve0, reserve1 FROM reserves").get_all():
+                for poolid, reserve0, reserve1 in curs.execute("SELECT id, reserve0, reserve1 FROM pool_reserves").get_all():
                     pool = self.graph.lookup_lp(poolid)
                     print_progress()
                     if not pool:
@@ -388,12 +418,16 @@ class Runner:
                 self.db.rollback()
                 raise
 
-    def update_balances_from_web3(self):
+    def update_balances_from_web3(self, start_block=None):
         per_thread_queue_size = self.args.max_workers * 10
         current_block = self.w3.eth.block_number
         with self.db as curs:
-            latest_read = curs.reserves_block_number
+            if start_block is None:
+                start_block = curs.reserves_block_number
+            latest_read = max(0, start_block-1)
             nr = current_block - latest_read
+            if nr <= 0:
+                return
             with progress_printer(nr, "rolling forward pool reserves {percent}% ({count} of {tot}"
                                       " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
                                       , on_same_line=True) as print_progress:
@@ -410,8 +444,9 @@ class Runner:
                             if print_progress():
                                 self.db.commit()
                             executor.submit(self.reserves_parse_blocknr, next_block)
-                            curs.reserves_block_number = latest_read = next_block
+                            latest_read = next_block
                         executor.shutdown()
+                curs.reserves_block_number = latest_read
 
     def get_constraints(self):
         constraint = PathEvalutionConstraints()
@@ -444,25 +479,24 @@ class Runner:
                 except:
                     self.log.exception("Error during eth_consPredictLogs() RPC execution")
                     continue
-                try:
+                with self.status_lock:
                     try:
-                        self.digest_prediction_payload(result)
-                    except:
-                        self.log.exception("Error during parsing of eth_consPredictLogs() results")
-                    try:
-                        matches = self.graph.evaluate_paths_of_interest(constraint)
-                        if constraint.match_limit:
-                            for m in matches:
-                                res.append(m)
-                                if len(res) >= constraint.match_limit:
-                                    return res
-                    except:
-                        self.log.exception("Error during execution of TheGraph::evaluate_paths_of_interest()")
+                        try:
+                            self.digest_prediction_payload(result)
+                        except:
+                            self.log.exception("Error during parsing of eth_consPredictLogs() results")
+                        try:
+                            matches = self.graph.evaluate_paths_of_interest(constraint)
+                            if constraint.match_limit:
+                                for m in matches:
+                                    res.append(m)
+                                    if len(res) >= constraint.match_limit:
+                                        return res
+                        except:
+                            self.log.exception("Error during execution of TheGraph::evaluate_paths_of_interest()")
                     finally:
+                        # forget about predicted states. go back to normal
                         self.graph.clear_lp_of_interest()
-                finally:
-                    # forget about predicted states. go back to normal
-                    self.graph.clear_lp_of_interest()
 
                 sleep(self.args.pred_polling_interval * 0.001)
         except:
@@ -549,6 +583,30 @@ class Runner:
         self.log.info("  ***  GRAPH LOAD COMPLETE :-)  ***")
         self.log.info("  *********************************")
 
+    def track_swaps_thread(self):
+        if getattr(self, "_track_swaps_thread", None):
+            self.log.error("track_swaps_thread already started")
+        self._track_swaps_thread = Thread(target=self._track_swaps_task, daemon=True)
+        self._track_swaps_thread.start()
+
+    def _track_swaps_task(self):
+        try:
+            factory = EventLogListenerFactory(self, self.args.web3_rpc_url)
+            factory.run()
+        finally:
+            del self._track_swaps_thread
+
+    def on_sync_event(self, address, reserve0, reserve1):
+        print(address, reserve0, reserve1)
+        with self.status_lock:
+            pool = self.graph.lookup_lp(address)
+            if pool:
+                print(pool, address, reserve0, reserve1)
+                pool.setReserves(reserve0, reserve1)
+
+
+
+
 
     def costruisci_invocabile_da_path(self, path):
         wbnb_amount = 0.1
@@ -563,7 +621,6 @@ class Runner:
 
 
     TOKEN_ADDR = "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd"
-    ACCOUNT_CREDS = '0xF567a3B93AF6Aa3ef8A084014b2fbc2C17D21A00', "skajhn398abn.SASA" # pkey, password
 
     def call(self, name, *args, address=None, abi=None):
         if address is None:
@@ -573,7 +630,7 @@ class Runner:
             abi = "BofhContract"
         contract_instance = self.w3.eth.contract(address=address, abi=get_abi(abi))
         callable = getattr(contract_instance.functions, name)
-        return callable(*args).call({"from": self.ACCOUNT_CREDS[0]})
+        return callable(*args).call({"from": self.args.wallet_address})
 
     def transact(self, name, *args, address=None, abi=None):
         if address is None:
@@ -582,9 +639,9 @@ class Runner:
         if abi is None:
             abi = "BofhContract"
         contract_instance = self.w3.eth.contract(address=address, abi=get_abi(abi))
-        self.w3.geth.personal.unlock_account(*self.ACCOUNT_CREDS, 120)
+        self.w3.geth.personal.unlock_account(self.args.wallet_address, self.args.wallet_password, 120)
         callable = getattr(contract_instance.functions, name)
-        return callable(*args).transact({"from": self.ACCOUNT_CREDS[0]})
+        return callable(*args).transact({"from": self.args.wallet_address})
 
     def add_funding(self, amount):
         caddr = self.contract_address
@@ -615,7 +672,7 @@ class Runner:
             self.log.exception("unable to kill existing contract at %s", self.contract_address)
         fpath = find_contract(fpath)
         self.log.info("attempting to deploy contract from %s", fpath)
-        self.contract_address = deploy_contract(*self.ACCOUNT_CREDS, fpath,
+        self.contract_address = deploy_contract(self.args.wallet_address, self.args.wallet_password, fpath,
                                                 self.args.start_token_address)
         self.log.info("new contract address is established at %s", self.contract_address)
 
@@ -668,6 +725,7 @@ def main():
         embed()
     else:
         bofh.load()
+        bofh.track_swaps_thread()
         bofh.search_opportunities_by_prediction()
 
 

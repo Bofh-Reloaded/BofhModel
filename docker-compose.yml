@@ -6,6 +6,7 @@ services:
     image: bofh/finder
     volumes:
         - .:/src
+        - ${MODEL_STATUS_DIR-./status}:/status
     network_mode: "host"
     #ports:
     #- "8888:8888"

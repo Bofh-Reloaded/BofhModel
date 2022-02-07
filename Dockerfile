@@ -15,7 +15,8 @@ ENV SRC_ROOT=/src
 COPY . ${SRC_ROOT}
 RUN bash ${SRC_ROOT}/support/build_toolchain.sh
 RUN bash ${SRC_ROOT}/support/setup_everything.sh
-WORKDIR ${SRC_ROOT}
+WORKDIR /status
+COPY support/sqliterc /root/.sqliterc
 
 
 ENTRYPOINT /bin/bash
