@@ -3,11 +3,9 @@ from concurrent.futures import ThreadPoolExecutor
 from os import environ
 from os.path import dirname, realpath, join
 from random import choice
-from threading import Thread, Lock
+from threading import Thread, Lock, Event
 from time import sleep
 
-from web3._utils.filters import LogFilter, construct_event_filter_params
-from web3.contract import ContractEvents, ContractEvent
 from web3.exceptions import ContractLogicError
 
 from bofh.model.modules.event_listener import EventLogListenerFactory
@@ -43,7 +41,14 @@ Options:
   --do_not_update_reserves_from_chain   do not attempt to forward an existing reserves DB snapshot to the latest known block
   --contract_address=<address>          set contract counterpart address [default: BOFH_CONTRACT_ADDRESS]
   --wallet_address=<address>            funding wallet address [default: BOFH_WALLET_ADDRESS]
-  --wallet_password=<pass>               funding wallet address [default: BOFH_WALLET_PASSWD]
+  --wallet_password=<pass>              funding wallet address [default: BOFH_WALLET_PASSWD]
+  --initial_amount_min=<wei>            min initial amount of start_token considered for swap operation [default: 0]
+  --initial_amount_max=<wei>            max initial amount of start_token considered for swap operation [default: 1E+16]
+  --min_profit_target_ppm=<ppM>         minimum viable profit target in parts per million (relative) [default: 10000]
+  --min_profit_target_amount=<wei>      minimum viable profit target in wei (absolute) [default: unset]
+  --dry_run                             call contract execution to estimate outcome without actual transaction (no-risk no-reward)
+  --dry_run_delay=<secs>                delay seconds from opportunity spotting and arbitrage simulation [default: 6]
+  --logfile=<file>                      log to file
   --cli                                 preload status and stop at CLI (for debugging)
 """ % (JSONRPCConnector.connection_uri(), optimal_cpu_threads(), DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS)
 
@@ -87,6 +92,13 @@ class Args:
     contract_address: str = None
     wallet_address: str = None
     wallet_password: str = None
+    initial_amount_min: int = 0
+    initial_amount_max: int = 10**16
+    min_profit_target_ppm: int = 10000
+    min_profit_target_amount: int = 0
+    dry_run: bool = False
+    dry_run_delay: int = 6
+    logfile: str = None
     cli: bool = False
 
     @staticmethod
@@ -115,6 +127,13 @@ class Args:
             , contract_address=cls.default(args["--contract_address"], ENV_SWAP_CONTRACT_ADDRESS, suppress_list=["BOFH_CONTRACT_ADDRESS"])
             , wallet_address=cls.default(args["--wallet_address"], ENV_BOFH_WALLET_ADDRESS, suppress_list=["BOFH_WALLET_ADDRESS"])
             , wallet_password=cls.default(args["--wallet_password"], ENV_BOFH_WALLET_PASSWD, suppress_list=["BOFH_WALLET_PASSWD"])
+            , initial_amount_min=int(args["--initial_amount_min"])
+            , initial_amount_max=int(cls.default(args["--initial_amount_max"], 10**16, suppress_list=["1E+16"]))
+            , min_profit_target_ppm=int(args["--min_profit_target_ppm"])
+            , min_profit_target_amount=int(cls.default(args["--min_profit_target_amount"], 0, suppress_list=["unset"]))
+            , dry_run=bool(cls.default(args["--dry_run"], 0))
+            , dry_run_delay=int(args["--dry_run_delay"])
+            , logfile=args.get("--logfile")
             , cli=bool(cls.default(args["--cli"], 0))
         )
 
@@ -170,6 +189,7 @@ class Runner:
         self.ioloop = get_event_loop()
         self.align_settings_in_db()
         self.status_lock = Lock()
+        self.reserves_update_batch = list()
         # self.polling_started = Event()
 
     def align_settings_in_db(self):
@@ -195,6 +215,33 @@ class Runner:
             if not self.args.wallet_password or self.args.wallet_password == ENV_BOFH_WALLET_PASSWD:
                 self.args.wallet_password = curs.get_meta("wallet_password", ENV_BOFH_WALLET_PASSWD)
             curs.set_meta("wallet_password", self.args.wallet_password)
+            if not self.args.initial_amount_min or self.args.initial_amount_min == 0:
+                self.args.initial_amount_min = curs.get_meta("initial_amount_min", 0, cast=int)
+            curs.set_meta("initial_amount_min", self.args.initial_amount_min)
+            if not self.args.initial_amount_max or self.args.initial_amount_max == 10**16:
+                self.args.initial_amount_max = curs.get_meta("initial_amount_max", 10**16, cast=int)
+            curs.set_meta("initial_amount_max", self.args.initial_amount_max)
+            if not self.args.min_profit_target_ppm or self.args.min_profit_target_ppm == 10000:
+                self.args.min_profit_target_ppm = curs.get_meta("min_profit_target_ppm", 10000, cast=int)
+            curs.set_meta("min_profit_target_ppm", self.args.min_profit_target_ppm)
+            if not self.args.min_profit_target_amount or self.args.min_profit_target_amount == 0:
+                self.args.min_profit_target_amount = curs.get_meta("min_profit_target_amount", 0, cast=int)
+            curs.set_meta("min_profit_target_amount", self.args.min_profit_target_amount)
+            if not self.args.dry_run_delay or self.args.dry_run_delay == 6:
+                self.args.dry_run_delay = curs.get_meta("dry_run_delay", 6, cast=int)
+            curs.set_meta("dry_run_delay", self.args.dry_run_delay)
+
+            try:
+                contract_balance = self.contract_balance()
+                self.log.info("contract at %s has %u in balance", self.contract_address, contract_balance)
+                if contract_balance < self.args.initial_amount_max or contract_balance < self.args.initial_amount_min:
+                    self.log.error("financial attack parameters ( --initial_amount_min=%r and --initial_amount_max=%r "
+                                   ") are not compatible with contract balance"
+                                   , self.args.initial_amount_min
+                                   , self.args.initial_amount_max)
+            except:
+                self.log.error("unable to read current balance for contract at %s", self.contract_address)
+
 
     def _get_contract_address(self):
         return self.args.contract_address
@@ -450,8 +497,35 @@ class Runner:
 
     def get_constraints(self):
         constraint = PathEvalutionConstraints()
-        constraint.initial_token_wei_balance = self.graph.start_token.toWei(1)
+        constraint.initial_token_wei_balance = self.args.initial_amount_min
+        constraint.convenience_min_threshold = (self.args.min_profit_target_ppm+1000000) / 1000000
+        constraint.convenience_max_threshold = 5
         return constraint
+
+    def is_out_of_fees_error(self, err):
+        return str(err).find("Pancake: K") > 0
+
+    def on_profitable_path_execution(self, match):
+        path = match.path
+        pools = []
+        for i in range(path.size()):
+            swap = path.get(i)
+            pools.append(str(swap.pool.address))
+        feesPPM = [3000] * len(pools)
+        initialAmount = self.args.initial_amount_min
+        expectedAmount = (initialAmount * (1000000 + self.args.min_profit_target_ppm)) // 1000000
+        try:
+            payload = self.pack_args_payload(pools, feesPPM, initialAmount, expectedAmount)
+            yields = self.call("multiswap", payload)
+            self.log.info("SUCCESS: initialAmount=%u %u-way swap yields %u (%d gain, or %0.3f%%)"
+                          , initialAmount
+                          , len(pools)
+                          , yields
+                          , yields-initialAmount
+                          , (yields/initialAmount)*100.0
+                          )
+        except:
+            self.log.exception("unable to execute dry-run contract estimation")
 
     async def prediction_polling_task(self, constraint=None):
         # await self.polling_started.wait()
@@ -459,7 +533,6 @@ class Runner:
             constraint = self.get_constraints()
         log_set_level(log_level.info)
         self.latestBlockNumber = 0
-        res = []
 
         self.log.info("entering prediction polling loop...")
         server = Server(self.args.web3_rpc_url)
@@ -487,11 +560,10 @@ class Runner:
                             self.log.exception("Error during parsing of eth_consPredictLogs() results")
                         try:
                             matches = self.graph.evaluate_paths_of_interest(constraint)
-                            if constraint.match_limit:
-                                for m in matches:
-                                    res.append(m)
-                                    if len(res) >= constraint.match_limit:
-                                        return res
+                            for i, match in enumerate(matches):
+                                if constraint.match_limit and i >= constraint.match_limit:
+                                    return
+                                self.on_profitable_path_execution(match)
                         except:
                             self.log.exception("Error during execution of TheGraph::evaluate_paths_of_interest()")
                     finally:
@@ -505,15 +577,11 @@ class Runner:
             self.log.info("prediction polling loop terminated")
             await server.close()
 
-    def search_opportunities_by_prediction(self, constraint=None):
-        return self.ioloop.run_until_complete(self.prediction_polling_task(constraint))
+    def search_opportunities_by_prediction_thread(self, constraint=None):
+        self._search_opportunities_by_prediction_thread = Thread(target=lambda: self.ioloop.run_until_complete(self.prediction_polling_task(constraint)), daemon=True)
+        self._search_opportunities_by_prediction_thread.start()
 
-    def update_pool_reserves_by_tx_sync_log(self, pool, data, curs=None):
-        try:
-            r0, r1 = parse_data_parameters(data)
-        except:
-            self.log.exception("unable to decode sync log data")
-            return
+    def update_pool_reserves_by_tx_sync_log(self, pool, r0, r1):
         if self.args.verbose:
             self.log.info("use Sync event to update reserves of pool %r: %s(%s-%s), reserve=%r, reserve1=%r"
                           , pool.address
@@ -523,8 +591,6 @@ class Runner:
                           , r0
                           , r1)
         pool.setReserves(r0, r1)
-        if curs:
-            curs.add_pool_reserve(pool.tag, r0, r1)
 
     def digest_prediction_payload(self, payload):
         assert isinstance(payload, dict)
@@ -543,8 +609,14 @@ class Runner:
             topic0 = log["topic0"]
             if topic0 == PREDICTION_LOG_TOPIC0_SYNC:
                 pool.enter_predicted_state(0, 0, 0, 0)
-                self.update_pool_reserves_by_tx_sync_log(pool, log["data"])
+                try:
+                    r0, r1 = parse_data_parameters(log["data"])
+                    self.update_pool_reserves_by_tx_sync_log(pool, r0, r1)
+                    self.graph.add_lp_of_interest(pool)
+                except:
+                    continue
                 continue
+            """
             if topic0 == PREDICTION_LOG_TOPIC0_SWAP:
                 data = log["data"]
                 try:
@@ -564,6 +636,7 @@ class Runner:
                 pool.enter_predicted_state(amount0In, amount1In, amount0Out, amount1Out)
                 self.graph.add_lp_of_interest(pool)
                 continue
+            """
 
     def load(self):
         self.preload_exchanges()
@@ -596,17 +669,43 @@ class Runner:
         finally:
             del self._track_swaps_thread
 
+    def periodic_reserve_flush_thread(self):
+        if getattr(self, "_periodic_reserve_flush_thread", None):
+            self.log.error("periodic_reserve_flush_thread already started")
+        self._periodic_reserve_flush_thread = Thread(target=self._periodic_reserve_flush_task, daemon=True)
+        self._periodic_reserve_flush_thread.start()
+
+    def _periodic_reserve_flush_task(self):
+        self._periodic_reserve_flush_terminated = Event()
+        while True:
+            if self._periodic_reserve_flush_terminated.wait(timeout=60):
+                return
+            if not self.reserves_update_batch:
+                continue
+            if self.args.verbose:
+                self.log.info("syncing %u pool reserves udates to db...", len(self.reserves_update_batch))
+            with self.status_lock, self.db as curs:
+                for pid, r0, r1 in self.reserves_update_batch:
+                    curs.add_pool_reserve(pid, r0, r1)
+                self.reserves_update_batch.clear()
+
+    def join(self):
+        th = getattr(self, "_search_opportunities_by_prediction_thread", None)
+        if th:
+            th.join()
+        th = getattr(self, "_track_swaps_thread", None)
+        if th:
+            th.join()
+        th = getattr(self, "_periodic_reserve_flush_thread", None)
+        if th:
+            th.join()
+
     def on_sync_event(self, address, reserve0, reserve1):
-        print(address, reserve0, reserve1)
         with self.status_lock:
             pool = self.graph.lookup_lp(address)
             if pool:
-                print(pool, address, reserve0, reserve1)
-                pool.setReserves(reserve0, reserve1)
-
-
-
-
+                self.update_pool_reserves_by_tx_sync_log(pool, reserve0, reserve1)
+                self.reserves_update_batch.append((pool.tag, reserve0, reserve1))
 
     def costruisci_invocabile_da_path(self, path):
         wbnb_amount = 0.1
@@ -618,9 +717,6 @@ class Runner:
         self.log.info("address vector is %r", address_vector)
         initial_amount = int(str(self.graph.start_token.toWei(wbnb_amount)))
         return self.costruisci_invocabile_da_parametri(address_vector, initial_amount, min_profit_pct)
-
-
-    TOKEN_ADDR = "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd"
 
     def call(self, name, *args, address=None, abi=None):
         if address is None:
@@ -646,24 +742,24 @@ class Runner:
     def add_funding(self, amount):
         caddr = self.contract_address
         self.log.info("approving %u of balance to on contract at %s, then calling adoptAllowance()", amount, caddr)
-        self.transact("approve", caddr, amount, address=self.TOKEN_ADDR, abi="IGenericFungibleToken")
+        self.transact("approve", caddr, amount, address=self.args.start_token_address, abi="IGenericFungibleToken")
         self.transact("adoptAllowance")
 
     def repossess_funding(self):
         caddr = self.contract_address
         self.log.info("calling withdrawFunds() on contract at %s", caddr)
-        self.transact("approve", caddr, 0, address=self.TOKEN_ADDR, abi="IGenericFungibleToken")
+        self.transact("approve", caddr, 0, address=self.args.start_token_address, abi="IGenericFungibleToken")
         self.transact("withdrawFunds")
 
     def kill_contract(self):
         caddr = self.contract_address
-        self.transact("approve", caddr, 0, address=self.TOKEN_ADDR, abi="IGenericFungibleToken")
+        self.transact("approve", caddr, 0, address=self.args.start_token_address, abi="IGenericFungibleToken")
         self.log.info("calling kill() on contract at %s", caddr)
         self.transact("kill")
 
     def contract_balance(self):
         caddr = self.contract_address
-        return self.call("balanceOf", self.TOKEN_ADDR, "IGenericFungibleToken", caddr)
+        return self.call("balanceOf", caddr, address=self.args.start_token_address, abi="IGenericFungibleToken")
 
     def redeploy_contract(self, fpath="BofhContract.sol"):
         try:
@@ -712,21 +808,32 @@ class Runner:
         print(self.call(name, caddr, "BofhContract", args, *a))
 
 
-
-
 def main():
-    basicConfig(level="INFO")
+    from IPython import embed
+    args = Args.from_cmdline(__doc__)
+    if args.logfile:
+        basicConfig(
+            filename=args.logfile,
+            filemode="a",
+            format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
+            level="INFO",
+        )
+    else:
+        import coloredlogs
+        coloredlogs.install()
     log_set_level(log_level.debug)
     log_register_sink(LogAdapter(level="DEBUG"))
-    args = Args.from_cmdline(__doc__)
+
     bofh = Runner(args)
+    bofh.load()
+    bofh.track_swaps_thread()
+    bofh.periodic_reserve_flush_thread()
+    bofh.search_opportunities_by_prediction_thread()
     if args.cli:
-        from IPython import embed
-        embed()
+        while True:
+            embed()
     else:
-        bofh.load()
-        bofh.track_swaps_thread()
-        bofh.search_opportunities_by_prediction()
+        bofh.join()
 
 
 if __name__ == '__main__':

@@ -323,8 +323,8 @@ class StatusScopedCursor(BasicScopedCursor):
 
     def add_pool_reserve(self, pool_id, reserve0, reserve1):
         assert self.conn is not None
-        if isinstance(reserve0, int): reserve0 = str(reserve0)
-        if isinstance(reserve1, int): reserve1 = str(reserve1)
+        if not isinstance(reserve0, str): reserve0 = str(reserve0)
+        if not isinstance(reserve1, str): reserve1 = str(reserve1)
         try:
             self.execute("INSERT INTO pool_reserves (id, reserve0, reserve1) VALUES (?, ?, ?)", (pool_id, reserve0, reserve1))
             self.execute("SELECT last_insert_rowid()")

@@ -75,7 +75,7 @@ class EventLogListenerFactory(WebSocketClientFactory, ReconnectingClientFactory)
         host, port = splitport(urlparse(self.connection_url).netloc)
         port = int(port)
         reactor.connectTCP(host, port, self)
-        reactor.run()
+        reactor.run(installSignalHandlers=False)
 
     def stop(self):
         reactor.stop()
