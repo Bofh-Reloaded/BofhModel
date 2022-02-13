@@ -19,6 +19,11 @@ struct bad_argument: public std::runtime_error
 };
 #define check_not_null_arg(name) if (name == nullptr) throw bad_argument("can't be null: " #name);
 
+int OperableSwap::feesPPM() const
+{
+    return pool->feesPPM();
+}
+
 
 Exchange::Exchange(datatag_t tag_
                    , const address_t &address_
@@ -66,6 +71,22 @@ balance_t LiquidityPool::SwapExactTokensForTokens(const Token *tokenSent, const 
     assert(exchange != nullptr);
     assert(exchange->estimator != nullptr);
     return exchange->estimator->SwapExactTokensForTokens(this, tokenSent, sentAmount);
+}
+
+/**
+ * @brief accrued fees (parts per million). <0 means rebate
+ */
+int LiquidityPool::feesPPM() const
+{
+    assert(exchange != NULL);
+    if (exchange->estimator != nullptr) try
+    {
+        amm::EstimatorWithProportionalFees &eppf = dynamic_cast<amm::EstimatorWithProportionalFees&>(*exchange->estimator);
+        return eppf.feesPPK() * 1000;
+    } catch (std::bad_cast) {
+        // carry on
+    }
+    return 0;
 }
 
 void LiquidityPool::enter_predicted_state(const balance_t &amount0In

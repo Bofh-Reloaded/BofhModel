@@ -34,6 +34,17 @@ class Pool:
     token1_id: int
 
 
+@dataclass
+class Intervention:
+    origin: str
+    tx: str = ""
+    amountIn: int = 0
+    amountOut: int = 0
+    calldata: str = None
+    blockNr: int = 0
+    tag: int = None
+
+
 class ModelDB:
     log = getLogger(__name__)
 
@@ -249,7 +260,7 @@ class StatusScopedCursor(BasicScopedCursor):
 
     def list_exchanges(self):
         assert self.conn is not None
-        self.execute("SELECT id,name FROM exchanges")
+        self.execute("SELECT id,router_address,name FROM exchanges")
         while True:
             seq = self.curs.fetchmany()
             if not seq:
@@ -332,6 +343,13 @@ class StatusScopedCursor(BasicScopedCursor):
             # already existing
             self.execute("UPDATE pool_reserves SET reserve0 = ?, reserve1 = ? WHERE id = ?", (reserve0, reserve1, pool_id))
 
+    def add_intervention(self, o: Intervention):
+        self.execute("INSERT INTO interventions (origin, blockNr, tx, amountIn, amountOut, calldata) "
+                     "VALUES (?, ?, ?, ?, ?, ?)",
+                     (o.origin, o.blockNr, o.tx, str(o.amountIn), str(o.amountOut), o.calldata)
+                     )
+        o.tag = self.execute("SELECT last_insert_rowid()").get_int()
+
 
 class BalancesScopedCursor(BasicScopedCursor):
     def add_swap_log(self
@@ -389,4 +407,6 @@ class BalancesScopedCursor(BasicScopedCursor):
         except IntegrityError:
             # already existing
             self.execute("UPDATE pool_reserves SET reserve0 = ?, reserve1 = ? WHERE pool = ?", (reserve0, reserve1, pool_id))
+
+
 

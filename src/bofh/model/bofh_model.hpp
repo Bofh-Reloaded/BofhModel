@@ -104,6 +104,11 @@ struct OperableSwap: boost::noncopyable, Ref<OperableSwap>
         , tokenDest(tokenDest_)
         , pool(pool_)
     { }
+
+    /**
+     * @brief accrued fees (parts per million). <0 means rebate
+     */
+    int feesPPM() const;
 };
 
 
@@ -229,6 +234,11 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
      * @brief calculates the token balance received for in return for selling sentAmount of tokenSent
      */
     balance_t SwapExactTokensForTokens(const Token *tokenSent, const balance_t &sentAmount) const;
+
+    /**
+     * @brief accrued fees (parts per million). <0 means rebate
+     */
+    int feesPPM() const;
 
 
 

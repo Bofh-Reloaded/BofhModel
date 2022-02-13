@@ -154,7 +154,8 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     class_<OperableSwap, dont_make_copies>("OperableSwap", no_init)
             .def_readonly("tokenSrc", &OperableSwap::tokenSrc)
             .def_readonly("tokenDest", &OperableSwap::tokenDest)
-            .def_readonly("pool", &OperableSwap::pool);
+            .def_readonly("pool", &OperableSwap::pool)
+            .def("feesPPM", &OperableSwap::feesPPM);
     register_ptr_to_python<const OperableSwap*>();
     register_ptr_to_python<OperableSwap*>();
 
