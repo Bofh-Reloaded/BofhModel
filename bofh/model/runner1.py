@@ -8,6 +8,7 @@ from time import sleep
 
 from web3.exceptions import ContractLogicError
 
+from bofh.model.modules.delayed_execution import DelayedExecutor
 from bofh.model.modules.event_listener import EventLogListenerFactory
 from bofh.utils.deploy_contract import deploy_contract
 from eth_utils import to_checksum_address
@@ -22,37 +23,8 @@ from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, m
 DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS=3600  # 1hr because probably it would probably take longer to forward the
                                              # existing snapshot rather than downloading from scratch
 
-__doc__="""Start model runner.
 
-Usage: bofh.model.runner1 [options]
-
-Options:
-  -h  --help
-  -d, --dsn=<connection_str>            DB dsn connection string [default: sqlite3://status.db]
-  -c, --connection_url=<url>            Web3 RPC connection URL [default: %s]
-  -n <n>                                number of pools to query before exit (benchmark mode)
-  -j <n>                                number of RPC data ingest workers, default one per hardware thread [default: %u]
-  -v, --verbose                         debug output
-  --chunk_size=<n>                      preloaded work chunk size per each worker [default: 100]
-  --pred_polling_interval=<n>           Web3 prediction polling internal in millisecs [default: 1000]
-  --start_token_address=<address>       on-chain address of start token [default: WBNB]
-  --max_reserves_snapshot_age_secs=<s>  max age of usable LP reserves DB snapshot (refuses to preload from DB if older) [default: %r]
-  --force_reuse_reserves_snapshot       disregard --max_reserves_snapshot_age_secs (use for debug purposes, avoids download of reserves)       
-  --do_not_update_reserves_from_chain   do not attempt to forward an existing reserves DB snapshot to the latest known block
-  --contract_address=<address>          set contract counterpart address [default: BOFH_CONTRACT_ADDRESS]
-  --wallet_address=<address>            funding wallet address [default: BOFH_WALLET_ADDRESS]
-  --wallet_password=<pass>              funding wallet address [default: BOFH_WALLET_PASSWD]
-  --initial_amount_min=<wei>            min initial amount of start_token considered for swap operation [default: 0]
-  --initial_amount_max=<wei>            max initial amount of start_token considered for swap operation [default: 1E+16]
-  --min_profit_target_ppm=<ppM>         minimum viable profit target in parts per million (relative) [default: 10000]
-  --min_profit_target_amount=<wei>      minimum viable profit target in wei (absolute) [default: unset]
-  --dry_run                             call contract execution to estimate outcome without actual transaction (no-risk no-reward)
-  --dry_run_delay=<secs>                delay seconds from opportunity spotting and arbitrage simulation [default: 6]
-  --logfile=<file>                      log to file
-  --cli                                 preload status and stop at CLI (for debugging)
-""" % (JSONRPCConnector.connection_uri(), optimal_cpu_threads(), DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS)
-
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, _MISSING_TYPE, MISSING
 from logging import getLogger, basicConfig
 
 from bofh.model.database import ModelDB, StatusScopedCursor, BalancesScopedCursor
@@ -78,28 +50,45 @@ ENV_BOFH_WALLET_PASSWD = environ.get("BOFH_WALLET_PASSWD", DEFAULT_BOFH_WALLET_P
 
 @dataclass
 class Args:
-    status_db_dsn: str = None
+    status_db_dsn: str = "sqlite3://status.db"
     verbose: bool = False
-    pools_limit: int = 0
-    web3_rpc_url: str = None
-    max_workers: int = 0
-    chunk_size: int = 0
-    pred_polling_interval: int = 0
-    start_token_address: str = None
-    max_reserves_snapshot_age_secs: int = 0
+    web3_rpc_url: str = JSONRPCConnector.connection_uri()
+    max_workers: int = optimal_cpu_threads()
+    chunk_size: int = 100
+    pred_polling_interval: int = 1000
+    start_token_address: str = WBNB_address
+    max_reserves_snapshot_age_secs: int = 7200
     force_reuse_reserves_snapshot: bool = False
     do_not_update_reserves_from_chain: bool = False
-    contract_address: str = None
-    wallet_address: str = None
-    wallet_password: str = None
+    contract_address: str = DEFAULT_SWAP_CONTRACT_ADDRESS
+    wallet_address: str = DEFAULT_BOFH_WALLET_ADDRESS
+    wallet_password: str = DEFAULT_BOFH_WALLET_PASSWD
     initial_amount_min: int = 0
     initial_amount_max: int = 10**16
     min_profit_target_ppm: int = 10000
+    max_profit_target_ppm: int = None
     min_profit_target_amount: int = 0
     dry_run: bool = False
     dry_run_delay: int = 6
     logfile: str = None
     cli: bool = False
+
+    DB_CACHED_PARAMETERS = {
+        # List of parameters which are also stored in DB in a stateful manner
+        "web3_rpc_url",
+        "start_token_address",
+        "pred_polling_interval",
+        "max_reserves_snapshot_age_secs",
+        "contract_address",
+        "wallet_address",
+        "wallet_password",
+        "initial_amount_min",
+        "initial_amount_max",
+        "min_profit_target_ppm",
+        "max_profit_target_ppm",
+        "min_profit_target_amount",
+        "dry_run_delay",
+    }
 
     @staticmethod
     def default(arg, d, suppress_list=None):
@@ -112,30 +101,72 @@ class Args:
     def from_cmdline(cls, docstr):
         from docopt import docopt
         args = docopt(docstr)
-        return cls(
-            status_db_dsn = args["--dsn"]
-            , verbose=bool(cls.default(args["--verbose"], 0))
-            , pools_limit=int(cls.default(args["-n"], 0))
-            , web3_rpc_url=cls.default(args["--connection_url"], "", suppress_list=[JSONRPCConnector.connection_uri()])
-            , max_workers=int(cls.default(args["-j"], 0))
-            , chunk_size=int(cls.default(args["--chunk_size"], 100))
-            , pred_polling_interval=int(cls.default(args["--pred_polling_interval"], 1000))
-            , start_token_address=cls.default(args["--start_token_address"], "", suppress_list=["WBNB"])
-            , max_reserves_snapshot_age_secs=int(args["--max_reserves_snapshot_age_secs"])
-            , force_reuse_reserves_snapshot=bool(cls.default(args["--force_reuse_reserves_snapshot"], 0))
-            , do_not_update_reserves_from_chain=bool(cls.default(args["--do_not_update_reserves_from_chain"], 0))
-            , contract_address=cls.default(args["--contract_address"], ENV_SWAP_CONTRACT_ADDRESS, suppress_list=["BOFH_CONTRACT_ADDRESS"])
-            , wallet_address=cls.default(args["--wallet_address"], ENV_BOFH_WALLET_ADDRESS, suppress_list=["BOFH_WALLET_ADDRESS"])
-            , wallet_password=cls.default(args["--wallet_password"], ENV_BOFH_WALLET_PASSWD, suppress_list=["BOFH_WALLET_PASSWD"])
-            , initial_amount_min=int(args["--initial_amount_min"])
-            , initial_amount_max=int(cls.default(args["--initial_amount_max"], 10**16, suppress_list=["1E+16"]))
-            , min_profit_target_ppm=int(args["--min_profit_target_ppm"])
-            , min_profit_target_amount=int(cls.default(args["--min_profit_target_amount"], 0, suppress_list=["unset"]))
-            , dry_run=bool(cls.default(args["--dry_run"], 0))
-            , dry_run_delay=int(args["--dry_run_delay"])
-            , logfile=args.get("--logfile")
-            , cli=bool(cls.default(args["--cli"], 0))
-        )
+        kw = {}
+        for field in fields(cls):
+            k = "--%s" % field.name
+            arg = args.get(k)
+            if arg is None:
+                arg = field.default
+                if arg is MISSING:
+                    raise RuntimeError("missing command line parameter: %s" % k)
+            if arg is not None:
+                arg = field.type(arg)
+            kw[field.name] = arg
+        return cls(**kw)
+
+    def sync_db(self, db):
+        self.db = db
+        with self.db as curs:
+            for fn in self.DB_CACHED_PARAMETERS:
+                field = self.__dataclass_fields__[fn]
+                curval = super(Args, self).__getattribute__(fn)
+                if curval is None:
+                    dbval = curs.get_meta(fn, field.default, cast=field.type)
+                    super(Args, self).__setattr__(fn, dbval)
+                else:
+                    curs.set_meta(fn, curval, cast=field.type)
+
+    def __setattr__(self, key, value):
+        super(Args, self).__setattr__(key, value)
+        if key not in self.DB_CACHED_PARAMETERS:
+            return
+        db = getattr(self, "db", None)
+        if not db:
+            return
+        with db as curs:
+            curs.set_meta(key, value)
+
+
+__doc__=f"""Start model runner.
+
+Usage: bofh.model.runner1 [options]
+
+Options:
+  -h  --help
+  -d, --dsn=<connection_str>            DB dsn connection string. Default is {Args.status_db_dsn}
+  -c, --web3_rpc_url=<url>              Web3 RPC connection URL. Default is {Args.web3_rpc_url}
+  -j, --max_workers=<n>                 number of RPC data ingest workers, default one per hardware thread. Default is {Args.max_workers}
+  -v, --verbose                         debug output
+  --chunk_size=<n>                      preloaded work chunk size per each worker Default is {Args.chunk_size}
+  --pred_polling_interval=<n>           Web3 prediction polling internal in millisecs. Default is {Args.pred_polling_interval}
+  --start_token_address=<address>       on-chain address of start token. Default is WBNB_mainnet
+  --max_reserves_snapshot_age_secs=<s>  max age of usable LP reserves DB snapshot (refuses to preload from DB if older). Default is {Args.max_reserves_snapshot_age_secs}
+  --force_reuse_reserves_snapshot       disregard --max_reserves_snapshot_age_secs (use for debug purposes, avoids download of reserves)       
+  --do_not_update_reserves_from_chain   do not attempt to forward an existing reserves DB snapshot to the latest known block
+  --contract_address=<address>          set contract counterpart address. Default from BOFH_CONTRACT_ADDRESS envvar
+  --wallet_address=<address>            funding wallet address. Default from BOFH_WALLET_ADDRESS envvar
+  --wallet_password=<pass>              funding wallet address. Default from BOFH_WALLET_PASSWD envvar
+  --initial_amount_min=<wei>            min initial amount of start_token considered for swap operation. Default is {Args.initial_amount_min}
+  --initial_amount_max=<wei>            max initial amount of start_token considered for swap operation. Default is {Args.initial_amount_max}
+  --min_profit_target_ppm=<ppM>         minimum viable profit target in parts per million (relative). Default is {Args.min_profit_target_ppm}
+  --max_profit_target_ppm=<ppM>         minimum viable profit target in parts per million (relative). Default is {Args.max_profit_target_ppm}
+  --min_profit_target_amount=<wei>      minimum viable profit target in wei (absolute). Default is unset
+  --dry_run                             call contract execution to estimate outcome without actual transaction (no-risk no-reward mode)
+  --dry_run_delay=<secs>                delay seconds from opportunity spotting and arbitrage simulation. Default is {Args.dry_run_delay}
+  --logfile=<file>                      log to file
+  --cli                                 preload status and stop at CLI (for debugging)
+"""
+
 
 
 def getReserves(pool_address):
@@ -187,60 +218,30 @@ class Runner:
         self.db.open_and_priming()
         self.pools = set()
         self.ioloop = get_event_loop()
-        self.align_settings_in_db()
+        self.args.sync_db(self.db)
+        self.consistency_checks()
         self.status_lock = Lock()
         self.reserves_update_batch = list()
+        self.delayed_executor = DelayedExecutor(self)
         # self.polling_started = Event()
 
-    def align_settings_in_db(self):
-        with self.db as curs:
-            if not self.args.start_token_address or self.args.start_token_address == START_TOKEN:
-                self.args.start_token_address = to_checksum_address(curs.get_meta("start_token_address", START_TOKEN))
-            curs.set_meta("start_token_address", to_checksum_address(self.args.start_token_address))
-            if not self.args.web3_rpc_url:
-                self.args.web3_rpc_url = curs.get_meta("web3_rpc_url", Web3Connector.DEFAULT_URI_WSRPC)
-            curs.set_meta("web3_rpc_url", self.args.web3_rpc_url)
-            if not self.args.pred_polling_interval or self.args.pred_polling_interval == 1000:
-                self.args.pred_polling_interval = curs.get_meta("pred_polling_interval", 1000, cast=int)
-            curs.set_meta("pred_polling_interval", self.args.pred_polling_interval)
-            if not self.args.max_reserves_snapshot_age_secs or self.args.max_reserves_snapshot_age_secs == DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS:
-                self.args.max_reserves_snapshot_age_secs = curs.get_meta("max_reserves_snapshot_age_secs", DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS, cast=int)
-            curs.set_meta("max_reserves_snapshot_age_secs", self.args.max_reserves_snapshot_age_secs)
-            if not self.args.contract_address or self.args.contract_address == ENV_SWAP_CONTRACT_ADDRESS:
-                self.args.contract_address = curs.get_meta("contract_address", ENV_SWAP_CONTRACT_ADDRESS)
-            curs.set_meta("contract_address", self.args.contract_address)
-            if not self.args.wallet_address or self.args.wallet_address == ENV_BOFH_WALLET_ADDRESS:
-                self.args.wallet_address = curs.get_meta("wallet_address", ENV_BOFH_WALLET_ADDRESS)
-            curs.set_meta("wallet_address", self.args.wallet_address)
-            if not self.args.wallet_password or self.args.wallet_password == ENV_BOFH_WALLET_PASSWD:
-                self.args.wallet_password = curs.get_meta("wallet_password", ENV_BOFH_WALLET_PASSWD)
-            curs.set_meta("wallet_password", self.args.wallet_password)
-            if not self.args.initial_amount_min or self.args.initial_amount_min == 0:
-                self.args.initial_amount_min = curs.get_meta("initial_amount_min", 0, cast=int)
-            curs.set_meta("initial_amount_min", self.args.initial_amount_min)
-            if not self.args.initial_amount_max or self.args.initial_amount_max == 10**16:
-                self.args.initial_amount_max = curs.get_meta("initial_amount_max", 10**16, cast=int)
-            curs.set_meta("initial_amount_max", self.args.initial_amount_max)
-            if not self.args.min_profit_target_ppm or self.args.min_profit_target_ppm == 10000:
-                self.args.min_profit_target_ppm = curs.get_meta("min_profit_target_ppm", 10000, cast=int)
-            curs.set_meta("min_profit_target_ppm", self.args.min_profit_target_ppm)
-            if not self.args.min_profit_target_amount or self.args.min_profit_target_amount == 0:
-                self.args.min_profit_target_amount = curs.get_meta("min_profit_target_amount", 0, cast=int)
-            curs.set_meta("min_profit_target_amount", self.args.min_profit_target_amount)
-            if not self.args.dry_run_delay or self.args.dry_run_delay == 6:
-                self.args.dry_run_delay = curs.get_meta("dry_run_delay", 6, cast=int)
-            curs.set_meta("dry_run_delay", self.args.dry_run_delay)
-
-            try:
-                contract_balance = self.contract_balance()
-                self.log.info("contract at %s has %u in balance", self.contract_address, contract_balance)
-                if contract_balance < self.args.initial_amount_max or contract_balance < self.args.initial_amount_min:
-                    self.log.error("financial attack parameters ( --initial_amount_min=%r and --initial_amount_max=%r "
-                                   ") are not compatible with contract balance"
-                                   , self.args.initial_amount_min
-                                   , self.args.initial_amount_max)
-            except:
-                self.log.error("unable to read current balance for contract at %s", self.contract_address)
+    def consistency_checks(self):
+        self.log.info("Runtime parameter map:")
+        for f in fields(self.args):
+            v = getattr(self.args, f.name)
+            if f.name.find("password") > 0:
+                v = "*" * len(v)
+            self.log.info(" \\____ %s = %s", f.name, v)
+        try:
+            contract_balance = self.contract_balance()
+            self.log.info("contract at %s has %u in balance", self.contract_address, contract_balance)
+            if contract_balance < self.args.initial_amount_max or contract_balance < self.args.initial_amount_min:
+                self.log.error("financial attack parameters ( --initial_amount_min=%r and --initial_amount_max=%r "
+                               ") are not compatible with contract balance"
+                               , self.args.initial_amount_min
+                               , self.args.initial_amount_max)
+        except:
+            self.log.error("unable to read current balance for contract at %s", self.contract_address)
 
 
     def _get_contract_address(self):
@@ -332,10 +333,6 @@ class Runner:
                                              "id=%r, %r", id, address)
                         continue
                     self.pools.add(pool)
-                    if self.args.pools_limit and print_progress.ctr >= self.args.pools_limit:
-                        self.log.info("stopping after loading %r pools, "
-                                      "as per effect of -n cli parameter", print_progress.ctr)
-                        break
 
             self.log.info("POOLS set loaded, size is %r items", print_progress.ctr)
             missing = print_progress.tot - print_progress.ctr
@@ -499,7 +496,10 @@ class Runner:
         constraint = PathEvalutionConstraints()
         constraint.initial_token_wei_balance = self.args.initial_amount_min
         constraint.convenience_min_threshold = (self.args.min_profit_target_ppm+1000000) / 1000000
-        constraint.convenience_max_threshold = 5
+        if not self.args.max_profit_target_ppm:
+            constraint.convenience_max_threshold = 10
+        else:
+            constraint.convenience_max_threshold = (self.args.max_profit_target_ppm+1000000) / 1000000
         return constraint
 
     def is_out_of_fees_error(self, err):
@@ -531,6 +531,12 @@ class Runner:
         # await self.polling_started.wait()
         if constraint is None:
             constraint = self.get_constraints()
+
+        self.log.info("convenience_min_threshold = %r", constraint.convenience_min_threshold)
+        self.log.info("convenience_min_threshold = %r", constraint.convenience_min_threshold)
+        self.log.info("convenience_max_threshold = %r", constraint.convenience_max_threshold)
+        self.log.info("initial_token_wei_balance = %r", constraint.initial_token_wei_balance)
+
         log_set_level(log_level.info)
         self.latestBlockNumber = 0
 
@@ -563,7 +569,9 @@ class Runner:
                             for i, match in enumerate(matches):
                                 if constraint.match_limit and i >= constraint.match_limit:
                                     return
-                                self.on_profitable_path_execution(match)
+                                self.delayed_executor.post(self.on_profitable_path_execution, match)
+                                print(len(self.delayed_executor.queue.queue))
+                                #self.on_profitable_path_execution(match)
                         except:
                             self.log.exception("Error during execution of TheGraph::evaluate_paths_of_interest()")
                     finally:
