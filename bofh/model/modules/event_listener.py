@@ -1,5 +1,6 @@
 from json import loads
 from logging import getLogger, basicConfig
+from pprint import pprint
 from urllib.parse import urlparse, splitport
 
 from twisted.internet.protocol import ReconnectingClientFactory
@@ -41,6 +42,12 @@ class EventLogClientProtocol(WebSocketClientProtocol):
         result = params.get("result")
         if not isinstance(result, dict):
             return
+        blockNumber = result.get("blockNumber", None)
+        if isinstance(blockNumber, str):
+            if blockNumber.startswith("0x"):
+                blockNumber = int(blockNumber, 16)
+            else:
+                blockNumber = int(blockNumber)
         address = result.get("address")
         topics = result.get("topics")
         hexdata = result.get("data")
@@ -49,7 +56,7 @@ class EventLogClientProtocol(WebSocketClientProtocol):
         if self.TOPIC_SYNC == topics[0]:
             reserve0, reserve1 = parse_data_parameters(hexdata)
             if self.factory.bofh:
-                self.factory.bofh.on_sync_event(address, reserve0, reserve1)
+                self.factory.bofh.on_sync_event(address, reserve0, reserve1, blockNumber)
 
     def onClose(self, wasClean, code, reason):
         log.info("WebSocket connection closed: {0}".format(reason))

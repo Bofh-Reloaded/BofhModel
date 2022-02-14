@@ -16,7 +16,7 @@ from eth_utils import to_checksum_address
 
 from bofh.utils.misc import LogAdapter, optimal_cpu_threads
 from bofh.utils.solidity import get_abi, add_solidity_search_path, find_contract
-from bofh.utils.web3 import Web3Connector, JSONRPCConnector, parse_data_parameters, bsc_block_age_secs
+from bofh.utils.web3 import Web3Connector, JSONRPCConnector
 
 DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS=3600  # 1hr because probably it would probably take longer to forward the
                                              # existing snapshot rather than downloading from scratch
@@ -25,7 +25,7 @@ DEFAULT_MAX_AGE_RESERVES_SNAPSHOT_SECS=3600  # 1hr because probably it would pro
 from dataclasses import dataclass, fields, MISSING
 from logging import getLogger, basicConfig
 
-from bofh.model.database import ModelDB, StatusScopedCursor, BalancesScopedCursor, Intervention
+from bofh.model.database import ModelDB, StatusScopedCursor
 from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level, PathEvalutionConstraints
 
 # add bofh.contract/contracts to get_abi() seach path:
@@ -166,7 +166,8 @@ class Runner(EntitiesPreloader, ConstantPrediction):
         self.args.sync_db(self.db)
         self.consistency_checks()
         self.status_lock = Lock()
-        self.reserves_update_batch = list()
+        self.reserves_update_batch = list()  # reserve0, reserve1, tag
+        self.reserves_update_blocknr = 0
         self.delayed_executor = DelayedExecutor(self)
         # self.polling_started = Event()
 
@@ -242,17 +243,6 @@ class Runner(EntitiesPreloader, ConstantPrediction):
         except:
             self.log.exception("unable to execute dry-run contract estimation")
 
-    def update_pool_reserves_by_tx_sync_log(self, pool, r0, r1):
-        if self.args.verbose:
-            self.log.info("use Sync event to update reserves of pool %r: %s(%s-%s), reserve=%r, reserve1=%r"
-                          , pool.address
-                          , pool.exchange.name
-                          , pool.token0.symbol
-                          , pool.token1.symbol
-                          , r0
-                          , r1)
-        pool.setReserves(r0, r1)
-
 
     def track_swaps_thread(self):
         if getattr(self, "_track_swaps_thread", None):
@@ -283,8 +273,8 @@ class Runner(EntitiesPreloader, ConstantPrediction):
             if self.args.verbose:
                 self.log.info("syncing %u pool reserves udates to db...", len(self.reserves_update_batch))
             with self.status_lock, self.db as curs:
-                for pid, r0, r1 in self.reserves_update_batch:
-                    curs.add_pool_reserve(pid, r0, r1)
+                curs.update_pool_reserves_batch(self.reserves_update_batch)
+                curs.reserves_block_number = self.reserves_update_blocknr
                 self.reserves_update_batch.clear()
 
     def join(self):
@@ -298,12 +288,24 @@ class Runner(EntitiesPreloader, ConstantPrediction):
         if th:
             th.join()
 
-    def on_sync_event(self, address, reserve0, reserve1):
+    def on_sync_event(self, address, reserve0, reserve1, blocknr):
         with self.status_lock:
             pool = self.graph.lookup_lp(address)
             if pool:
-                self.update_pool_reserves_by_tx_sync_log(pool, reserve0, reserve1)
-                self.reserves_update_batch.append((pool.tag, reserve0, reserve1))
+                if self.args.verbose:
+                    self.log.info("use Sync event to update reserves of pool %r: %s(%s-%s), reserve=%r, reserve1=%r"
+                                  , pool.address
+                                  , pool.exchange.name
+                                  , pool.token0.symbol
+                                  , pool.token1.symbol
+                                  , reserve0
+                                  , reserve1)
+                pool.setReserves(reserve0, reserve1)
+                if not isinstance(reserve0, str): reserve0 = str(reserve0)
+                if not isinstance(reserve1, str): reserve1 = str(reserve1)
+                self.reserves_update_batch.append((reserve0, reserve1, pool.tag))
+                if blocknr and blocknr > self.reserves_update_blocknr:
+                    self.reserves_update_blocknr = blocknr
 
     @lru_cache
     def get_contract(self, address=None, abi=None):

@@ -54,7 +54,7 @@ class ConstantPrediction:
                     blockNumber = result["blockNumber"]
                     if blockNumber <= intervention.blockNr:
                         continue
-                    self.log.info("prediction results are in for block %r", blockNumber)
+                    self.log.debug("prediction results are in for block %r", blockNumber)
                     intervention.blockNr = blockNumber
                 except TransportError:
                     # server disconnected

@@ -194,6 +194,11 @@ class BasicScopedCursor:
             self.curs.execute(*a, **ka)
             return self
 
+    def executemany(self, *a, **ka):
+        with self.lock:
+            self.curs.executemany(*a, **ka)
+            return self
+
     def get_int(self):
         with self.lock:
             return self.curs.fetchone()[0]
@@ -343,70 +348,12 @@ class StatusScopedCursor(BasicScopedCursor):
             # already existing
             self.execute("UPDATE pool_reserves SET reserve0 = ?, reserve1 = ? WHERE id = ?", (reserve0, reserve1, pool_id))
 
+    def update_pool_reserves_batch(self, tuples):
+        self.executemany("UPDATE pool_reserves SET reserve0 = ?, reserve1 = ? WHERE id = ?", tuples)
+
     def add_intervention(self, o: Intervention):
         self.execute("INSERT INTO interventions (origin, blockNr, tx, amountIn, amountOut, calldata) "
                      "VALUES (?, ?, ?, ?, ?, ?)",
                      (o.origin, o.blockNr, o.tx, str(o.amountIn), str(o.amountOut), o.calldata)
                      )
         o.tag = self.execute("SELECT last_insert_rowid()").get_int()
-
-
-class BalancesScopedCursor(BasicScopedCursor):
-    def add_swap_log(self
-                     , block_nr: int
-                     , json_data
-                     , pool_id: int
-                     , tokenIn: int
-                     , tokenOut: int
-                     , poolAddr: str
-                     , tokenInAddr: str
-                     , tokenOutAddr: str
-                     , balanceIn: int
-                     , balanceOut: int
-                     , reserveInBefore: int
-                     , reserveOutBefore: int
-                     ):
-
-        assert self.conn is not None
-        if not isinstance(json_data, str): json_data = json.dumps(json_data)
-        if isinstance(balanceIn, int): balanceIn = str(balanceIn)
-        if isinstance(balanceOut, int): balanceOut = str(balanceOut)
-        if isinstance(reserveInBefore, int): reserveInBefore = str(reserveInBefore)
-        if isinstance(reserveOutBefore, int): reserveOutBefore = str(reserveOutBefore)
-
-        self.execute("INSERT INTO swap_logs ("
-                         "block_nr, json_data, pool, "
-                         "tokenIn, tokenOut, poolAddr, "
-                         "tokenInAddr, tokenOutAddr, "
-                         "balanceIn, balanceOut, "
-                         "reserveInBefore, reserveOutBefore"
-                     ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                     , (block_nr
-                        , json_data
-                        , pool_id
-                        , tokenIn
-                        , tokenOut
-                        , poolAddr
-                        , tokenInAddr
-                        , tokenOutAddr
-                        , balanceIn
-                        , balanceOut
-                        , reserveInBefore
-                        , reserveOutBefore
-                        ))
-        self.execute("SELECT last_insert_rowid()")
-        return self.get_int()
-
-    def add_pool_reserve(self, pool_id, reserve0, reserve1):
-        assert self.conn is not None
-        if isinstance(reserve0, int): reserve0 = str(reserve0)
-        if isinstance(reserve1, int): reserve1 = str(reserve1)
-        try:
-            self.execute("INSERT INTO pool_reserves (pool, reserve0, reserve1) VALUES (?, ?, ?)", (pool_id, reserve0, reserve1))
-            self.execute("SELECT last_insert_rowid()")
-        except IntegrityError:
-            # already existing
-            self.execute("UPDATE pool_reserves SET reserve0 = ?, reserve1 = ? WHERE pool = ?", (reserve0, reserve1, pool_id))
-
-
-
