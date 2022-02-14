@@ -253,52 +253,6 @@ class Runner(EntitiesPreloader, ConstantPrediction):
                           , r1)
         pool.setReserves(r0, r1)
 
-    def digest_prediction_payload(self, payload):
-        assert isinstance(payload, dict)
-        logs = payload["logs"]
-        if not logs:
-            return
-        for log in logs:
-            address = log["address"]
-            if not address:
-                continue
-            pool = self.graph.lookup_lp(address)
-            if not pool:
-                if self.args.verbose:
-                    self.log.debug("unknown pool of interest: %s", address)
-                continue
-            topic0 = log["topic0"]
-            if topic0 == PREDICTION_LOG_TOPIC0_SYNC:
-                pool.enter_predicted_state(0, 0, 0, 0)
-                try:
-                    r0, r1 = parse_data_parameters(log["data"])
-                    self.update_pool_reserves_by_tx_sync_log(pool, r0, r1)
-                    self.graph.add_lp_of_interest(pool)
-                except:
-                    continue
-                continue
-            """
-            if topic0 == PREDICTION_LOG_TOPIC0_SWAP:
-                data = log["data"]
-                try:
-                    amount0In, amount1In, amount0Out, amount1Out = parse_data_parameters(data)
-                except:
-                    self.log.exception("unable to decode swap log data")
-                    continue
-                if self.args.verbose:
-                    self.log.info("pool %r: %s(%s-%s) entering predicted state "
-                                   "(amount0In=%r, amount1In=%r, amount0Out=%r, amount1Out=%r)"
-                                   , address
-                                   , pool.exchange.name
-                                   , pool.token0.symbol
-                                   , pool.token1.symbol
-                                   , amount0In, amount1In, amount0Out, amount1Out
-                                   )
-                pool.enter_predicted_state(amount0In, amount1In, amount0Out, amount1Out)
-                self.graph.add_lp_of_interest(pool)
-                continue
-            """
-
 
     def track_swaps_thread(self):
         if getattr(self, "_track_swaps_thread", None):

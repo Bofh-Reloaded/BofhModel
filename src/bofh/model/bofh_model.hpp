@@ -195,12 +195,6 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
         using std::runtime_error::runtime_error;
     };
 
-    struct LPReservesSnapshot {
-        const balance_t reserve0;
-        const balance_t reserve1;
-        int ctr = 0;
-    };
-
     typedef double rate_t;
 
     const Exchange* exchange;
@@ -208,7 +202,6 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
     Token* token1;
     balance_t reserve0;
     balance_t reserve1;
-    std::unique_ptr<LPReservesSnapshot> snapshot;
 
     LiquidityPool(datatag_t tag_
                   , const address_t &address_
@@ -242,10 +235,16 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
 
 
 
-    void enter_predicted_state(const balance_t &amount0In
-                               , const balance_t &amount1In
-                               , const balance_t &amount0Out
-                               , const balance_t &amount1Out);
+    struct LPPredictedState {
+        std::unique_ptr<LiquidityPool> pool;
+        int ctr = 0;
+        LPPredictedState(const LiquidityPool &);
+    };
+    std::unique_ptr<LPPredictedState> predicted_state;
+
+    const LiquidityPool *enter_predicted_state();
+    const LiquidityPool *get_predicted_state() const;
+    void set_predicted_reserves(const balance_t &reserve0, const balance_t &reserve1);
     void leave_predicted_state(bool force=false);
 };
 
@@ -476,8 +475,11 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
 
     void add_lp_of_interest(const LiquidityPool *pool);
     void clear_lp_of_interest();
-    PathResultList evaluate_paths_of_interest(const PathEvalutionConstraints &constraints);
-    PathResult evaluate_path(const PathEvalutionConstraints &constraints, const pathfinder::Path *path) const;
+    PathResultList evaluate_paths_of_interest(const PathEvalutionConstraints &constraints
+                                              , bool observe_predicted_state);
+    PathResult evaluate_path(const PathEvalutionConstraints &constraints
+                             , const pathfinder::Path *path
+                             , bool observe_predicted_state) const;
     std::set<LiquidityPool*> lp_of_interest;
 
 };

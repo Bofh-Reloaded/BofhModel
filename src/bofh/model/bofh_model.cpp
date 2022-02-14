@@ -89,40 +89,63 @@ int LiquidityPool::feesPPM() const
     return 0;
 }
 
-void LiquidityPool::enter_predicted_state(const balance_t &amount0In
-                                          , const balance_t &amount1In
-                                          , const balance_t &amount0Out
-                                          , const balance_t &amount1Out)
+
+LiquidityPool::LPPredictedState::LPPredictedState(const LiquidityPool &o):
+    pool(new LiquidityPool(o.tag, o.address, o.exchange, o.token0, o.token1))
 {
-    if (snapshot == nullptr)
+    pool->reserve0 = o.reserve0;
+    pool->reserve1 = o.reserve1;
+}
+
+const LiquidityPool *LiquidityPool::enter_predicted_state()
+{
+    if (predicted_state == nullptr)
     {
-        snapshot = std::make_unique<LPReservesSnapshot>(LPReservesSnapshot{reserve0, reserve1});
+        predicted_state = std::make_unique<LPPredictedState>(*this);
     }
-    snapshot->ctr ++;
+    predicted_state->ctr++;
+    return &*predicted_state->pool;
+}
 
-    reserve0 += amount0In;
-    if (amount0Out > reserve0) reserve0 = 0;
-    else reserve0 -= amount0Out;
-
-    reserve1 += amount1In;
-    if (amount1Out > reserve1) reserve1 = 0;
-    else reserve1 -= amount1Out;
+void LiquidityPool::set_predicted_reserves(const balance_t &_reserve0, const balance_t &_reserve1)
+{
+    LiquidityPool *pool;
+    if (predicted_state == nullptr)
+    {
+        pool = const_cast<LiquidityPool *>(enter_predicted_state());
+    }
+    else
+    {
+        pool = const_cast<LiquidityPool *>(&*predicted_state->pool);
+    }
+    assert(pool != nullptr);
+    pool->reserve0 = _reserve0;
+    pool->reserve1 = _reserve1;
 }
 
 void LiquidityPool::leave_predicted_state(bool force)
 {
-    if (snapshot != nullptr)
+    if (predicted_state == nullptr)
     {
-        snapshot->ctr --;
-        if (snapshot->ctr <= 0 || force)
-        {
-            reserve0 = snapshot->reserve0;
-            reserve1 = snapshot->reserve1;
-            snapshot.reset();
-            assert(snapshot == nullptr);
-        }
+        return;
+    }
+    predicted_state->ctr--;
+    if (predicted_state->ctr <= 0 || force)
+    {
+        predicted_state.reset();
     }
 }
+
+const LiquidityPool *LiquidityPool::get_predicted_state() const
+{
+    if (predicted_state == nullptr)
+    {
+        return nullptr;
+    }
+
+    return &*predicted_state->pool;
+}
+
 
 
 //balance_t LiquidityPool::simpleSwap(const Token *tokenIn, const balance_t &amountIn, bool updateReserves)
@@ -545,7 +568,7 @@ TheGraph::PathResultList TheGraph::debug_evaluate_known_paths(const PathEvalutio
     {
         // @note: loop body is a try block
 
-        auto r = evaluate_path(c, path);
+        auto r = evaluate_path(c, path, false);
         assert(r.token != nullptr);
 
         matches++;
@@ -583,7 +606,8 @@ void TheGraph::clear_lp_of_interest()
 }
 
 TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
-                                             , const pathfinder::Path *path) const
+                                             , const pathfinder::Path *path
+                                             , bool observe_predicted_state) const
 {
     balance_t    balance = c.initial_token_wei_balance;
     const Token *token   = start_token;
@@ -598,6 +622,15 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
         auto swap = path->get(i);
         assert(swap != nullptr);
         auto pool = swap->pool;
+        if (observe_predicted_state)
+        {
+            auto ppool = pool->get_predicted_state();
+            if (ppool)
+            {
+                pool = ppool;
+            }
+        }
+
         assert(pool != nullptr);
 
         assert(token == swap->tokenSrc);
@@ -689,7 +722,8 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
                 , yieldRatio};
 }
 
-TheGraph::PathResultList TheGraph::evaluate_paths_of_interest(const PathEvalutionConstraints &c)
+TheGraph::PathResultList TheGraph::evaluate_paths_of_interest(const PathEvalutionConstraints &c
+                                                              , bool observe_predicted_state)
 {
     lock_guard_t lock_guard(m_update_mutex);
     check_constrants_consistency(this, c);
@@ -702,7 +736,7 @@ TheGraph::PathResultList TheGraph::evaluate_paths_of_interest(const PathEvalutio
         {
             try {
                 const pathfinder::Path *path = i->second;
-                auto r = evaluate_path(c, path);
+                auto r = evaluate_path(c, path, observe_predicted_state);
                 assert(r.token != nullptr);
                 print_swap_candidate(this, c, path, r);
                 res.emplace_back(r);

@@ -69,7 +69,7 @@ class ConstantPrediction:
                         except:
                             self.log.exception("Error during parsing of eth_consPredictLogs() results")
                         try:
-                            matches = self.graph.evaluate_paths_of_interest(constraint)
+                            matches = self.graph.evaluate_paths_of_interest(constraint, True)
                             for i, match in enumerate(matches):
                                 if constraint.match_limit and i >= constraint.match_limit:
                                     return
@@ -111,32 +111,11 @@ class ConstantPrediction:
                 continue
             topic0 = log["topic0"]
             if topic0 == PREDICTION_LOG_TOPIC0_SYNC:
-                pool.enter_predicted_state(0, 0, 0, 0)
+                pool.enter_predicted_state()
                 try:
                     r0, r1 = parse_data_parameters(log["data"])
-                    self.update_pool_reserves_by_tx_sync_log(pool, r0, r1)
+                    pool.set_predicted_reserves(r0, r1)
                     self.graph.add_lp_of_interest(pool)
                 except:
                     continue
                 continue
-            """
-            if topic0 == PREDICTION_LOG_TOPIC0_SWAP:
-                data = log["data"]
-                try:
-                    amount0In, amount1In, amount0Out, amount1Out = parse_data_parameters(data)
-                except:
-                    self.log.exception("unable to decode swap log data")
-                    continue
-                if self.args.verbose:
-                    self.log.info("pool %r: %s(%s-%s) entering predicted state "
-                                   "(amount0In=%r, amount1In=%r, amount0Out=%r, amount1Out=%r)"
-                                   , address
-                                   , pool.exchange.name
-                                   , pool.token0.symbol
-                                   , pool.token1.symbol
-                                   , amount0In, amount1In, amount0Out, amount1Out
-                                   )
-                pool.enter_predicted_state(amount0In, amount1In, amount0Out, amount1Out)
-                self.graph.add_lp_of_interest(pool)
-                continue
-            """

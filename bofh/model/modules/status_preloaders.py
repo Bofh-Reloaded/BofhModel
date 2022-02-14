@@ -1,8 +1,9 @@
+from asyncio import get_event_loop
 from concurrent.futures import ThreadPoolExecutor
 
 from bofh.model.modules.constants import PREDICTION_LOG_TOPIC0_SYNC
 from bofh.utils.misc import progress_printer, secs_to_human_repr
-from bofh.utils.web3 import bsc_block_age_secs, Web3PoolExecutor
+from bofh.utils.web3 import bsc_block_age_secs, Web3PoolExecutor, JSONRPCConnector, method_id, parse_data_parameters
 
 
 class EntitiesPreloader:
