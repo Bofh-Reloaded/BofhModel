@@ -2,6 +2,7 @@ from asyncio import get_event_loop
 from concurrent.futures import ThreadPoolExecutor
 
 from bofh.model.modules.constants import PREDICTION_LOG_TOPIC0_SYNC
+from bofh.model.modules.loggers import Loggers
 from bofh.utils.misc import progress_printer, secs_to_human_repr
 from bofh.utils.web3 import bsc_block_age_secs, Web3PoolExecutor, JSONRPCConnector, method_id, parse_data_parameters
 
@@ -9,35 +10,37 @@ from bofh.utils.web3 import bsc_block_age_secs, Web3PoolExecutor, JSONRPCConnect
 class EntitiesPreloader:
 
     def load(self):
+        log = Loggers.preloader
         self.preload_exchanges()
         self.preload_tokens()
         start_token = self.graph.lookup_token(self.args.start_token_address)
         if not start_token:
             msg = "start_token not found: address %s is unknown or not of a token" % self.args.start_token_address
-            self.log.error(msg)
+            log.error(msg)
             raise RuntimeError(msg)
         else:
-            self.log.info("start_token is %s (%s)", start_token.symbol, start_token.address)
+            log.info("start_token is %s (%s)", start_token.symbol, start_token.address)
             self.graph.start_token = start_token
         self.preload_pools()
         self.graph.calculate_paths()
         self.preload_balances()
-        self.log.info("  *********************************")
-        self.log.info("  ***  GRAPH LOAD COMPLETE :-)  ***")
-        self.log.info("  *********************************")
+        log.info("  *********************************")
+        log.info("  ***  GRAPH LOAD COMPLETE :-)  ***")
+        log.info("  *********************************")
 
     def preload_exchanges(self):
-        self.log.info("preloading exchanges...")
+        log = Loggers.preloader
+        log.info("preloading exchanges...")
         ctr = 0
         with self.db as curs:
             for a in curs.list_exchanges():
                 exc = self.graph.add_exchange(*a)
                 assert exc is not None
                 ctr += 1
-        self.log.info("EXCHANGE set loaded, size is %r items", ctr)
-
+        log.info("EXCHANGE set loaded, size is %r items", ctr)
 
     def preload_tokens(self):
+        log = Loggers.preloader
         with self.db as curs:
             ctr = curs.count_tokens()
             print_progress = progress_printer(ctr, "preloading tokens {percent}% ({count} of {tot}"
@@ -50,10 +53,11 @@ class EntitiesPreloader:
                         raise RuntimeError(
                             "integrity error: token address is already not of a token: id=%r, %r" % (id, args))
                     print_progress()
-            self.log.info("TOKENS set loaded, size is %r items", print_progress.ctr)
+            log.info("TOKENS set loaded, size is %r items", print_progress.ctr)
 
 
     def preload_pools(self):
+        log = Loggers.preloader
         with self.db as curs:
             ctr = curs.count_pools()
             print_progress = progress_printer(ctr, "preloading pools {percent}% ({count} of {tot}"
@@ -67,7 +71,7 @@ class EntitiesPreloader:
                     # t1 = self.graph.lookup_token(token1_id)
                     # if not t0 or not t1:
                     #    if self.args.verbose:
-                    #        self.log.warning("disabling pool %s due to missing or disabled affering token "
+                    #        log.warning("disabling pool %s due to missing or disabled affering token "
                     #                         "(token0=%r, token1=%r)", address, token0_id, token1_id)
                     #    continue
                     # exchange = self.graph.lookup_exchange(exchange_id)
@@ -75,16 +79,14 @@ class EntitiesPreloader:
                     # pool = self.graph.add_lp(id, address, exchange, t0, t1)
                     pool = self.graph.add_lp(id, address, exchange_id, token0_id, token1_id)
                     if pool is None:
-                        if self.args.verbose:
-                            self.log.warning("integrity error: pool address is already not of a pool: "
-                                             "id=%r, %r", id, address)
+                        log.debug("integrity error: pool address is already not of a pool: id=%r, %r", id, address)
                         continue
                     self.pools.add(pool)
 
-            self.log.info("POOLS set loaded, size is %r items", print_progress.ctr)
+            log.info("POOLS set loaded, size is %r items", print_progress.ctr)
             missing = print_progress.tot - print_progress.ctr
             if missing > 0:
-                self.log.info("  \\__ %r over pool the total %r were not loaded due to "
+                log.info("  \\__ %r over pool the total %r were not loaded due to "
                               "failed graph connectivity or other problems", missing, print_progress.tot)
 
     def preload_balances(self):
@@ -94,28 +96,29 @@ class EntitiesPreloader:
             self.update_balances_from_web3()
 
     def preload_balances_from_db(self):
+        log = Loggers.preloader
         with self.db as curs:
             latest_blocknr = curs.reserves_block_number
             current_blocknr = self.w3.eth.block_number
             age = current_blocknr-latest_blocknr
             if not latest_blocknr or age < 0:
-                self.log.warning("unable to preload reserves from DB (latest block number not set in DB, or invalid)")
+                log.warning("unable to preload reserves from DB (latest block number not set in DB, or invalid)")
                 return
             age_secs = bsc_block_age_secs(age)
-            self.log.info("reserves DB snapshot is for block %u (%d blocks old), which is %s old"
+            log.info("reserves DB snapshot is for block %u (%d blocks old), which is %s old"
                           , latest_blocknr
                           , age
                           , secs_to_human_repr(age_secs))
             if not self.args.force_reuse_reserves_snapshot:
                 if age_secs > self.args.max_reserves_snapshot_age_secs:
-                    self.log.warning("reserves DB snapshot is too old (older than --max_reserves_snapshot_age_secs=%r)"
+                    log.warning("reserves DB snapshot is too old (older than --max_reserves_snapshot_age_secs=%r)"
                                      , self.args.max_reserves_snapshot_age_secs)
                     return
             else:
-                self.log.warning(
+                log.warning(
                     "forcing reuse of existing reserves DB snapshot (as per --force_reuse_reserves_snapshot)")
 
-            self.log.info("fetching LP reserves previously saved in db")
+            log.info("fetching LP reserves previously saved in db")
             nr = curs.execute("SELECT COUNT(1) FROM pool_reserves").get_int()
             with progress_printer(nr, "fetching pool reserves {percent}% ({count} of {tot}"
                                        " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
@@ -127,24 +130,24 @@ class EntitiesPreloader:
                     pool = self.graph.lookup_lp(poolid)
                     print_progress()
                     if not pool:
-                        if self.args.verbose:
-                            self.log.debug("pool id not found: %r", poolid)
+                        log.debug("pool id not found: %r", poolid)
                         disc += 1
                         continue
                     pool.setReserves(reserve0, reserve1)
                     ok += 1
-                self.log.info("%r records read, reserves loaded for %r pools, %r discarded"
+                log.info("%r records read, reserves loaded for %r pools, %r discarded"
                               , print_progress.ctr, ok, disc)
             return True
 
     def download_reserves_snapshot_from_web3(self):
-        self.log.info("downloading a new reserves snapshot from Web3")
+        log = Loggers.preloader
+        log.info("downloading a new reserves snapshot from Web3")
         print_progress = progress_printer(self.pools_ctr
                                           , "fetching pool reserves {percent}% ({count} of {tot}"
                                             " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
                                           , on_same_line=True)
         with Web3PoolExecutor(connection_uri=self.args.web3_rpc_url, max_workers=self.args.max_workers) as executor:
-            self.log.info("concurrent reserves download via Web3:"
+            log.info("concurrent reserves download via Web3:"
                      "\n\t- %r pool getReserve requests"
                      "\n\t- on Web3 servant at %s"
                      "\n\t- using %d workers"
@@ -174,13 +177,14 @@ class EntitiesPreloader:
                             curs.add_pool_reserve(pool.tag, reserve0, reserve1)
                             print_progress()
                         except:
-                            self.log.exception("unable to query pool %s", pool_addr)
+                            log.exception("unable to query pool %s", pool_addr)
                         curs.reserves_block_number = currentBlockNr
                 finally:
                     curs.reserves_block_number = currentBlockNr
             executor.shutdown(wait=True)
 
     def update_balances_from_web3(self, start_block=None):
+        log = Loggers.preloader
         per_thread_queue_size = self.args.max_workers * 10
         current_block = self.w3.eth.block_number
         with self.db as curs:
@@ -197,12 +201,12 @@ class EntitiesPreloader:
                     nr = current_block - latest_read
                     print_progress.tot = nr
                     if nr <= 0:
-                        self.log.info("LP balances updated to current block (%u)", current_block)
+                        log.info("LP balances updated to current block (%u)", current_block)
                         break
                     target = min(latest_read+per_thread_queue_size, current_block+1)
                     with ThreadPoolExecutor(max_workers=self.args.max_workers) as executor:
                         for next_block in range(latest_read, target):
-                            self.log.debug("loading reserves from block %r ... ", next_block)
+                            log.debug("loading reserves from block %r ... ", next_block)
                             if print_progress():
                                 self.db.commit()
                             executor.submit(self.reserves_parse_blocknr, next_block)
