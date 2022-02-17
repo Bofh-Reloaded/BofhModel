@@ -24,9 +24,9 @@ class EntitiesPreloader:
         self.preload_pools()
         self.graph.calculate_paths()
         self.preload_balances()
-        log.info("  *********************************")
-        log.info("  ***  GRAPH LOAD COMPLETE :-)  ***")
-        log.info("  *********************************")
+        log.info("  ********************************************")
+        log.info("  ***  KNOWLEDGE GRAPH LOAD COMPLETED :-)  ***")
+        log.info("  ********************************************")
 
     def preload_exchanges(self):
         log = Loggers.preloader
@@ -44,7 +44,7 @@ class EntitiesPreloader:
         with self.db as curs:
             ctr = curs.count_tokens()
             print_progress = progress_printer(ctr, "preloading tokens {percent}% ({count} of {tot}"
-                                                   " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
+                                                   " eta={eta_hr} at {rate:.0f} items/s) ..."
                                               , on_same_line=True)
             with print_progress:
                 for args in curs.list_tokens():
@@ -55,13 +55,12 @@ class EntitiesPreloader:
                     print_progress()
             log.info("TOKENS set loaded, size is %r items", print_progress.ctr)
 
-
     def preload_pools(self):
         log = Loggers.preloader
         with self.db as curs:
             ctr = curs.count_pools()
             print_progress = progress_printer(ctr, "preloading pools {percent}% ({count} of {tot}"
-                                                   " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
+                                                   " eta={eta_hr} at {rate:.0f} items/s) ..."
                                               , on_same_line=True)
             with print_progress:
 
@@ -121,7 +120,7 @@ class EntitiesPreloader:
             log.info("fetching LP reserves previously saved in db")
             nr = curs.execute("SELECT COUNT(1) FROM pool_reserves").get_int()
             with progress_printer(nr, "fetching pool reserves {percent}% ({count} of {tot}"
-                                       " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
+                                       " eta={eta_hr} at {rate:.0f} items/s) ..."
                                        , on_same_line=True) as print_progress:
 
                 ok = 0
@@ -144,7 +143,7 @@ class EntitiesPreloader:
         log.info("downloading a new reserves snapshot from Web3")
         print_progress = progress_printer(self.pools_ctr
                                           , "fetching pool reserves {percent}% ({count} of {tot}"
-                                            " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
+                                            " eta={eta_hr} at {rate:.0f} items/s) ..."
                                           , on_same_line=True)
         with Web3PoolExecutor(connection_uri=self.args.web3_rpc_url, max_workers=self.args.max_workers) as executor:
             log.info("concurrent reserves download via Web3:"
@@ -195,7 +194,7 @@ class EntitiesPreloader:
             if nr <= 0:
                 return
             with progress_printer(nr, "rolling forward pool reserves {percent}% ({count} of {tot}"
-                                      " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
+                                      " eta={eta_hr} at {rate:.0f} items/s) ..."
                                       , on_same_line=True) as print_progress:
                 while True:
                     nr = current_block - latest_read

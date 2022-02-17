@@ -8,6 +8,7 @@ from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level
 from bofh.model.database import Intervention
 from bofh.model.modules.constants import PREDICTION_LOG_TOPIC0_SYNC, PREDICTION_LOG_TOPIC0_SWAP
 from bofh.model.modules.loggers import Loggers
+from bofh.utils.misc import checkpointer
 from bofh.utils.web3 import parse_data_parameters
 
 
@@ -60,11 +61,19 @@ class ConstantPrediction:
 
         log.info("entering prediction polling loop...")
         server = Server(self.args.web3_rpc_url)
+
+        checkpoint = checkpointer(log.info, "constant_prediction checkpoint #{count}"
+                                            ", uptime {elapsed_hr}"
+                                            ", {events} events processed"
+                                            ", {interventions} opportunities spotted")
+        events = 0
+        interventions = 0
         try:
             await server.ws_connect()
             while not self._constant_prediction_terminated.is_set():
                 try:
                     result = await server.eth_consPredictLogs(0, 0, PREDICTION_LOG_TOPIC0_SYNC, PREDICTION_LOG_TOPIC0_SWAP)
+                    checkpoint(events=events, interventions=interventions)
                     blockNumber = result["blockNumber"]
                     if blockNumber <= intervention.blockNr:
                         continue
@@ -79,7 +88,8 @@ class ConstantPrediction:
                 with self.status_lock:
                     try:
                         try:
-                            self.digest_prediction_payload(result)
+                            res = self.digest_prediction_payload(result)
+                            if res: events += res
                         except:
                             log.exception("Error during parsing of eth_consPredictLogs() results")
                         try:
@@ -93,6 +103,7 @@ class ConstantPrediction:
                                 intervention.calldata = str(contract.encodeABI("multiswap", payload))
                                 with self.db as curs:
                                     curs.add_intervention(intervention)
+                                interventions += 1
                                 #self.delayed_executor.post(self.on_profitable_path_execution, match)
                                 print(len(self.delayed_executor.queue.queue))
                                 #self.on_profitable_path_execution(match)
@@ -110,6 +121,7 @@ class ConstantPrediction:
             await server.close()
 
     def digest_prediction_payload(self, payload):
+        events = 0
         logger = Loggers.constant_prediction
         assert isinstance(payload, dict)
         logs = payload["logs"]
@@ -125,6 +137,7 @@ class ConstantPrediction:
                 continue
             topic0 = log["topic0"]
             if topic0 == PREDICTION_LOG_TOPIC0_SYNC:
+                events += 1
                 pool.enter_predicted_state()
                 try:
                     r0, r1 = parse_data_parameters(log["data"])
@@ -133,3 +146,4 @@ class ConstantPrediction:
                 except:
                     continue
                 continue
+        return events

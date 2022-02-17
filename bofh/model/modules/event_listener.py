@@ -3,6 +3,7 @@ from logging import basicConfig
 from threading import Thread, Event
 from urllib.parse import urlparse, splitport
 
+from eth_utils import to_checksum_address
 from twisted.internet.protocol import ReconnectingClientFactory
 from autobahn.twisted.websocket import WebSocketClientProtocol, \
     WebSocketClientFactory
@@ -10,14 +11,23 @@ import json
 from twisted.internet import reactor
 
 from bofh.model.modules.loggers import Loggers
+from bofh.utils.misc import checkpointer
 from bofh.utils.web3 import log_topic_id, parse_data_parameters
+
+log = Loggers.realtime_sync_events
 
 
 class SyncEventRealtimeTracker:
     def start(self):
         self._sync_event_rt_terminated = Event()
+        self.checkpoint = checkpointer(log.info, "sync_events checkpoint #{count}"
+                                                 ", uptime {elapsed_hr}"
+                                                 ", {events} events processed"
+                                                 ", {new_pools} new pools spotted")
         self.track_swaps_thread()
         self.periodic_reserve_flush_thread()
+        self.events = 0
+        self.new_pools = 0
 
     def stop(self):
         try:
@@ -35,7 +45,6 @@ class SyncEventRealtimeTracker:
             th.join()
 
     def track_swaps_thread(self):
-        log = Loggers.realtime_sync_events
         if getattr(self, "_track_swaps_thread", None):
             log.error("track_swaps_thread already started")
         self._track_swaps_thread = Thread(target=self._track_swaps_task, daemon=True)
@@ -49,14 +58,12 @@ class SyncEventRealtimeTracker:
             del self._track_swaps_thread
 
     def periodic_reserve_flush_thread(self):
-        log = Loggers.realtime_sync_events
         if getattr(self, "_periodic_reserve_flush_thread", None):
             log.error("periodic_reserve_flush_thread already started")
         self._periodic_reserve_flush_thread = Thread(target=self._periodic_reserve_flush_task, daemon=True)
         self._periodic_reserve_flush_thread.start()
 
     def _periodic_reserve_flush_task(self):
-        log = Loggers.realtime_sync_events
         try:
             while True:
                 if self._sync_event_rt_terminated.wait(timeout=60):
@@ -72,7 +79,8 @@ class SyncEventRealtimeTracker:
             del self._periodic_reserve_flush_thread
 
     def on_sync_event(self, address, reserve0, reserve1, blocknr):
-        log = Loggers.realtime_sync_events
+        self.checkpoint(events=self.events, new_pools=self.new_pools)
+        self.events += 1
         with self.status_lock:
             pool = self.graph.lookup_lp(address)
             if pool:
@@ -89,23 +97,31 @@ class SyncEventRealtimeTracker:
                 self.reserves_update_batch.append((reserve0, reserve1, pool.tag))
                 if blocknr and blocknr > self.reserves_update_blocknr:
                     self.reserves_update_blocknr = blocknr
+            else:
+                # unknown pool. annotate it
+                address = to_checksum_address(address)
+                with self.reports_db as curs:
+                    is_new = curs.add_unknown_pool(address)
+                    if is_new:
+                        self.new_pools += 1
+                        contract = self.get_contract(address=address, abi="IGenericLiquidityPool")
+                        factory = contract.functions.factory().call()
+                        log.debug("discovered new liquidity pool %s, has factory %s", address, factory)
+                        curs.set_unknown_pool_factory(address, factory)
 
 
 
 class EventLogClientProtocol(WebSocketClientProtocol):
     def onConnect(self, response):
-        log = Loggers.realtime_sync_events
         log.info("Server connected: {0}".format(response.peer))
 
     def onConnecting(self, transport_details):
-        log = Loggers.realtime_sync_events
         log.info("Connecting; transport details: {}".format(transport_details))
         return None  # ask for defaults
 
     TOPIC_SYNC = log_topic_id("Sync(uint112,uint112)")
 
     def onOpen(self):
-        log = Loggers.realtime_sync_events
         log.info("WebSocket connection open.")
         # Change this part to the subscription you want to get
         self.sendMessage(json.dumps({"jsonrpc":"2.0","id": 1, "method": "eth_subscribe", "params": ["logs", {"topics": [self.TOPIC_SYNC]}]}).encode('utf8'))
@@ -140,7 +156,6 @@ class EventLogClientProtocol(WebSocketClientProtocol):
                 self.factory.bofh.on_sync_event(address, reserve0, reserve1, blockNumber)
 
     def onClose(self, wasClean, code, reason):
-        log = Loggers.realtime_sync_events
         log.info("WebSocket connection closed: {0}".format(reason))
 
 
@@ -153,12 +168,10 @@ class EventLogListenerFactory(WebSocketClientFactory, ReconnectingClientFactory)
     protocol = EventLogClientProtocol
 
     def clientConnectionFailed(self, connector, reason):
-        log = Loggers.realtime_sync_events
         log.info("Client connection failed .. retrying ..")
         self.retry(connector)
 
     def clientConnectionLost(self, connector, reason):
-        log = Loggers.realtime_sync_events
         log.info("Client connection lost .. retrying ..")
         self.retry(connector)
 
