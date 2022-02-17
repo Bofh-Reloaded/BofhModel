@@ -35,12 +35,13 @@ class ModelLogAdapter:
 
 
 class Loggers:
-    runner = getLogger("runner")
-    model = ModelLogAdapter()
-    preloader = getLogger("preloader")
-    contract_activation = getLogger("contract_activation")
-    realtime_sync_events = getLogger("realtime_sync_events")
-    constant_prediction = getLogger("constant_prediction")
-    path_evaluation = getLogger("path_evaluation")
+    runner = getLogger("bofh.model.runner")
+    database = getLogger("bofh.model.database")
+    model = ModelLogAdapter("bodh.model.ext")
+    preloader = getLogger("bofh.model.preloader")
+    contract_activation = getLogger("bofh.model.contract_activation")
+    realtime_sync_events = getLogger("bofh.model.realtime_sync_events")
+    constant_prediction = getLogger("bofh.model.constant_prediction")
+    path_evaluation = getLogger("bofh.model.path_evaluation")
 
 

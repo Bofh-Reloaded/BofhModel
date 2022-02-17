@@ -3,6 +3,7 @@ from functools import lru_cache
 from os.path import dirname, realpath, join
 from threading import Lock
 
+from coloredlogs import ColoredFormatter
 from web3.exceptions import ContractLogicError
 
 from bofh.model.modules.constant_prediction import ConstantPrediction
@@ -19,7 +20,7 @@ from bofh.utils.solidity import get_abi, add_solidity_search_path, find_contract
 from bofh.utils.web3 import Web3Connector, JSONRPCConnector
 
 from dataclasses import dataclass, fields, MISSING
-from logging import basicConfig
+from logging import basicConfig, Filter, getLogger, Formatter
 
 from bofh.model.database import ModelDB, StatusScopedCursor
 from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level, PathEvalutionConstraints
@@ -31,6 +32,7 @@ add_solidity_search_path(join(dirname(dirname(dirname(realpath(__file__)))), "bo
 @dataclass
 class Args:
     status_db_dsn: str = "sqlite3://status.db"
+    reports_db_dsn: str = "sqlite3://reports.db"
     verbose: bool = False
     web3_rpc_url: str = JSONRPCConnector.connection_uri()
     max_workers: int = optimal_cpu_threads()
@@ -54,6 +56,7 @@ class Args:
     logfile: str = None
     cli: bool = False
     loglevel_runner: str = "INFO"
+    loglevel_database: str = "INFO"
     loglevel_model: str = "INFO"
     loglevel_preloader: str = "INFO"
     loglevel_contract_activation: str = "INFO"
@@ -138,7 +141,8 @@ Usage: bofh.model.runner1 [options]
 
 Options:
   -h  --help
-  -d, --dsn=<connection_str>                DB dsn connection string. Default is {Args.status_db_dsn}
+  -d, --status_db_dsn=<connection_str>      DB status dsn connection string. Default is {Args.status_db_dsn}
+  --reports_db_dsn=<connection_str>         DB reports dsn connection string. Default is {Args.reports_db_dsn}
   -c, --web3_rpc_url=<url>                  Web3 RPC connection URL. Default is {Args.web3_rpc_url}
   -j, --max_workers=<n>                     number of RPC data ingest workers, default one per hardware thread. Default is {Args.max_workers}
   -v, --verbose                             debug output
@@ -161,6 +165,7 @@ Options:
   --dry_run_delay=<secs>                    delay seconds from opportunity spotting and arbitrage simulation. Default is {Args.dry_run_delay}
   --logfile=<file>                          log to file
   --loglevel_runner=<level>                 set subsystem loglevel. Default is INFO
+  --loglevel_database=<level>               set subsystem loglevel. Default is INFO
   --loglevel_model=<level>                  set subsystem loglevel. Default is INFO
   --loglevel_preloader=<level>              set subsystem loglevel. Default is INFO
   --loglevel_contract_activation=<level>    set subsystem loglevel. Default is INFO
@@ -178,6 +183,8 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker):
         self.args = args
         self.db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=self.args.status_db_dsn)
         self.db.open_and_priming()
+        self.reports_db = ModelDB(schema_name="reports", cursor_factory=StatusScopedCursor, db_dsn=self.args.reports_db_dsn)
+        self.reports_db.open_and_priming()
         self.pools = set()
         self.ioloop = get_event_loop()
         self.args.sync_db(self.db)
@@ -367,6 +374,12 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker):
         print(self.call(name, caddr, "BofhContract", args, *a))
 
 
+old_format = ColoredFormatter.format
+def new_format(self, record):
+    record.name = record.name.replace("bofh.model.", "")
+    return old_format(self, record)
+ColoredFormatter.format = new_format
+
 def main():
     from IPython import embed
     args = Args.from_cmdline(__doc__)
@@ -381,7 +394,12 @@ def main():
         )
     else:
         import coloredlogs
-        coloredlogs.install(level="DEBUG")
+        coloredlogs.install(level="DEBUG", datefmt='%Y%m%d%H%M%S')
+    if not getattr(args, "verbose", 0):
+        # limit debug log output to bofh.* loggers
+        filter = Filter(name="bofh")
+        for h in getLogger().handlers:
+            h.addFilter(filter)
 
     bofh = Runner(args)
     bofh.load()

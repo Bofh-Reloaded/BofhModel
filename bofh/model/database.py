@@ -8,6 +8,8 @@ from attr import dataclass
 from glob import glob
 from os.path import realpath, dirname, join, basename
 
+from bofh.model.modules.loggers import Loggers
+
 schemadir = join(dirname(realpath(__file__)), "schema")
 
 
@@ -46,7 +48,7 @@ class Intervention:
 
 
 class ModelDB:
-    log = getLogger(__name__)
+    log = Loggers.database
 
     @staticmethod
     def _split_dsn(db_dsn: str):
@@ -140,11 +142,11 @@ class ModelDB:
     def update_schema(self):
         assert self.conn is not None
         current_version = self.current_schema_version
-        self.log.info("current schema version is %r", current_version)
+        self.log.debug("current schema version is %r", current_version)
         latest = self.latest_schema_version
         assert current_version <= latest
         if current_version == latest:
-            self.log.info("current schema version up to date")
+            self.log.debug("current schema version up to date")
             return
         self.log.info("a new schema version is available. updading %r to %r ...", current_version, latest)
         for i in range(current_version+1, latest+1):
@@ -357,3 +359,13 @@ class StatusScopedCursor(BasicScopedCursor):
                      (o.origin, o.blockNr, o.tx, str(o.amountIn), str(o.amountOut), o.calldata)
                      )
         o.tag = self.execute("SELECT last_insert_rowid()").get_int()
+
+    def add_unknown_pool(self, address):
+        try:
+            self.execute("INSERT INTO unknown_pools (address) VALUES (?)", (address,))
+            return True
+        except IntegrityError:
+            return False
+
+    def set_unknown_pool_factory(self, pool, address):
+        self.execute("UPDATE unknown_pools SET factory = ? WHERE address = ?", (address, pool))
