@@ -1,6 +1,8 @@
 __all__ = [ "Loggers" ]
 
 from logging import *
+from traceback import print_exception
+
 from bofh_model_ext import log_level, log_set_level
 
 
@@ -15,7 +17,7 @@ class ModelLogAdapter:
         }
         self.name2levels = {
             "TRACE": log_level.trace,
-            "DEBUG": log_level.debug,
+            "DEBUG": log_level.trace,
             "INFO": log_level.info,
             "WARNING": log_level.warning,
             "ERROR": log_level.error,
@@ -31,13 +33,14 @@ class ModelLogAdapter:
         log_set_level(level)
 
     def __call__(self, lvl, msg):
-        self.log.log(self.levels.get(lvl, INFO), msg)
+        lvl = self.levels.get(lvl, INFO)
+        self.log.log(lvl, msg)
 
 
 class Loggers:
     runner = getLogger("bofh.model.runner")
     database = getLogger("bofh.model.database")
-    model = ModelLogAdapter("bodh.model.ext")
+    model = ModelLogAdapter("bofh.model.ext")
     preloader = getLogger("bofh.model.preloader")
     contract_activation = getLogger("bofh.model.contract_activation")
     realtime_sync_events = getLogger("bofh.model.realtime_sync_events")
