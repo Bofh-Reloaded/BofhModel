@@ -63,38 +63,6 @@ CREATE TABLE pool_reserves (
 );
 
 
-CREATE TABLE interventions (
-    id INTEGER PRIMARY KEY,
-    origin TEXT NOT NULL DEFAULT 'pred', -- or 'scan'
-    blockNr INT NOT NULL,
-    tx TEXT NOT NULL,
-    amountIn TEXT NOT NULL,
-    amountOut TEXT NOT NULL,
-    calldata TEXT NOT NULL
-);
-
-CREATE TABLE intervention_steps (
-    id INTEGER PRIMARY KEY,
-    fk_intervention INTEGER NOT NULL,
-    pool_id INTEGER NOT NULL,
-    pool_addr TEXT NOT NULL,
-    reserve0 TEXT NOT NULL,
-    reserve1 TEXT NOT NULL,
-    amountIn TEXT NOT NULL,
-    feePPM INT NOT NULL,
-    amountOut TEXT NOT NULL
-);
-
-CREATE TABLE intervention_outcomes (
-    id INTEGER PRIMARY KEY,
-    fk_intervention INTEGER NOT NULL,
-    ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    blockNr INT NOT NULL,
-    outcome TEXT NOT NULL, -- ok, failed, error
-    amountOut TEXT DEFAULT NULL
-);
-
-
 
 -- INDEXES and CONSTRAINTS
 
@@ -104,7 +72,5 @@ CREATE UNIQUE INDEX exchanges_ra_idx ON exchanges(router_address);
 CREATE UNIQUE INDEX pools_address_idx ON pools(address);
 CREATE INDEX pools_token0_id_idx ON pools(token0_id);
 CREATE INDEX pools_token1_id_idx ON pools(token1_id);
-CREATE INDEX intervention_steps_fk_idx ON intervention_steps(fk_intervention);
-CREATE INDEX intervention_outcomes_fk_idx ON intervention_outcomes(fk_intervention);
 
 

@@ -3,6 +3,7 @@ from functools import cached_property
 from logging import getLogger
 from sqlite3 import IntegrityError
 from threading import Lock
+from typing import List
 
 from attr import dataclass
 from glob import glob
@@ -35,6 +36,15 @@ class Pool:
     token0_id: int
     token1_id: int
 
+@dataclass
+class InterventionStep:
+    pool_id: int
+    pool_addr: str
+    reserve0: int
+    reserve1: int
+    amountIn: int
+    feePPM: int
+    amountOut: int
 
 @dataclass
 class Intervention:
@@ -45,6 +55,7 @@ class Intervention:
     calldata: str = None
     blockNr: int = 0
     tag: int = None
+    steps: List[InterventionStep] = []
 
 
 class ModelDB:
@@ -354,11 +365,17 @@ class StatusScopedCursor(BasicScopedCursor):
         self.executemany("UPDATE pool_reserves SET reserve0 = ?, reserve1 = ? WHERE id = ?", tuples)
 
     def add_intervention(self, o: Intervention):
-        self.execute("INSERT INTO interventions (origin, blockNr, tx, amountIn, amountOut, calldata) "
-                     "VALUES (?, ?, ?, ?, ?, ?)",
-                     (o.origin, o.blockNr, o.tx, str(o.amountIn), str(o.amountOut), o.calldata)
+        self.execute("INSERT INTO interventions (origin, blockNr, tx, amountIn, amountOut, yieldRatio, calldata) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (o.origin, o.blockNr, o.tx, str(o.amountIn), str(o.amountOut), float(o.amountOut/o.amountIn), o.calldata)
                      )
         o.tag = self.execute("SELECT last_insert_rowid()").get_int()
+        def steps_iter():
+            for step in o.steps:
+                yield o.tag, step.pool_id, str(step.pool_addr), str(step.reserve0), str(step.reserve1), str(step.amountIn), step.feePPM, str(step.amountOut)
+        self.executemany("INSERT INTO intervention_steps (fk_intervention, pool_id, pool_addr, reserve0, reserve1, amountIn, feePPM, amountOut) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", steps_iter())
+
 
     def add_unknown_pool(self, address):
         try:

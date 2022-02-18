@@ -3,9 +3,8 @@ from threading import Thread, Event
 
 from jsonrpc_base import TransportError
 from jsonrpc_websocket import Server
-from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level, PathEvalutionConstraints
 
-from bofh.model.database import Intervention
+from bofh.model.database import Intervention, InterventionStep
 from bofh.model.modules.constants import PREDICTION_LOG_TOPIC0_SYNC, PREDICTION_LOG_TOPIC0_SWAP
 from bofh.model.modules.loggers import Loggers
 from bofh.utils.misc import checkpointer
@@ -42,10 +41,14 @@ class ConstantPrediction:
             swap = path.get(i)
             pools.append(str(swap.pool.address))
             feesPPM.append(swap.feesPPM())
-        if initialAmount is None:
+        if not initialAmount:
+            initialAmount = int(str(pr.initial_balance()))
+        if not initialAmount:
             initialAmount = self.args.initial_amount_min
         if expectedAmount is None:
-            expectedAmount = (initialAmount * (1000000 + self.args.min_profit_target_ppm)) // 1000000
+            initialAmount = int(str(pr.final_balance()))
+        if not expectedAmount:
+            expectedAmount = 0
         return self.pack_args_payload(pools, feesPPM, initialAmount, expectedAmount)
 
     async def prediction_polling_task(self, constraint=None):
@@ -54,10 +57,10 @@ class ConstantPrediction:
         if constraint is None:
             constraint = self.get_constraints()
 
+        contract = self.get_contract()
         intervention = Intervention(origin="pred")
         intervention.blockNr = 0
         intervention.amountIn = int(str(constraint.initial_token_wei_balance))
-        contract = self.get_contract()
 
         log.info("entering prediction polling loop...")
         server = Server(self.args.web3_rpc_url)
@@ -97,15 +100,9 @@ class ConstantPrediction:
                             for i, match in enumerate(matches):
                                 if constraint.match_limit and i >= constraint.match_limit:
                                     return
-                                intervention.amountIn = int(str(match.initial_balance))
-                                intervention.amountOut = int(str(match.yieldPercent))
-                                payload = self.pack_payload_from_pathResult(match)
-                                intervention.calldata = str(contract.encodeABI("multiswap", payload))
-                                with self.db as curs:
-                                    curs.add_intervention(intervention)
+                                self.post_intervention_to_db(intervention, match, contract)
                                 interventions += 1
                                 #self.delayed_executor.post(self.on_profitable_path_execution, match)
-                                print(len(self.delayed_executor.queue.queue))
                                 #self.on_profitable_path_execution(match)
                         except:
                             log.exception("Error during execution of TheGraph::evaluate_paths_of_interest()")
@@ -119,6 +116,26 @@ class ConstantPrediction:
         finally:
             log.info("prediction polling loop terminated")
             await server.close()
+
+    def post_intervention_to_db(self, intervention, match, contract):
+        intervention.amountIn = int(str(match.initial_balance()))
+        intervention.amountOut = int(str(match.final_balance()))
+        payload = self.pack_payload_from_pathResult(match)
+        intervention.calldata = str(contract.encodeABI("multiswap", (payload,)))
+        intervention.steps = steps = []
+        for i in range(match.path.size()):
+            swap = match.path.get(i)
+            pool = swap.pool
+            steps.append(InterventionStep(pool_id=pool.tag
+                                          , pool_addr=pool.address
+                                          , reserve0=int(str(pool.reserve0))
+                                          , reserve1=int(str(pool.reserve1))
+                                          , amountIn=int(str(match.balance_before_step(i)))
+                                          , amountOut=int(str(match.balance_before_step(i)))
+                                          , feePPM=swap.feesPPM()
+                                          ))
+        with self.attacks_db as curs:
+            curs.add_intervention(intervention)
 
     def digest_prediction_payload(self, payload):
         events = 0

@@ -33,6 +33,7 @@ add_solidity_search_path(join(dirname(dirname(dirname(realpath(__file__)))), "bo
 class Args:
     status_db_dsn: str = "sqlite3://status.db"
     reports_db_dsn: str = "sqlite3://reports.db"
+    attacks_db_dsn: str = "sqlite3://attacks.db"
     verbose: bool = False
     web3_rpc_url: str = JSONRPCConnector.connection_uri()
     max_workers: int = optimal_cpu_threads()
@@ -143,6 +144,7 @@ Options:
   -h  --help
   -d, --status_db_dsn=<connection_str>      DB status dsn connection string. Default is {Args.status_db_dsn}
   --reports_db_dsn=<connection_str>         DB reports dsn connection string. Default is {Args.reports_db_dsn}
+  --attacks_db_dsn=<connection_str>         DB reports dsn connection string. Default is {Args.attacks_db_dsn}
   -c, --web3_rpc_url=<url>                  Web3 RPC connection URL. Default is {Args.web3_rpc_url}
   -j, --max_workers=<n>                     number of RPC data ingest workers, default one per hardware thread. Default is {Args.max_workers}
   -v, --verbose                             debug output
@@ -185,6 +187,8 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker):
         self.db.open_and_priming()
         self.reports_db = ModelDB(schema_name="reports", cursor_factory=StatusScopedCursor, db_dsn=self.args.reports_db_dsn)
         self.reports_db.open_and_priming()
+        self.attacks_db = ModelDB(schema_name="attacks", cursor_factory=StatusScopedCursor, db_dsn=self.args.attacks_db_dsn)
+        self.attacks_db.open_and_priming()
         self.pools = set()
         self.ioloop = get_event_loop()
         self.args.sync_db(self.db)
@@ -239,12 +243,12 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker):
     def get_constraints(self):
         constraint = PathEvalutionConstraints()
         constraint.initial_token_wei_balance = self.args.path_estimation_amount
-        constraint.convenience_min_threshold = (self.args.path_estimation_amount+1000000) / 1000000
-        if False:
-            if not self.args.max_profit_target_ppm:
-                constraint.convenience_max_threshold = 10
-            else:
-                constraint.convenience_max_threshold = (self.args.path_estimation_amount+1000000) / 1000000
+        constraint.convenience_min_threshold = (self.args.min_profit_target_ppm+1000000) / 1000000
+        if not self.args.max_profit_target_ppm:
+            constraint.convenience_max_threshold = 10000
+        else:
+            constraint.convenience_max_threshold = (self.args.max_profit_target_ppm+1000000) / 1000000
+            500000
         return constraint
 
     def on_profitable_path_execution(self, match):
