@@ -533,17 +533,17 @@ static void print_swap_candidate(TheGraph *g
                                  , const pathfinder::Path *path
                                  , const TheGraph::PathResult &r)
 {
-    log_info("candidate path %s would yield %0.5f%%"
+    log_debug("candidate path %s would yield %0.5f%%"
              , log_path_nodes(path).c_str()
-             , (r.yieldPercent-1)*100);
-    log_info(" \\__ initial balance of %1% %2% (%3% Weis) "
+             , (r.yieldRatio-1)*100);
+    log_trace(" \\__ initial balance of %1% %2% (%3% Weis) "
              "turned in %4% %5% (%6% Weis)"
-             , r.start_token->fromWei(r.initial_balance)
+             , r.start_token->fromWei(r.initial_balance())
              , r.start_token->symbol
-             , c.initial_token_wei_balance
-             , r.token->fromWei(r.balance)
+             , r.initial_balance()
+             , r.token->fromWei(r.final_balance())
              , r.token->symbol
-             , r.balance
+             , r.final_balance()
              );
 };
 
@@ -611,10 +611,12 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
 {
     balance_t    balance = c.initial_token_wei_balance;
     const Token *token   = start_token;
+    TheGraph::PathResult result {path, path->get(0)->tokenSrc, token};
 
     log_trace("evaluating path %1%", log_path_nodes(path, true));
 
     // walk the swap path:
+    result.balances[0] = balance;
     for (unsigned int i = 0; i < path->size(); ++i)
     {
         // excuse the following assert soup. They are only intended to
@@ -652,12 +654,11 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
 
         token = swap->tokenDest;
         assert(token != nullptr);
+        result.balances[i+1] = balance;
         log_trace(" \\__ after the swap, the new balance would be %1% %2% (%3% Weis)"
                   , token->fromWei(balance)
                   , token->symbol
                   , balance);
-
-
     }
     if (token != start_token)
     {
@@ -670,19 +671,20 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
     }
 
 
-    double yieldRatio = balance.convert_to<double>() / c.initial_token_wei_balance.convert_to<double>();
-    if (yieldRatio > 1.0f)
+    result.yieldRatio = result.final_balance().convert_to<double>()
+                        / result.initial_balance().convert_to<double>();
+    if (result.yieldRatio > 1.0f)
     {
         log_trace(" \\__ after the final swap, the realized gain would be %0.5f%%"
-                  , (yieldRatio-1)*100.0);
+                  , (result.yieldRatio-1)*100.0);
     }
     else {
         log_trace(" \\__ after the final swap, the realized loss would be %0.5f%%"
-                  , (1-yieldRatio)*100.0);
+                  , (1-result.yieldRatio)*100.0);
     }
-    if (balance > c.initial_token_wei_balance)
+    if (result.final_balance() > result.initial_balance())
     {
-        auto gap = balance - c.initial_token_wei_balance;
+        auto gap = result.final_balance() - result.initial_balance();
         log_trace(" \\__ the operation gains %0.5f %s"
                   , token->fromWei(gap)
                   , token->symbol.c_str());
@@ -691,7 +693,7 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
                   , token->symbol);
     }
     else {
-        auto gap = c.initial_token_wei_balance - balance;
+        auto gap = result.initial_balance() - result.final_balance();
         log_trace(" \\__ the operation loses %0.5f %s"
                   , token->fromWei(gap)
                   , token->symbol.c_str());
@@ -699,13 +701,13 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
                   , gap
                   , token->symbol);
     }
-    if (c.convenience_min_threshold >= 0 && yieldRatio < c.convenience_min_threshold)
+    if (c.convenience_min_threshold >= 0 && result.yieldRatio < c.convenience_min_threshold)
     {
         log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
         throw ConstraintViolation();
     }
 
-    if (c.convenience_max_threshold >= 0 && yieldRatio > c.convenience_max_threshold)
+    if (c.convenience_max_threshold >= 0 && result.yieldRatio > c.convenience_max_threshold)
     {
         log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
         throw ConstraintViolation();
@@ -713,13 +715,7 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
 
     assert(token == start_token);
 
-    return TheGraph::PathResult{
-                path
-                , path->get(0)->tokenSrc
-                , c.initial_token_wei_balance
-                , token
-                , balance
-                , yieldRatio};
+    return result;
 }
 
 TheGraph::PathResultList TheGraph::evaluate_paths_of_interest(const PathEvalutionConstraints &c

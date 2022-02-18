@@ -38,9 +38,9 @@ std::string PathResult::infos() const
     std::stringstream ss;
     ss << path->size() << "-way path is " << path->print_symbols() << std::endl;
     ss << "  \\_ address vector is  " << path->print_addr() << std::endl;
-    ss << "  \\_ initial balance is " << initial_balance << std::endl;
-    ss << "  \\_ final balance is   " << balance << std::endl;
-    ss << "  \\_ yield is           " << yieldPercent << std::endl;
+    ss << "  \\_ initial balance is " << initial_balance() << std::endl;
+    ss << "  \\_ final balance is   " << final_balance() << std::endl;
+    ss << "  \\_ yield is           " << yieldRatio << std::endl;
     return ss.str();
 }
 

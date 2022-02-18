@@ -81,10 +81,9 @@ struct Path: std::array<const OperableSwap *, MAX_PATHS>
 struct PathResult {
     const pathfinder::Path   *path;
     const model::Token       *start_token;
-    model::balance_t          initial_balance;
     const model::Token       *token;
-    model::balance_t          balance;
-    double                    yieldPercent;
+    double                    yieldRatio;
+    std::array<model::balance_t, MAX_PATHS+1> balances;
 
     bool operator==(const PathResult &o) const noexcept
     {
@@ -92,6 +91,11 @@ struct PathResult {
     }
 
     std::string infos() const;
+    model::balance_t initial_balance() const { return balances[0]; }
+    model::balance_t final_balance() const { return balances[path->size()]; }
+    model::balance_t balance_before_step(unsigned idx) const { return balances[idx]; }
+    model::balance_t balance_after_step(unsigned idx) const { return balances[idx+1]; }
+
 };
 typedef std::vector<PathResult> PathResultList;
 
