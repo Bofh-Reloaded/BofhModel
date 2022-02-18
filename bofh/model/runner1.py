@@ -400,7 +400,6 @@ def main():
         filter = Filter(name="bofh")
         for h in getLogger().handlers:
             h.addFilter(filter)
-
     bofh = Runner(args)
     bofh.load()
     bofh.start()

@@ -9,6 +9,7 @@ from autobahn.twisted.websocket import WebSocketClientProtocol, \
     WebSocketClientFactory
 import json
 from twisted.internet import reactor
+from web3.exceptions import ContractLogicError
 
 from bofh.model.modules.loggers import Loggers
 from bofh.utils.misc import checkpointer
@@ -105,10 +106,13 @@ class SyncEventRealtimeTracker:
                     if is_new:
                         self.new_pools += 1
                         contract = self.get_contract(address=address, abi="IGenericLiquidityPool")
-                        factory = contract.functions.factory().call()
-                        log.debug("discovered new liquidity pool %s, has factory %s", address, factory)
-                        curs.set_unknown_pool_factory(address, factory)
-
+                        try:
+                            factory = contract.functions.factory().call()
+                            log.debug("discovered new liquidity pool %s, has factory %s", address, factory)
+                            curs.set_unknown_pool_factory(address, factory)
+                        except ContractLogicError:
+                            log.warning("discovered pool %s is broken/has no factory. marked as disabled", address)
+                            curs.set_unknown_pool_disabled(address, 1)
 
 
 class EventLogClientProtocol(WebSocketClientProtocol):

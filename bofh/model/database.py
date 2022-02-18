@@ -369,3 +369,6 @@ class StatusScopedCursor(BasicScopedCursor):
 
     def set_unknown_pool_factory(self, pool, address):
         self.execute("UPDATE unknown_pools SET factory = ? WHERE address = ?", (address, pool))
+
+    def set_unknown_pool_disabled(self, pool, disabled):
+        self.execute("UPDATE unknown_pools SET disabled = ? WHERE address = ?", (disabled, pool))

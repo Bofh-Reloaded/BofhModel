@@ -1,0 +1,1 @@
+ALTER TABLE unknown_pools ADD COLUMN disabled INT NOT NULL DEFAULT 0;
