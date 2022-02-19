@@ -4,11 +4,13 @@ INSERT INTO schema_version(version) VALUES (0);
 CREATE TABLE interventions (
     id INTEGER PRIMARY KEY,
     origin TEXT NOT NULL DEFAULT 'pred', -- or 'scan'
+    origin_tx TEXT DEFAULT NULL,
+    origin_ts INTEGER NOT NULL,
     blockNr INT NOT NULL,
-    tx TEXT NOT NULL,
     amountIn TEXT NOT NULL,
     amountOut TEXT NOT NULL,
     yieldRatio REAL NOT NULL,
+    path_id TEXT NOT NULL,
     calldata TEXT NOT NULL
 );
 
@@ -35,5 +37,7 @@ CREATE TABLE intervention_outcomes (
 );
 
 
+CREATE INDEX intervention_path_id_idx ON interventions(path_id);
+CREATE INDEX intervention_origin_ts_idx ON interventions(origin_ts);
 CREATE INDEX intervention_steps_fk_idx ON intervention_steps(fk_intervention);
 CREATE INDEX intervention_outcomes_fk_idx ON intervention_outcomes(fk_intervention);

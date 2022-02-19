@@ -3,6 +3,7 @@ from functools import cached_property
 from logging import getLogger
 from sqlite3 import IntegrityError
 from threading import Lock
+from time import time
 from typing import List
 
 from attr import dataclass
@@ -49,9 +50,11 @@ class InterventionStep:
 @dataclass
 class Intervention:
     origin: str
-    tx: str = ""
+    origin_tx: str = ""
+    origin_ts: int = 0
     amountIn: int = 0
     amountOut: int = 0
+    path_id: int = 0
     calldata: str = None
     blockNr: int = 0
     tag: int = None
@@ -339,7 +342,6 @@ class StatusScopedCursor(BasicScopedCursor):
         except IntegrityError:
             self.execute("UPDATE %s SET value = ? WHERE key = ?" % self.META_TABLE, (value, key))
 
-
     def update_latest_blocknr(self, blockNr: int):
         key = "reserves_block_number"
         self.set_meta(key, blockNr)
@@ -364,18 +366,33 @@ class StatusScopedCursor(BasicScopedCursor):
     def update_pool_reserves_batch(self, tuples):
         self.executemany("UPDATE pool_reserves SET reserve0 = ?, reserve1 = ? WHERE id = ?", tuples)
 
+    def intervention_is_in_mute_cache(self, o: Intervention, cache_deadline, max_size=0):
+        ts_of_largest_collection = None
+        path_id = str(o.path_id)
+        if max_size:
+            ts_of_largest_collection_sql = "SELECT origin_ts FROM interventions ORDER BY origin_ts DESC LIMIT 1 OFFSET %u" % max_size
+            try:
+                ts_of_largest_collection = self.execute(ts_of_largest_collection_sql).get_int()
+            except:
+                pass
+        check_colliding_sql = "SELECT COUNT(1) FROM interventions WHERE path_id = ? AND origin_ts >= ?"
+        if ts_of_largest_collection:
+            args = (path_id, ts_of_largest_collection)
+        else:
+            args = (path_id, int(time() - cache_deadline))
+        return self.execute(check_colliding_sql, args).get_int() > 0
+
     def add_intervention(self, o: Intervention):
-        self.execute("INSERT INTO interventions (origin, blockNr, tx, amountIn, amountOut, yieldRatio, calldata) "
-                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                     (o.origin, o.blockNr, o.tx, str(o.amountIn), str(o.amountOut), float(o.amountOut/o.amountIn), o.calldata)
-                     )
+        path_id = str(o.path_id)
+        args = (o.origin, o.blockNr, o.origin_tx, int(o.origin_ts), str(o.amountIn), str(o.amountOut), float(o.amountOut/o.amountIn), path_id, o.calldata)
+        self.execute("INSERT INTO interventions (origin, blockNr, origin_tx, origin_ts, amountIn, amountOut, yieldRatio, path_id, calldata) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", args)
         o.tag = self.execute("SELECT last_insert_rowid()").get_int()
         def steps_iter():
             for step in o.steps:
                 yield o.tag, step.pool_id, str(step.pool_addr), str(step.reserve0), str(step.reserve1), str(step.amountIn), step.feePPM, str(step.amountOut)
         self.executemany("INSERT INTO intervention_steps (fk_intervention, pool_id, pool_addr, reserve0, reserve1, amountIn, feePPM, amountOut) "
                          "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", steps_iter())
-
 
     def add_unknown_pool(self, address):
         try:

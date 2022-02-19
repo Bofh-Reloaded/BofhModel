@@ -1,5 +1,6 @@
 from asyncio import sleep
 from threading import Thread, Event
+from time import time
 
 from jsonrpc_base import TransportError
 from jsonrpc_websocket import Server
@@ -7,8 +8,11 @@ from jsonrpc_websocket import Server
 from bofh.model.database import Intervention, InterventionStep
 from bofh.model.modules.constants import PREDICTION_LOG_TOPIC0_SYNC, PREDICTION_LOG_TOPIC0_SWAP
 from bofh.model.modules.loggers import Loggers
+from bofh.utils.expiringset import ExpiringSet
 from bofh.utils.misc import checkpointer
 from bofh.utils.web3 import parse_data_parameters
+
+log = Loggers.constant_prediction
 
 
 class ConstantPrediction:
@@ -52,7 +56,6 @@ class ConstantPrediction:
         return self.pack_args_payload(pools, feesPPM, initialAmount, expectedAmount)
 
     async def prediction_polling_task(self, constraint=None):
-        log = Loggers.constant_prediction
         # await self.polling_started.wait()
         if constraint is None:
             constraint = self.get_constraints()
@@ -68,7 +71,7 @@ class ConstantPrediction:
         checkpoint = checkpointer(log.info, "constant_prediction checkpoint #{count}"
                                             ", uptime {elapsed_hr}"
                                             ", {events} events processed"
-                                            ", {interventions} opportunities spotted")
+                                            ", {interventions} potential attacks routes spotted")
         events = 0
         interventions = 0
         try:
@@ -98,12 +101,15 @@ class ConstantPrediction:
                         try:
                             matches = self.graph.evaluate_paths_of_interest(constraint, True)
                             for i, match in enumerate(matches):
+
                                 if constraint.match_limit and i >= constraint.match_limit:
                                     return
-                                self.post_intervention_to_db(intervention, match, contract)
-                                interventions += 1
-                                #self.delayed_executor.post(self.on_profitable_path_execution, match)
-                                #self.on_profitable_path_execution(match)
+                                new_entry = self.post_intervention_to_db(intervention, match, contract)
+                                if new_entry:
+                                    interventions += 1
+                                else:
+                                    log.debug("match having path id %r is already in mute_cache. "
+                                              "activation inhibited", match.id())
                         except:
                             log.exception("Error during execution of TheGraph::evaluate_paths_of_interest()")
                     finally:
@@ -118,24 +124,32 @@ class ConstantPrediction:
             await server.close()
 
     def post_intervention_to_db(self, intervention, match, contract):
-        intervention.amountIn = int(str(match.initial_balance()))
-        intervention.amountOut = int(str(match.final_balance()))
-        payload = self.pack_payload_from_pathResult(match)
-        intervention.calldata = str(contract.encodeABI("multiswap", (payload,)))
-        intervention.steps = steps = []
-        for i in range(match.path.size()):
-            swap = match.path.get(i)
-            pool = swap.pool
-            steps.append(InterventionStep(pool_id=pool.tag
-                                          , pool_addr=pool.address
-                                          , reserve0=int(str(pool.reserve0))
-                                          , reserve1=int(str(pool.reserve1))
-                                          , amountIn=int(str(match.balance_before_step(i)))
-                                          , amountOut=int(str(match.balance_before_step(i)))
-                                          , feePPM=swap.feesPPM()
-                                          ))
+        intervention.path_id = match.path.id()
+        intervention.origin_ts = time()
         with self.attacks_db as curs:
+            if curs.intervention_is_in_mute_cache(
+                    intervention
+                    , cache_deadline=self.args.attacks_mute_cache_deadline
+                    , max_size=self.args.attacks_mute_cache_size):
+                return False
+            intervention.amountIn = int(str(match.initial_balance()))
+            intervention.amountOut = int(str(match.final_balance()))
+            payload = self.pack_payload_from_pathResult(match)
+            intervention.calldata = str(contract.encodeABI("multiswap", (payload,)))
+            intervention.steps = steps = []
+            for i in range(match.path.size()):
+                swap = match.path.get(i)
+                pool = swap.pool
+                steps.append(InterventionStep(pool_id=pool.tag
+                                              , pool_addr=pool.address
+                                              , reserve0=int(str(pool.reserve0))
+                                              , reserve1=int(str(pool.reserve1))
+                                              , amountIn=int(str(match.balance_before_step(i)))
+                                              , amountOut=int(str(match.balance_before_step(i)))
+                                              , feePPM=swap.feesPPM()
+                                              ))
             curs.add_intervention(intervention)
+            return True
 
     def digest_prediction_payload(self, payload):
         events = 0
