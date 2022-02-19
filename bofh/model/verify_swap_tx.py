@@ -3,9 +3,9 @@ from random import choice
 
 from hexbytes import HexBytes
 
-from bofh.model.runner1 import PREDICTION_LOG_TOPIC0_SWAP, PREDICTION_LOG_TOPIC0_SYNC
-from bofh.utils.misc import LogAdapter
-from bofh.utils.web3 import Web3Connector, log_topic_id, parse_data_parameters
+from bofh.model.modules.constants import PREDICTION_LOG_TOPIC0_SWAP, PREDICTION_LOG_TOPIC0_SYNC
+from bofh.model.modules.loggers import Loggers
+from bofh.utils.web3 import Web3Connector, parse_data_parameters
 
 
 __doc__="""Observes an Uniswap-AMM swap transaction and crunch some numbers.
@@ -138,7 +138,7 @@ def main():
     args = Args.from_cmdline(__doc__)
     basicConfig(level="INFO")
     log_set_level(log_level.debug)
-    log_register_sink(LogAdapter(level=args.verbose and "DEBUG" or "INFO"))
+    log_register_sink(Loggers.model)
     runner = Runner(args)
     runner()
 

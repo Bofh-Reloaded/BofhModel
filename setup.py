@@ -20,7 +20,7 @@ CLASSIFIERS = [
 ]
 ENTRY_POINTS={'console_scripts':[
     'bofh.model.initdb = bofh.model.initdb:main',
-    'bofh.model.runner1 = bofh.model.runner1:main',
+    'bofh.model.runner = bofh.model.runner:main',
     'bofh.model.download_exchange = bofh.model.download_exchange:main',
     'bofh.model.verify_swap_tx = bofh.model.verify_swap_tx:main',
     'bofh.model.read_token_data = bofh.model.read_token_data:main',

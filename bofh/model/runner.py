@@ -52,6 +52,8 @@ class Args:
     min_profit_target_ppm: int = 10000
     max_profit_target_ppm: int = None
     min_profit_target_amount: int = 0
+    attacks_mute_cache_size: int = 0
+    attacks_mute_cache_deadline: int = 3600
     dry_run: bool = False
     dry_run_delay: int = 6
     logfile: str = None
@@ -80,6 +82,8 @@ class Args:
         "min_profit_target_ppm",
         "max_profit_target_ppm",
         "min_profit_target_amount",
+        "attacks_mute_cache_size",
+        "attacks_mute_cache_deadline",
         "dry_run_delay",
     }
 
@@ -138,7 +142,7 @@ class Args:
 
 __doc__=f"""Start model runner.
 
-Usage: bofh.model.runner1 [options]
+Usage: bofh.model.runner [options]
 
 Options:
   -h  --help
@@ -163,6 +167,10 @@ Options:
   --min_profit_target_ppm=<ppM>             minimum viable profit target in parts per million (relative). Default is {Args.min_profit_target_ppm}
   --max_profit_target_ppm=<ppM>             minimum viable profit target in parts per million (relative). Default is {Args.max_profit_target_ppm}
   --min_profit_target_amount=<wei>          minimum viable profit target in wei (absolute). Default is unset
+  --attacks_mute_cache_size=<n>             size of the known attacks mute cache. Default is {Args.attacks_mute_cache_size}
+  --attacks_mute_cache_deadline=<secs>      expunge time deadline of the known attacks mute cache. Default is {Args.attacks_mute_cache_deadline} 
+                                            Spotted attacks are put in the mute cache unless successfully exploited, 
+                                            not to be noticed repeated again unless they are expunged via cache size or time limits.
   --dry_run                                 call contract execution to estimate outcome without actual transaction (no-risk no-reward mode)
   --dry_run_delay=<secs>                    delay seconds from opportunity spotting and arbitrage simulation. Default is {Args.dry_run_delay}
   --logfile=<file>                          log to file
