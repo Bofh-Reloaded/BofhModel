@@ -34,23 +34,12 @@ struct Path: std::array<const OperableSwap *, MAX_PATHS>
     typedef const OperableSwap * value_type;
 
     PathLength type;
+    std::size_t m_hash; // cached id
 
     Path() = delete;
 
-    Path(value_type v0
-         , value_type v1
-         , value_type v2)
-        : base_t{v0, v1, v2}
-        , type(PATH_3WAY)
-    { }
-
-    Path(value_type v0
-         , value_type v1
-         , value_type v2
-         , value_type v3)
-        : base_t{v0, v1, v2, v3}
-        , type(PATH_4WAY)
-    { }
+    Path(value_type v0, value_type v1, value_type v2);
+    Path(value_type v0, value_type v1, value_type v2, value_type v3);
 
     /**
      * @brief returns number of swaps in the chain
@@ -76,6 +65,22 @@ struct Path: std::array<const OperableSwap *, MAX_PATHS>
 
     std::string print_addr() const;
     std::string print_symbols() const;
+
+    /**
+     * @brief identifier of a known path
+     *
+     * Two paths are assumed to be collimating if they have the same ID.
+     *
+     * This value is computed by hashing the addresses of the crossed pools,
+     * in their appeareance order. Therefore is repeatable across
+     * different sessions.
+     */
+    std::size_t id() const { return m_hash; };
+
+    bool operator==(const Path &o) const noexcept
+    {
+        return id() == o.id();
+    }
 };
 
 struct PathResult {
@@ -87,7 +92,7 @@ struct PathResult {
 
     bool operator==(const PathResult &o) const noexcept
     {
-        return path == o.path;
+        return id() == o.id();
     }
 
     std::string infos() const;
@@ -95,6 +100,7 @@ struct PathResult {
     model::balance_t final_balance() const { return balances[path->size()]; }
     model::balance_t balance_before_step(unsigned idx) const { return balances[idx]; }
     model::balance_t balance_after_step(unsigned idx) const { return balances[idx+1]; }
+    std::size_t id() const { return path->id(); };
 
 };
 typedef std::vector<PathResult> PathResultList;
