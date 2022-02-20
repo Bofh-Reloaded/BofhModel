@@ -1,6 +1,8 @@
 from functools import lru_cache
 from os.path import join, dirname, realpath
 
+from eth_utils import to_checksum_address
+
 from bofh.model.modules.loggers import Loggers
 from bofh.utils.deploy_contract import deploy_contract
 from web3.exceptions import ContractLogicError
@@ -39,21 +41,70 @@ class ContractCalling:
             abi = "BofhContract"
         return self.w3.eth.contract(address=address, abi=get_abi(abi))
 
-    def call(self, name, *args, address=None, abi=None):
+    def getCoinBalance(self, address):
+        return self.w3.eth.getBalance(to_checksum_address(address))
+
+    def getTokenBalance(self, address, token):
+        if hasattr(token, "address"):
+            token = token.address
+        token = to_checksum_address(token)
+        address = to_checksum_address(address)
+        return self.call(function_name="balanceOf"
+                         , from_address=None
+                         , to_address=token
+                         , abi="IGenericFungibleToken"
+                         , call_args=(address,)
+                         )
+
+    def unlock_wallet(self, address, password, timeout=120):
+        address = to_checksum_address(address)
+        self.w3.geth.personal.unlock_account(address, password, timeout)
+
+    def transact(self, function_name, from_address, to_address, abi=None, call_args=None):
+        to_address = to_checksum_address(to_address)
+        if from_address:
+            from_address = to_checksum_address(from_address)
+            d_from = {"from": from_address}
+        else:
+            d_from = {}
+        if call_args is None:
+            call_args = ()
+        contract_instance = self.get_contract(address=to_address, abi=abi)
+        callable = getattr(contract_instance.functions, function_name)
+        return callable(*call_args).transact(d_from)
+
+    def call(self, function_name, from_address, to_address, abi=None, call_args=None):
+        to_address = to_checksum_address(to_address)
+        if from_address:
+            from_address = to_checksum_address(from_address)
+            d_from = {"from": from_address}
+        else:
+            d_from = {}
+        if call_args is None:
+            call_args = ()
+        contract_instance = self.get_contract(address=to_address, abi=abi)
+        callable = getattr(contract_instance.functions, function_name)
+        return callable(*call_args).call(d_from)
+
+
+    def _call(self, name, *args, address=None, abi=None):
         contract_instance = self.get_contract(address=address, abi=abi)
         callable = getattr(contract_instance.functions, name)
         return callable(*args).call({"from": self.args.wallet_address})
 
-    def transact(self, name, *args, address=None, abi=None):
+    def _transact(self, name, *args, address=None, abi=None):
         contract_instance = self.get_contract(address=address, abi=abi)
         self.w3.geth.personal.unlock_account(self.args.wallet_address, self.args.wallet_password, 120)
         callable = getattr(contract_instance.functions, name)
         return callable(*args).transact({"from": self.args.wallet_address})
 
-    def add_funding(self, amount):
-        caddr = self.args.contract_address
-        log.info("approving %u of balance to on contract at %s, then calling adoptAllowance()", amount, caddr)
-        self.transact("approve", caddr, amount, address=self.args.start_token_address, abi="IGenericFungibleToken")
+    def add_funding(self, amount, to_address, token):
+        if hasattr(token, "address"):
+            token = token.address
+        token = to_checksum_address(token)
+        to_address = to_checksum_address(to_address)
+        log.info("approving %u of balance to on contract at %s, then calling adoptAllowance()", amount, to_address)
+        self.transact("approve", to_address, amount, address=token, abi="IGenericFungibleToken")
         self.transact("adoptAllowance")
 
     def repossess_funding(self):
@@ -69,8 +120,7 @@ class ContractCalling:
         self.transact("kill")
 
     def contract_balance(self):
-        caddr = self.args.contract_address
-        return self.call("balanceOf", caddr, address=self.args.start_token_address, abi="IGenericFungibleToken")
+        return self.getTokenBalance(self.args.contract_address, self.args.start_token_address)
 
     def redeploy_contract(self, fpath="BofhContract.sol"):
         try:

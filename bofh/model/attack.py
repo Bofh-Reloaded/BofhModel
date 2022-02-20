@@ -4,6 +4,7 @@ from time import strftime, gmtime
 
 from tabulate import tabulate
 
+from bofh.model.modules.cached_entities import CachedEntities
 from bofh.model.modules.constants import  ENV_SWAP_CONTRACT_ADDRESS, ENV_BOFH_WALLET_ADDRESS, \
     ENV_BOFH_WALLET_PASSWD
 from bofh.model.modules.contract_calls import ContractCalling
@@ -45,7 +46,9 @@ class Args:
     describe: int = None
     print_calldata: bool = False
     weis: bool = False
-    make_me_money: int = None
+    execute: int = None
+    initial_amount: int = None
+    yes: bool = False
 
 
     DB_CACHED_PARAMETERS = {
@@ -115,43 +118,53 @@ Usage: bofh.model.attack [options]
 
 Options:
   -h  --help
-  -d, --status_db_dsn=<connection_str>      DB status dsn connection string. Default is {Args.status_db_dsn}
-  --attacks_db_dsn=<connection_str>         DB reports dsn connection string. Default is {Args.attacks_db_dsn}
-  -c, --web3_rpc_url=<url>                  Web3 RPC connection URL. Default is {Args.web3_rpc_url}
-  -v, --verbose                             debug output
-  --contract_address=<address>              set contract counterpart address. Default from BOFH_CONTRACT_ADDRESS envvar
-  --wallet_address=<address>                funding wallet address. Default from BOFH_WALLET_ADDRESS envvar
-  --wallet_password=<pass>                  funding wallet address. Default from BOFH_WALLET_PASSWD envvar
-  --dry_run                                 call contract execution to estimate outcome without actual transaction (no-risk no-reward mode)
-  -o, --order_by=<attribute>                latest, yield. Default is {Args.order_by}
-  -n, --limit=<n>                           latest, yield. Default is {Args.limit}
-  -l, --list                                print LIST of financial attacks.
-                                            When using --list, these options are also apply:
-  --untouched                               only list untouched attacks. Omit previously attempted attacks
-  --failed                                  list executed failed attacks
-  --successful                              list executed successful attacks
-  --yield_min=<percent>                     filter by minimum target yield percent (1 means 1% gain). Default is {Args.yield_min}
-  --yield_max=<percent>                     filter by minimum target yield percent (1 means 1% gain). Default is {Args.yield_max}
-  --describe=<id>                           describe a swap attack in its inferred details.
-                                            Whe using --describe, these options also apply:
-  --print_calldata                          Print complete calldata string
-  --weis                                    Also print amounts in wei units
-  --make_me_money=<id>                      run an attack and wait for results (better test first with --dry-run)
-  --logfile=<file>                          log to file
-  --loglevel_runner=<level>                 set subsystem loglevel. Default is INFO
-  --loglevel_database=<level>               set subsystem loglevel. Default is INFO
-  --loglevel_model=<level>                  set subsystem loglevel. Default is INFO
-  --loglevel_constant_prediction=<level>    set subsystem loglevel. Default is INFO
+  -d, --status_db_dsn=<connection_str>    DB status dsn connection string. Default is {Args.status_db_dsn}
+  --attacks_db_dsn=<connection_str>       DB reports dsn connection string. Default is {Args.attacks_db_dsn}
+  -c, --web3_rpc_url=<url>                Web3 RPC connection URL. Default is {Args.web3_rpc_url}
+  -v, --verbose                           debug output
+  --wallet_address=<address>              funding wallet address. Default from BOFH_WALLET_ADDRESS envvar
+  --wallet_password=<pass>                funding wallet address. Default from BOFH_WALLET_PASSWD envvar
+  
+  -l, --list                              print LIST of financial attacks.
+  When using --list, these options are also apply:
+    -o, --order_by=<attribute>            latest, yield. Default is {Args.order_by}
+    -n, --limit=<n>                       latest, yield. Default is {Args.limit}
+    --untouched                           only list untouched attacks. Omit previously attempted attacks
+    --failed                              list executed failed attacks
+    --successful                          list executed successful attacks
+    --yield_min=<percent>                 filter by minimum target yield percent (1 means 1% gain). Default is {Args.yield_min}
+    --yield_max=<percent>                 filter by minimum target yield percent (1 means 1% gain). Default is {Args.yield_max}
+ 
+  --describe=<id>                         describe a swap attack in its inferred details.
+  When using --describe, these options also apply:
+    --print_calldata                      Print complete calldata string
+    --weis                                Also print amounts in wei units
+  
+  -x, --execute=<id>                      run an attack and wait for results (better test first with --dry-run)
+  When using --execute, these options also apply:
+    -n, --dry_run                         call contract execution to estimate outcome without actual transaction (no-risk no-reward mode)
+    --initial_amount=<wei>                override initial wei amount. Default from specified attack record
+    --contract_address=<address>          set contract counterpart address. Default Default from specified attack record
+    -y, --yes                             do not ask for confirmation
+
+Logging options:  
+  --logfile=<file>                        log to file
+  --loglevel_runner=<level>               set subsystem loglevel. Default is INFO
+  --loglevel_database=<level>             set subsystem loglevel. Default is INFO
+  --loglevel_model=<level>                set subsystem loglevel. Default is INFO
+  --loglevel_constant_prediction=<level>  set subsystem loglevel. Default is INFO
 """
 
 log = getLogger("bofh.model.attack")
 
 
-class Attack(ContractCalling):
+class Attack(ContractCalling, CachedEntities):
     def __init__(self, args: Args):
+        ContractCalling.__init__(self)
         self.args = args
         self.db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=self.args.status_db_dsn)
         self.db.open_and_priming()
+        CachedEntities.__init__(self, self.db)
         self.attacks_db = ModelDB(schema_name="attacks", cursor_factory=StatusScopedCursor, db_dsn=self.args.attacks_db_dsn)
         self.attacks_db.open_and_priming()
         self.args.sync_db(self.db)
@@ -159,44 +172,17 @@ class Attack(ContractCalling):
         self.tokens = {}
         self.pools = {}
         self.exchanges = {}
+        self.args.sync_db(self.db)
 
     def __call__(self, *args, **kwargs):
         if self.args.list:
             self.list()
         elif self.args.describe:
-            self.describe()
+            self.describe(self.args.describe)
+        elif self.args.execute:
+            self.execute(self.args.execute)
         else:
-            log.error("please specify a command: --list ")
-
-    def get_exchange(self, id):
-        try:
-            return self.exchanges[id]
-        except KeyError:
-            pass
-        with self.db as curs:
-            self.exchanges[id] = curs.get_exchange(id=id)
-            return self.exchanges[id]
-
-    def get_token(self, address_or_id):
-        try:
-            return self.tokens[address_or_id]
-        except KeyError:
-            pass
-        with self.db as curs:
-            if isinstance(address_or_id, int):
-                self.tokens[address_or_id] = curs.get_token(id=address_or_id)
-            else:
-                self.tokens[address_or_id] = curs.get_token(address=address_or_id)
-            return self.tokens[address_or_id]
-
-    def get_pool(self, address):
-        try:
-            return self.pools[address]
-        except KeyError:
-            pass
-        with self.db as curs:
-            self.pools[address] = curs.get_pool(address=address)
-            return self.pools[address]
+            log.error("please specify a command: --list, --describe, --execute")
 
     def get_path_short(self, i: Intervention):
         symbols = []
@@ -214,10 +200,6 @@ class Attack(ContractCalling):
 
     def get_token_after_step(self, i: Intervention, n):
         return self.get_token(address_or_id=i.steps[n].tokenOut_addr)
-
-
-    def amount_hr(self, amount, token):
-        return "%0.4f" % token.fromWei(amount)
 
     def list(self):
         direction = self.args.asc and "ASC" or "DESC"
@@ -270,9 +252,9 @@ class Attack(ContractCalling):
 
             print(tabulate(table, headers=headers, tablefmt="orgtbl"))
 
-    def describe(self):
+    def describe(self, attack_id):
         with self.attacks_db as curs:
-            i = curs.get_intervention(self.args.describe)
+            i = curs.get_intervention(attack_id)
             initial_token = self.get_initial_token(i)
             print( "Description of financial attack %r" % i.tag)
             print( "   \\___ this is a %u-way swap" % len(i.steps))
@@ -343,23 +325,8 @@ class Attack(ContractCalling):
             print(f"           \\___ this results in a {gain}")
             print( "                 \\___ which is a %0.4f%% net yield" % i.yieldPercent)
 
-    def get_pool_name(self, pool):
-        s0 = "?"
-        s1 = "?"
-        try:
-            s0 = self.get_token(pool.token0_id).get_symbol()
-        except:
-            pass
-        try:
-            s1 = self.get_token(pool.token1_id).get_symbol()
-        except:
-            pass
-        return "%s-%s" % (s0, s1)
-
-    def get_pool_tokens(self, pool):
-        return self.get_token(pool.token0_id), self.get_token(pool.token1_id)
-
-
+    def execute(self, attack_id):
+        pass
 
 
 def main():
