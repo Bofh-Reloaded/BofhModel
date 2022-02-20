@@ -1,6 +1,4 @@
-import json
 from functools import cached_property
-from logging import getLogger
 from sqlite3 import IntegrityError
 from threading import Lock
 from time import time
@@ -19,23 +17,38 @@ schemadir = join(dirname(realpath(__file__)), "schema")
 class Exchange:
     id: int
     name: str
+    router_address: str = None
 
 
 @dataclass
 class Token:
     id: int
-    address: str
     name: str
+    address: str
     is_stabletoken: bool
+    decimals: int
+    symbol: str = None
+    disabled: int = 0
+
+    def get_symbol(self):
+        if self.symbol: return self.symbol
+        return norm_address(self.address)[0:8]
+
+    def fromWei(self, weis):
+        return weis / (10**self.decimals)
+
+    def toWei(self, amount):
+        return amount * (10**self.decimals)
 
 
 @dataclass
 class Pool:
     id: int
-    name: str
+    address: str
     exchange_id: int
     token0_id: int
     token1_id: int
+
 
 @dataclass
 class InterventionStep:
@@ -43,6 +56,10 @@ class InterventionStep:
     pool_addr: str
     reserve0: int
     reserve1: int
+    tokenIn_addr: str
+    tokenOut_addr: str
+    tokenIn_id: str
+    tokenOut_id: str
     amountIn: int
     feePPM: int
     amountOut: int
@@ -55,10 +72,15 @@ class Intervention:
     amountIn: int = 0
     amountOut: int = 0
     path_id: int = 0
+    contract: str = None
     calldata: str = None
     blockNr: int = 0
     tag: int = None
     steps: List[InterventionStep] = []
+
+    @property
+    def yieldPercent(self):
+        return 100*((self.amountOut / self.amountIn)-1)
 
 
 class ModelDB:
@@ -236,6 +258,8 @@ class BasicScopedCursor:
                 for i in seq:
                     yield i
 
+def norm_address(a: str):
+    return str(a).lower()
 
 class StatusScopedCursor(BasicScopedCursor):
     MAX_TOKEN_NAME_LEN = 64
@@ -245,19 +269,19 @@ class StatusScopedCursor(BasicScopedCursor):
     def add_token(self, address, name=None, ignore_duplicates=False):
         assert self.conn is not None
         try:
-            self.execute("INSERT INTO tokens (address, name) VALUES (?, ?)", (address, name))
+            self.execute("INSERT INTO tokens (address, name) VALUES (?, ?)", (norm_address(address), name))
             self.execute("SELECT last_insert_rowid()")
         except IntegrityError:
             # already existing
             if not ignore_duplicates:
                 raise
-            self.execute("SELECT id FROM tokens WHERE address = ?", (address,))
+            self.execute("SELECT id FROM tokens WHERE address = ?", (norm_address(address),))
         return self.get_int()
 
     def add_exchange(self, router_address, name=None, ignore_duplicates=False):
         assert self.conn is not None
         try:
-            self.execute("INSERT INTO exchanges (router_address, name) VALUES (?, ?)", (router_address, name,))
+            self.execute("INSERT INTO exchanges (router_address, name) VALUES (?, ?)", (norm_address(router_address), name,))
             self.execute("SELECT last_insert_rowid()")
         except IntegrityError:
             # already existing
@@ -270,13 +294,13 @@ class StatusScopedCursor(BasicScopedCursor):
         assert self.conn is not None
         try:
             self.execute("INSERT INTO pools (address, exchange_id, token0_id, token1_id) VALUES (?, ?, ?, ?)",
-                         (address, exchange_id, token0_id, token1_id))
+                         (norm_address(address), exchange_id, token0_id, token1_id))
             self.execute("SELECT last_insert_rowid()")
         except IntegrityError:
             # already existing
             if not ignore_duplicates:
                 raise
-            self.execute("SELECT id FROM pools WHERE address = ?", (address,))
+            self.execute("SELECT id FROM pools WHERE address = ?", (norm_address(address),))
         return self.get_int()
 
     def list_exchanges(self):
@@ -384,25 +408,87 @@ class StatusScopedCursor(BasicScopedCursor):
 
     def add_intervention(self, o: Intervention):
         path_id = str(o.path_id)
-        args = (o.origin, o.blockNr, o.origin_tx, int(o.origin_ts), str(o.amountIn), str(o.amountOut), float(o.amountOut/o.amountIn), path_id, o.calldata)
-        self.execute("INSERT INTO interventions (origin, blockNr, origin_tx, origin_ts, amountIn, amountOut, yieldRatio, path_id, calldata) "
-                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", args)
+        args = (o.origin, o.blockNr, o.origin_tx, int(o.origin_ts), str(o.amountIn), str(o.amountOut), float(o.amountOut/o.amountIn), path_id, len(o.steps), o.contract, o.calldata)
+        self.execute("INSERT INTO interventions (origin, blockNr, origin_tx, origin_ts, amountIn, amountOut, yieldRatio, path_id, path_size, contract, calldata) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", args)
         o.tag = self.execute("SELECT last_insert_rowid()").get_int()
         def steps_iter():
             for step in o.steps:
-                yield o.tag, step.pool_id, str(step.pool_addr), str(step.reserve0), str(step.reserve1), str(step.amountIn), step.feePPM, str(step.amountOut)
-        self.executemany("INSERT INTO intervention_steps (fk_intervention, pool_id, pool_addr, reserve0, reserve1, amountIn, feePPM, amountOut) "
-                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", steps_iter())
+                yield (o.tag, step.pool_id, norm_address(step.pool_addr), str(step.reserve0), str(step.reserve1),
+                       norm_address(step.tokenIn_addr), norm_address(step.tokenOut_addr), step.tokenIn_id, step.tokenOut_id,
+                       str(step.amountIn), step.feePPM, str(step.amountOut))
+        self.executemany("INSERT INTO intervention_steps (fk_intervention, pool_id, pool_addr, reserve0, reserve1, "
+                         "tokenIn_addr, tokenOut_addr, tokenIn_id, tokenOut_id, amountIn, feePPM, amountOut) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", steps_iter())
 
     def add_unknown_pool(self, address):
         try:
-            self.execute("INSERT INTO unknown_pools (address) VALUES (?)", (address,))
+            self.execute("INSERT INTO unknown_pools (address) VALUES (?)", (norm_address(address),))
             return True
         except IntegrityError:
             return False
 
     def set_unknown_pool_factory(self, pool, address):
-        self.execute("UPDATE unknown_pools SET factory = ? WHERE address = ?", (address, pool))
+        self.execute("UPDATE unknown_pools SET factory = ? WHERE address = ?", (norm_address(address), pool))
 
     def set_unknown_pool_disabled(self, pool, disabled):
         self.execute("UPDATE unknown_pools SET disabled = ? WHERE address = ?", (disabled, pool))
+
+    def get_intervention(self, id) -> Intervention:
+        id, origin, origin_tx, origin_ts, \
+        blockNr, amountIn, amountOut, yieldRatio, \
+        path_id, contract, calldata  = \
+        self.execute("SELECT id, origin, origin_tx, origin_ts, "
+                                "blockNr, amountIn, amountOut, yieldRatio, "
+                                "path_id, contract, calldata FROM interventions WHERE id = ?", (id,)).get()
+        steps = []
+        i = Intervention(tag=id, origin=origin, origin_tx=origin_tx, origin_ts=origin_ts, blockNr=blockNr
+                         , amountIn=int(amountIn), amountOut=int(amountOut)
+                         , path_id=int(path_id), contract=contract, calldata=calldata, steps=steps)
+        for r in self.execute("SELECT pool_id, pool_addr, reserve0, reserve1"
+                              ", tokenIn_addr, tokenOut_addr, tokenIn_id, tokenOut_id"
+                              ",  amountIn, feePPM, amountOut "
+                              "FROM intervention_steps WHERE fk_intervention = ? ORDER BY id ASC", (id,)).get_all():
+            pool_id, pool_addr, reserve0, reserve1, \
+            tokenIn_addr, tokenOut_addr, tokenIn_id, tokenOut_id, \
+            amountIn, feePPM, amountOut = r
+            steps.append(InterventionStep(pool_id=pool_id
+                                          , pool_addr=pool_addr
+                                          , reserve0=int(reserve0)
+                                          , reserve1=int(reserve1)
+                                          , tokenIn_addr=tokenIn_addr
+                                          , tokenOut_addr=tokenOut_addr
+                                          , tokenIn_id=tokenIn_id
+                                          , tokenOut_id=tokenOut_id
+                                          , amountIn=int(amountIn)
+                                          , amountOut=int(amountOut)
+                                          , feePPM=feePPM))
+        return i
+
+    def get_token(self, id=None, address=None):
+        assert (id, address) != (None, None)
+        if address:
+            sql = "SELECT * FROM tokens WHERE address = ?"
+            args = [norm_address(address)]
+        elif id:
+            sql = "SELECT * FROM tokens WHERE id = ?"
+            args = [id]
+        r = self.execute(sql, args).get()
+        return Token(*r)
+
+    def get_pool(self, id=None, address=None):
+        assert (id, address) != (None, None)
+        if address:
+            sql = "SELECT * FROM pools WHERE address = ?"
+            args = [norm_address(address)]
+        elif id:
+            sql = "SELECT * FROM pools WHERE id = ?"
+            args = [id]
+        r = self.execute(sql, args).get()
+        return Pool(*r)
+
+    def get_exchange(self, id):
+        sql = "SELECT id, name FROM exchanges WHERE id = ?"
+        args = [id]
+        r = self.execute(sql, args).get()
+        return Exchange(*r)

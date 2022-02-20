@@ -2,13 +2,13 @@ from asyncio import sleep
 from threading import Thread, Event
 from time import time
 
+from eth_utils import to_checksum_address
 from jsonrpc_base import TransportError
 from jsonrpc_websocket import Server
 
 from bofh.model.database import Intervention, InterventionStep
 from bofh.model.modules.constants import PREDICTION_LOG_TOPIC0_SYNC, PREDICTION_LOG_TOPIC0_SWAP
 from bofh.model.modules.loggers import Loggers
-from bofh.utils.expiringset import ExpiringSet
 from bofh.utils.misc import checkpointer
 from bofh.utils.web3 import parse_data_parameters
 
@@ -63,6 +63,7 @@ class ConstantPrediction:
         contract = self.get_contract()
         intervention = Intervention(origin="pred")
         intervention.blockNr = 0
+        intervention.contract = str(to_checksum_address(self.args.contract_address))
         intervention.amountIn = int(str(constraint.initial_token_wei_balance))
 
         log.info("entering prediction polling loop...")
@@ -145,7 +146,11 @@ class ConstantPrediction:
                                               , reserve0=int(str(pool.reserve0))
                                               , reserve1=int(str(pool.reserve1))
                                               , amountIn=int(str(match.balance_before_step(i)))
-                                              , amountOut=int(str(match.balance_before_step(i)))
+                                              , amountOut=int(str(match.balance_after_step(i)))
+                                              , tokenIn_addr=str(swap.tokenSrc.address)
+                                              , tokenOut_addr=str(swap.tokenDest.address)
+                                              , tokenIn_id=swap.tokenSrc.tag
+                                              , tokenOut_id=swap.tokenDest.tag
                                               , feePPM=swap.feesPPM()
                                               ))
             curs.add_intervention(intervention)

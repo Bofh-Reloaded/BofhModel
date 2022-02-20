@@ -1,7 +1,6 @@
 __all__ = [ "Loggers" ]
 
 from logging import *
-from traceback import print_exception
 
 from bofh_model_ext import log_level, log_set_level
 

@@ -8,3 +8,9 @@ autobahn==22.1.1
 Twisted==22.1.0
 coloredlogs==15.0.1
 ipython
+urwid==2.1.2
+urwid-readline==0.13
+urwid-utils==0.1.2
+orderedattrdict
+raccoon >= 3.0.0
+orderedattrdict==1.6.0

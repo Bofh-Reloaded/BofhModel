@@ -11,6 +11,8 @@ CREATE TABLE interventions (
     amountOut TEXT NOT NULL,
     yieldRatio REAL NOT NULL,
     path_id TEXT NOT NULL,
+    path_size INTEGER NOT NULL,
+    contract TEXT NOT NULL,
     calldata TEXT NOT NULL
 );
 
@@ -21,6 +23,10 @@ CREATE TABLE intervention_steps (
     pool_addr TEXT NOT NULL,
     reserve0 TEXT NOT NULL,
     reserve1 TEXT NOT NULL,
+    tokenIn_addr TEXT NOT NULL,
+    tokenOut_addr TEXT NOT NULL,
+    tokenIn_id INTEGER NOT NULL,
+    tokenOut_id INTEGER NOT NULL,
     amountIn TEXT NOT NULL,
     feePPM INT NOT NULL,
     amountOut TEXT NOT NULL
@@ -33,8 +39,11 @@ CREATE TABLE intervention_outcomes (
     blockNr INT NOT NULL,
     outcome TEXT NOT NULL, -- ok, failed, error
     amountOut TEXT DEFAULT NULL,
-    yieldRatio REAL NOT NULL
+    yieldRatio REAL NOT NULL,
+    contract TEXT NOT NULL,
+    calldata TEXT NOT NULL
 );
+
 
 
 CREATE INDEX intervention_path_id_idx ON interventions(path_id);
