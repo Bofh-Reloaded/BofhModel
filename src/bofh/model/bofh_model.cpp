@@ -82,7 +82,7 @@ int LiquidityPool::feesPPM() const
     if (exchange->estimator != nullptr) try
     {
         amm::EstimatorWithProportionalFees &eppf = dynamic_cast<amm::EstimatorWithProportionalFees&>(*exchange->estimator);
-        return eppf.feesPPK() * 1000;
+        return eppf.feesPPM();
     } catch (std::bad_cast) {
         // carry on
     }

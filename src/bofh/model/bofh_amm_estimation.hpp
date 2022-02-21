@@ -69,7 +69,7 @@ struct EstimatorWithProportionalFees: IdealEstimator
      *
      * Ex: 2 means 0.2%
      */
-    virtual unsigned int feesPPK() const { return 2; }
+    virtual unsigned int feesPPM() const { return 2500; }
     virtual balance_t SwapTokensForExactTokens(const LiquidityPool *pool, const Token *boughtToken, const balance_t &boughtAmount) const;
     virtual balance_t SwapExactTokensForTokens(const LiquidityPool *pool, const Token *soldToken, const balance_t &soldAmount) const;
 };

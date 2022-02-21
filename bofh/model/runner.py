@@ -4,6 +4,7 @@ from os.path import dirname, realpath, join
 from threading import Lock
 
 from coloredlogs import ColoredFormatter
+from eth_utils import to_checksum_address
 from web3.exceptions import ContractLogicError
 
 from bofh.model.modules.constant_prediction import ConstantPrediction
@@ -22,7 +23,7 @@ from bofh.utils.web3 import Web3Connector, JSONRPCConnector
 from dataclasses import dataclass, fields, MISSING
 from logging import basicConfig, Filter, getLogger, Formatter
 
-from bofh.model.database import ModelDB, StatusScopedCursor
+from bofh.model.database import ModelDB, StatusScopedCursor, Intervention
 from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level, PathEvalutionConstraints
 
 # add bofh.contract/contracts to get_abi() seach path:
@@ -185,6 +186,8 @@ Options:
   --cli                                     preload status and stop at CLI (for debugging)
 """
 
+log = Loggers.runner
+
 
 class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker):
 
@@ -208,7 +211,6 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker):
         # self.polling_started = Event()
 
     def consistency_checks(self):
-        log = Loggers.runner
         log.info("Runtime parameter map:")
         for f in fields(self.args):
             v = getattr(self.args, f.name)
@@ -226,7 +228,25 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker):
         except:
             log.error("unable to read current balance for contract at %s", self.args.contract_address)
 
+    def check_all_paths(self):
+        constraint = self.get_constraints()
+        contract = self.get_contract()
 
+        intervention = Intervention(origin="sweep")
+        intervention.blockNr = self.w3.eth.block_number
+        intervention.contract = str(to_checksum_address(self.args.contract_address))
+        intervention.amountIn = int(str(constraint.initial_token_wei_balance))
+        matches = self.graph.debug_evaluate_known_paths(constraint)
+        interventions = 0
+        for i, match in enumerate(matches):
+            if constraint.match_limit and i >= constraint.match_limit:
+                return
+            new_entry = self.post_intervention_to_db(intervention, match, contract)
+            if new_entry:
+                interventions += 1
+            else:
+                log.debug("match having path id %r is already in mute_cache. "
+                          "activation inhibited", match.id())
 
     @property
     def w3(self):
@@ -256,7 +276,6 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker):
             constraint.convenience_max_threshold = 10000
         else:
             constraint.convenience_max_threshold = (self.args.max_profit_target_ppm+1000000) / 1000000
-            500000
         return constraint
 
     def on_profitable_path_execution(self, match):

@@ -3,6 +3,7 @@ from time import strftime, gmtime
 
 from eth_utils import to_checksum_address
 from tabulate import tabulate
+from web3.types import TxReceipt
 
 from bofh.model.modules.cached_entities import CachedEntities
 from bofh.model.modules.constants import ENV_SWAP_CONTRACT_ADDRESS, ENV_BOFH_WALLET_ADDRESS, \
@@ -32,6 +33,7 @@ class Args:
     status: bool = True
     increase_funding: int = None
     reclaim: bool = True
+    selfdestruct: bool = True
     dry_run: bool = False
     weis: bool = False
     yes: bool = False
@@ -116,6 +118,7 @@ Options:
   
   --increase_funding=<wei>                transfer an amount of --token from the wallet to the --contract_address
   --reclaim                               retrieve 100% of the --contract_address token funds to contract admin address
+  --selfdestruct                          calls self-destruct on the contract. All funds are returned to the admin address
   -n, --dry_run                           siluate transfer transaction with no actual execution
   -y, --yes                               do not ask for confirmation
 
@@ -158,6 +161,8 @@ class Funding(ContractCalling, CachedEntities):
                 self.increase_funding(self.args.increase_funding)
             elif self.args.reclaim:
                 self.reclaim()
+            elif self.args.selfdestruct:
+                self.selfdestruct()
             elif self.args.status:
                 self.status()
             else:
@@ -202,15 +207,30 @@ class Funding(ContractCalling, CachedEntities):
         log.info("unlocking wallet...")
         self.unlock_wallet(w_address, self.args.wallet_password)
         log.info(f"calling {token.address}.approve({c_address}, {amount}) ...")
-        tx = self.transact(**calls[0])
-        log.debug("transaction published at %s", tx.hex())
+        receipt = self.transact_and_wait(**calls[0])
+        log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"])
         log.info(f"calling {c_address}.adoptAllowance() ...")
-        tx = self.transact(**calls[1])
-        log.debug("transaction published at %s", tx.hex())
+        receipt = self.transact_and_wait(**calls[1])
+        log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"])
         log.info("transfer completed successfully :-)")
 
     def reclaim(self):
-        pass
+        token = self.get_token(self.args.token)
+        c_address = to_checksum_address(self.args.contract_address)
+        token_balance = self.getTokenBalance(c_address, token)
+        ht_tok = self.amount_hr(token_balance, token)
+        w_address = to_checksum_address(self.args.wallet_address)
+        weis = ""
+        if self.args.weis:
+            weis = f" ({token_balance} weis)"
+        log.info(f"contract {c_address} is currently storing {ht_tok} {token.get_symbol()}{weis}")
+        prompt(self.args, f"Reclaim {ht_tok} {token.get_symbol()}{weis}? "
+                          f"(Funds will be transferred to the contract's admin address)")
+        self.unlock_wallet(w_address, self.args.wallet_password)
+        receipt = self.transact_and_wait(function_name="withdrawFunds"
+                                         , from_address=w_address
+                                         , to_address=c_address)
+        log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"])
 
     def status(self):
         token = self.get_token(self.args.token)
@@ -249,6 +269,25 @@ class Funding(ContractCalling, CachedEntities):
         data.append(line)
 
         print(tabulate(data, headers=headers))
+
+    def selfdestruct(self):
+        token = self.get_token(self.args.token)
+        c_address = to_checksum_address(self.args.contract_address)
+        token_balance = self.getTokenBalance(c_address, token)
+        ht_tok = self.amount_hr(token_balance, token)
+        w_address = to_checksum_address(self.args.wallet_address)
+        weis = ""
+        if self.args.weis:
+            weis = f" ({token_balance} weis)"
+        log.info(f"contract {c_address} is currently storing {ht_tok} {token.get_symbol()}{weis}")
+        prompt(self.args, f"Call selfdestruct on contract {c_address}? "
+                          f"(Funds will be transferred to the contract's admin address)")
+        self.unlock_wallet(w_address, self.args.wallet_password)
+        receipt = self.transact_and_wait(function_name="kill"
+                                         , from_address=w_address
+                                         , to_address=c_address)
+        log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"].hex())
+
 
     def amount_hr(self, amount, token=None):
         if token is None:

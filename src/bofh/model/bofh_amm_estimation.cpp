@@ -127,7 +127,7 @@ balance_t EstimatorWithProportionalFees::SwapTokensForExactTokens(const Liquidit
     return getAmountIn(boughtAmount
                        , pool->getReserve(boughtToken == pool->token0 ? pool->token1 : pool->token0)
                        , pool->getReserve(boughtToken)
-                       , feesPPK());
+                       , feesPPM());
 }
 
 balance_t EstimatorWithProportionalFees::SwapExactTokensForTokens(const LiquidityPool *pool, const Token *soldToken, const balance_t &soldAmount) const
@@ -135,7 +135,7 @@ balance_t EstimatorWithProportionalFees::SwapExactTokensForTokens(const Liquidit
     return getAmountOut(soldAmount
                         , pool->getReserve(soldToken)
                         , pool->getReserve(soldToken == pool->token0 ? pool->token1 : pool->token0)
-                        , feesPPK());
+                        , feesPPM());
 }
 
 

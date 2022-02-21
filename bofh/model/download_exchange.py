@@ -107,11 +107,10 @@ def do_work(a):
             if get_reserves:
                 _, reserve0, reserve1, blocknr = rpc.getReserves(pool_id, pool_addr)
             else:
-                reserve0, reserve1, blocknr = None, None
+                reserve0, reserve1, blocknr = None, None, None
             return pool_id, pool_addr, token0, token1, reserve0, reserve1, blocknr
         except ProtocolError:
             pass
-
 
 
 class Runner:

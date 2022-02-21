@@ -2,6 +2,8 @@ from functools import lru_cache
 from os.path import join, dirname, realpath
 
 from eth_utils import to_checksum_address
+from hexbytes import HexBytes
+from web3.types import TxReceipt
 
 from bofh.model.modules.loggers import Loggers
 from bofh.utils.deploy_contract import deploy_contract
@@ -60,7 +62,7 @@ class ContractCalling:
         address = to_checksum_address(address)
         self.w3.geth.personal.unlock_account(address, password, timeout)
 
-    def transact(self, function_name, from_address, to_address, abi=None, call_args=None):
+    def transact(self, function_name, from_address, to_address, abi=None, call_args=None) -> HexBytes:
         to_address = to_checksum_address(to_address)
         if from_address:
             from_address = to_checksum_address(from_address)
@@ -72,6 +74,17 @@ class ContractCalling:
         contract_instance = self.get_contract(address=to_address, abi=abi)
         callable = getattr(contract_instance.functions, function_name)
         return callable(*call_args).transact(d_from)
+
+    def transact_and_wait(self, function_name, from_address, to_address, abi=None, call_args=None) -> TxReceipt:
+        txhash = self.transact(function_name=function_name, from_address=from_address, to_address=to_address, abi=abi, call_args=call_args)
+        return self.w3.eth.wait_for_transaction_receipt(txhash)
+
+    def get_calldata(self, function_name, from_address=None, to_address=None, abi=None, call_args=None):
+        to_address = to_checksum_address(to_address)
+        if call_args is None:
+            call_args = ()
+        contract_instance = self.get_contract(address=to_address, abi=abi)
+        return contract_instance.encodeABI(function_name, call_args)
 
     def call(self, function_name, from_address, to_address, abi=None, call_args=None):
         to_address = to_checksum_address(to_address)
@@ -144,4 +157,4 @@ class ContractCalling:
             ((initialAmount & 0xffffffffffffffffffffffffffffffff) << 0) | \
             ((expectedAmount & 0xffffffffffffffffffffffffffffffff) << 128)
         args.append(amounts_word)
-        return args
+        return [args]

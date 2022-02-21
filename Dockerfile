@@ -13,10 +13,10 @@ ENV PATH=${TOOLCHAIN_ROOT}/bin:${PATH}
 ENV SRC_ROOT=/src
 
 COPY . ${SRC_ROOT}
+WORKDIR ${BUILD_ROOT}
 RUN bash ${SRC_ROOT}/support/build_toolchain.sh
 RUN bash ${SRC_ROOT}/support/setup_everything.sh
 WORKDIR /status
-COPY support/sqliterc /root/.sqliterc
 
 
 ENTRYPOINT /bin/bash
