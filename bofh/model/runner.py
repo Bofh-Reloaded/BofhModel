@@ -1,7 +1,7 @@
 from asyncio import get_event_loop
-from functools import lru_cache
 from os.path import dirname, realpath, join
 from threading import Lock
+from time import time
 
 from coloredlogs import ColoredFormatter
 from eth_utils import to_checksum_address
@@ -14,19 +14,20 @@ from bofh.model.modules.delayed_execution import DelayedExecutor
 from bofh.model.modules.event_listener import SyncEventRealtimeTracker
 from bofh.model.modules.loggers import Loggers
 from bofh.model.modules.status_preloaders import EntitiesPreloader
-from bofh.utils.deploy_contract import deploy_contract
+from bofh.model.modules.contract_calls import ContractCalling
 
 from bofh.utils.misc import optimal_cpu_threads
-from bofh.utils.solidity import get_abi, add_solidity_search_path, find_contract
-from bofh.utils.web3 import Web3Connector, JSONRPCConnector
+from bofh.utils.solidity import add_solidity_search_path
+from bofh.utils.web3 import JSONRPCConnector
 
 from dataclasses import dataclass, fields, MISSING
-from logging import basicConfig, Filter, getLogger, Formatter
+from logging import basicConfig, Filter, getLogger
 
 from bofh.model.database import ModelDB, StatusScopedCursor, Intervention
 from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level, PathEvalutionConstraints
 
 # add bofh.contract/contracts to get_abi() seach path:
+
 add_solidity_search_path(join(dirname(dirname(dirname(realpath(__file__)))), "bofh.contract", "contracts"))
 
 
@@ -103,7 +104,7 @@ class Args:
         for field in fields(cls):
             k = "--%s" % field.name
             arg = args.get(k)
-            if arg is None:
+            if arg is None or arg:
                 arg = field.default
                 if arg is MISSING:
                     raise RuntimeError("missing command line parameter: %s" % k)
@@ -118,7 +119,7 @@ class Args:
             for fn in self.DB_CACHED_PARAMETERS:
                 field = self.__dataclass_fields__[fn]
                 curval = super(Args, self).__getattribute__(fn)
-                if curval is None:
+                if curval is None or curval == field.default:
                     dbval = curs.get_meta(fn, field.default, cast=field.type)
                     super(Args, self).__setattr__(fn, dbval)
                 else:
@@ -189,7 +190,7 @@ Options:
 log = Loggers.runner
 
 
-class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker):
+class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker, ContractCalling):
 
     def __init__(self, args: Args):
         self.graph = TheGraph()
@@ -208,6 +209,9 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker):
         self.reserves_update_batch = list()  # reserve0, reserve1, tag
         self.reserves_update_blocknr = 0
         self.delayed_executor = DelayedExecutor(self)
+        self.attack_ctr = 0
+        self.attack_last_ts = 0
+        self.attack_attempts = set()
         # self.polling_started = Event()
 
     def consistency_checks(self):
@@ -248,21 +252,73 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker):
                 log.debug("match having path id %r is already in mute_cache. "
                           "activation inhibited", match.id())
 
-    @property
-    def w3(self):
+    def preflight_check(self, i: Intervention):
         try:
-            return self.__w3
-        except AttributeError:
-            self.__w3 = Web3Connector.get_connection(self.args.web3_rpc_url)
-        return self.__w3
+            c_address = to_checksum_address(self.args.contract_address)
+            w_address = to_checksum_address(self.args.wallet_address)
+            self.call(function_name="multiswap"
+                      , from_address=w_address
+                      , to_address=c_address
+                      , call_args=self.pack_intervention_payload(i))
+            return True, None
+        except ContractLogicError as err:
+            txt = str(err)
+            txt = txt.replace("Pancake: ", "")
+            txt = txt.replace("BOFH:", "")
+            txt = txt.replace("execution reverted:", "")
+            txt = txt.strip()
+            return False, txt
 
-    @property
-    def jsonrpc(self):
+    def pack_intervention_payload(self, i: Intervention, initialAmount=None, expectedAmount=None):
+        pools = []
+        fees = []
+        if initialAmount is None:
+            initialAmount = i.amountIn
+        if expectedAmount is None:
+            expectedAmount = int(initialAmount * 101 / 100)
+        for step in i.steps:
+            pools.append(to_checksum_address(step.pool_addr))
+            fees.append(step.feePPM)
+        return self.pack_args_payload(pools=pools
+                                      , fees=fees
+                                      , initialAmount=initialAmount
+                                      , expectedAmount=expectedAmount)
+
+    def execute_attack(self, id):
+        return
         try:
-            return self.__jsonrpc
-        except AttributeError:
-            self.__jsonrpc = JSONRPCConnector.get_connection(self.args.web3_rpc_url)
-        return self.__jsonrpc
+            with self.attacks_db as curs:
+                i = curs.get_intervention(id)
+                if i.path_id in self.attack_attempts: return
+                if self.attack_last_ts > time() - 3600: return
+                log.info("performing preflight check on attack %r...", id)
+                good, err = self.preflight_check(i)
+                if not (good or err == "MP"): # Missed profit
+                    log.warn("not attempting attack %r since it would fail: %s", id, err)
+                    return
+                self.attack_last_ts = time()
+                self.attack_attempts.add(i.path_id)
+                c_address = to_checksum_address(self.args.contract_address)
+                w_address = to_checksum_address(self.args.wallet_address)
+                self.unlock_wallet(w_address, self.args.wallet_password)
+                gas = self.estimate_gas(
+                    function_name="multiswap"
+                    , from_address=w_address
+                    , to_address=c_address
+                    , call_args=self.pack_intervention_payload(i, expectedAmount=0)
+                )
+                log.info("attempting attack %r... (gas=%r)", id, gas)
+                receipt = self.transact_and_wait(
+                    function_name="multiswap"
+                    , from_address=w_address
+                    , to_address=c_address
+                    , call_args=self.pack_intervention_payload(i)
+                    , gas=gas
+                )
+                log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"].hex())
+        except:
+            log.exception("Error during execution of attack %r", id)
+
 
     @property
     def pools_ctr(self):
@@ -313,96 +369,6 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker):
         SyncEventRealtimeTracker.join(self)
         ConstantPrediction.stop(self)
 
-    @lru_cache
-    def get_contract(self, address=None, abi=None):
-        if address is None:
-            address = self.args.contract_address
-        if abi is None:
-            abi = "BofhContract"
-        return self.w3.eth.contract(address=address, abi=get_abi(abi))
-
-    def call(self, name, *args, address=None, abi=None):
-        contract_instance = self.get_contract(address=address, abi=abi)
-        callable = getattr(contract_instance.functions, name)
-        return callable(*args).call({"from": self.args.wallet_address})
-
-    def transact(self, name, *args, address=None, abi=None):
-        contract_instance = self.get_contract(address=address, abi=abi)
-        self.w3.geth.personal.unlock_account(self.args.wallet_address, self.args.wallet_password, 120)
-        callable = getattr(contract_instance.functions, name)
-        return callable(*args).transact({"from": self.args.wallet_address})
-
-    def add_funding(self, amount):
-        log = Loggers.runner
-        caddr = self.args.contract_address
-        log.info("approving %u of balance to on contract at %s, then calling adoptAllowance()", amount, caddr)
-        self.transact("approve", caddr, amount, address=self.args.start_token_address, abi="IGenericFungibleToken")
-        self.transact("adoptAllowance")
-
-    def repossess_funding(self):
-        log = Loggers.runner
-        caddr = self.args.contract_address
-        log.info("calling withdrawFunds() on contract at %s", caddr)
-        self.transact("approve", caddr, 0, address=self.args.start_token_address, abi="IGenericFungibleToken")
-        self.transact("withdrawFunds")
-
-    def kill_contract(self):
-        log = Loggers.runner
-        caddr = self.args.contract_address
-        self.transact("approve", caddr, 0, address=self.args.start_token_address, abi="IGenericFungibleToken")
-        log.info("calling kill() on contract at %s", caddr)
-        self.transact("kill")
-
-    def contract_balance(self):
-        caddr = self.args.contract_address
-        return self.call("balanceOf", caddr, address=self.args.start_token_address, abi="IGenericFungibleToken")
-
-    def redeploy_contract(self, fpath="BofhContract.sol"):
-        log = Loggers.runner
-        try:
-            self.kill_contract()
-        except ContractLogicError:
-            log.exception("unable to kill existing contract at %s", self.args.contract_address)
-        fpath = find_contract(fpath)
-        log.info("attempting to deploy contract from %s", fpath)
-        self.args.contract_address = deploy_contract(self.args.wallet_address, self.args.wallet_password, fpath,
-                                                self.args.start_token_address)
-        log.info("new contract address is established at %s", self.args.contract_address)
-
-    def chiama_multiswap1(self):
-        #self.transact("withdrawFunds", "0x9aa063A00809D21388f8f9Dcc415Be866aCDCC0a", "BofhContract")
-        return self.call("multiswap1", self.test_payload)
-
-    @staticmethod
-    def pack_args_payload(pools: list, fees: list, initialAmount: int, expectedAmount: int):
-        assert len(pools) == len(fees)
-        assert len(pools) <= 4
-        args = []
-        for addr, fee in zip(pools, fees):
-            args.append(int(str(addr), 16) | (fee << 160))
-        amounts_word = \
-            ((initialAmount & 0xffffffffffffffffffffffffffffffff) << 0) | \
-            ((expectedAmount & 0xffffffffffffffffffffffffffffffff) << 128)
-        args.append(amounts_word)
-        return args
-
-    @property
-    def test_payload(self):
-        pools = [
-            "0xf7735324b1ad67b34d5958ed2769cffa98a62dff", # WBNB <-> USDT
-            "0xaf9399f70d896da0d56a4b2cbf95f4e90a6b99e8", # USDT <-> DAI
-            "0xc64c507d4ba4cab02840cecd5878cb7219e81fe0", # DAI <-> WBNB
-        ]
-        feePPM = [20000+i for i in range(len(pools))]
-        initialAmount = 10**15 # 0.001 WBNB
-        expectedAmount = 0 #10**15+1
-        return self.pack_args_payload(pools, feePPM, initialAmount, expectedAmount)
-
-    def call_test(self, name, *a, caddr=None):
-        if caddr is None:
-            caddr = self.args.contract_address
-        args = self.test_payload
-        print(self.call(name, caddr, "BofhContract", args, *a))
 
 
 old_format = ColoredFormatter.format
@@ -412,7 +378,6 @@ def new_format(self, record):
 ColoredFormatter.format = new_format
 
 def main():
-    from IPython import embed
     args = Args.from_cmdline(__doc__)
     log_set_level(log_level.debug)
     log_register_sink(Loggers.model)
@@ -435,6 +400,7 @@ def main():
     bofh.load()
     bofh.start()
     if args.cli:
+        from IPython import embed
         while True:
             embed()
     else:

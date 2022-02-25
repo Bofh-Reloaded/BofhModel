@@ -10,7 +10,8 @@ export BOOST_COMPONENTS=--with-python
 export DEB_PACKAGES="build-essential git wget libffi-dev libbz2-dev libncurses-dev libsqlite3-dev libssl-dev uuid-dev zlib1g-dev libreadline-dev lzma-dev libgdbm-dev g++ gdb less inetutils-ping vim sqlite3"
 export PATH=${TOOLCHAIN_ROOT}/bin:${PATH}
 export SRC_ROOT=${SRC_ROOT-.}
-
+export NODE_VERSION=16.14.0
+export NPM_VERSION=8.5.1
 
 # Exit on any error
 set -euxo pipefail
@@ -71,4 +72,17 @@ python3 -m pip install jupyterlab
 pip3 install -r ${SRC_ROOT}/requirements.txt
 pip3 install -r ${SRC_ROOT}/bofh.utils/requirements.txt
 
+# Install SOLC
+python3 -c "import solcx; solcx.install_solc()"
+cp /root/.solcx/solc-* /usr/local/bin/solc
 
+# Install NodeJS
+wget "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" -O - \
+    | tar xvzf - --strip-components=1 -C ${TOOLCHAIN_ROOT}
+
+# Upgrade NPM
+npm install -g npm@${NPM_VERSION}
+
+# Install Ganache and RemixD
+npm install -g @remix-project/remixd
+npm install ganache -g

@@ -208,10 +208,10 @@ class Funding(ContractCalling, CachedEntities):
         self.unlock_wallet(w_address, self.args.wallet_password)
         log.info(f"calling {token.address}.approve({c_address}, {amount}) ...")
         receipt = self.transact_and_wait(**calls[0])
-        log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"])
+        log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"].hex())
         log.info(f"calling {c_address}.adoptAllowance() ...")
         receipt = self.transact_and_wait(**calls[1])
-        log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"])
+        log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"].hex())
         log.info("transfer completed successfully :-)")
 
     def reclaim(self):
@@ -230,7 +230,7 @@ class Funding(ContractCalling, CachedEntities):
         receipt = self.transact_and_wait(function_name="withdrawFunds"
                                          , from_address=w_address
                                          , to_address=c_address)
-        log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"])
+        log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"].hex())
 
     def status(self):
         token = self.get_token(self.args.token)

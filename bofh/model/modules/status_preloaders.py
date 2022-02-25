@@ -174,7 +174,6 @@ class EntitiesPreloader:
                             pool = self.graph.lookup_lp(pool_addr)
                             assert pool
                             curs.add_pool_reserve(pool.tag, reserve0, reserve1)
-                            print(pool_addr, reserve0, reserve1)
                             print_progress()
                         except:
                             log.exception("unable to query pool %s", pool_addr)

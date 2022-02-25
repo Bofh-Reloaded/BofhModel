@@ -1,7 +1,4 @@
-import asyncio
-from functools import lru_cache
 from json import dump
-from pprint import pprint
 from threading import Lock
 from time import strftime, gmtime
 
@@ -15,7 +12,7 @@ from bofh.model.modules.constants import  ENV_SWAP_CONTRACT_ADDRESS, ENV_BOFH_WA
     ENV_BOFH_WALLET_PASSWD
 from bofh.model.modules.contract_calls import ContractCalling
 from bofh.model.modules.loggers import Loggers
-from bofh.utils.web3 import Web3Connector, JSONRPCConnector
+from bofh.utils.web3 import JSONRPCConnector
 
 from dataclasses import dataclass, fields, MISSING
 from logging import basicConfig, Filter, getLogger
@@ -49,6 +46,7 @@ class Args:
     successful: bool = False
     yield_max: float = None
     yield_min: float = None
+    origin_tx: bool = False
     describe: int = None
     print_calldata: bool = False
     weis: bool = False
@@ -60,6 +58,8 @@ class Args:
     fees_ppm: int = None
     yes: bool = False
     allow_net_losses: bool = False
+    allow_break_even: bool = False
+
 
     DB_CACHED_PARAMETERS = {
         # List of parameters which are also stored in DB in a stateful manner
@@ -144,6 +144,7 @@ Options:
     --successful                          list executed successful attacks
     --yield_min=<percent>                 filter by minimum target yield percent (1 means 1% gain). Default is {Args.yield_min}
     --yield_max=<percent>                 filter by minimum target yield percent (1 means 1% gain). Default is {Args.yield_max}
+    --origin_tx                           display origin (trigger) tx
  
   --describe=<id>                         describe a swap attack in its inferred details.
   When using --describe, these options also apply:
@@ -158,9 +159,10 @@ Options:
     --min_gain_amount=<wei>               override minimum gain wei amount. Default from specified attack record
     --min_gain_ppm=<ppm>                  override minimum gain in parts per million. Default from specified attack record
     --fees_ppm=<ppm>                      override swap fees (parts per million. Ex: 2500 means 0.25%)
-    --contract_address=<address>          set contract counterpart address. Default Default from specified attack record
+    --contract_address=<address>          set contract counterpart address. Default from specified attack record
     -y, --yes                             do not ask for confirmation
     --allow_net_losses                    allow the financial attack to result in a net loss without rolling back the transaction (use this for debug only!)
+    --allow_break_even                    allow the financial attack to result in a net break-even without rolling back the transaction (use this for debug only!)
 
 Logging options:  
   --logfile=<file>                        log to file
@@ -247,6 +249,8 @@ class Attack(ContractCalling, CachedEntities):
                 if self.args.min_gain_ppm:
                     new = int(i.amountIn * (1000000+self.args.min_gain_ppm) / 1000000)
                     i.amountOut = max(i.amountOut, new)
+                if self.args.allow_break_even:
+                    i.amountOut = i.amountIn
                 if self.args.allow_net_losses:
                     i.amountOut = 0
             return i
@@ -286,7 +290,9 @@ class Attack(ContractCalling, CachedEntities):
             where += " AND (%s)" % (" AND ").join(wheres_and)
         sql = f"SELECT id FROM interventions {where} {order_by} {direction} {limit}"
         with self.attacks_db as curs:
-            headers = ["id", "path", "len", "block#", "yield%", "initial", "final"]
+            headers = ["id", "path", "len", "yield%", "initial", "final", "block#"]
+            if self.args.origin_tx:
+                headers.append("tx")
             if self.args.check:
                 headers.append("good?")
             table = []
@@ -294,19 +300,22 @@ class Attack(ContractCalling, CachedEntities):
                 i = self.get_intervention(id, patch=False)
                 initial_token = self.get_initial_token(i)
                 row = [i.tag
-                              , self.get_path_short(i)
-                              , len(i.steps)
-                              , i.blockNr
-                              , "%0.4f"%i.yieldPercent
-                              , self.amount_hr(i.amountIn, initial_token)
-                              , self.amount_hr(i.amountOut, initial_token)]
+                       , self.get_path_short(i)
+                       , len(i.steps)
+                       , "%0.4f"%i.yieldPercent
+                       , self.amount_hr(i.amountIn, initial_token)
+                       , self.amount_hr(i.amountOut, initial_token)
+                       , i.blockNr
+                       ]
+                if self.args.origin_tx:
+                    row.append(i.origin_tx or "")
                 if self.args.check:
                     i = self.get_intervention(id, patch=True)
                     good, err = self.preflight_check(i)
                     if good:
                         row.append("OK")
                     else:
-                        row.append("ERR:%s"%err)
+                        row.append("ERR: %s"%err)
                 table.append(row)
             print(tabulate(table, headers=headers, tablefmt="orgtbl"))
 
@@ -399,11 +408,15 @@ class Attack(ContractCalling, CachedEntities):
         log.info("performing preflight check...")
         good, err = self.preflight_check(i)
         if not good:
+            if err == "K":
+                self.diagnose_k_error(i)
             raise ManagedAbort("preflight check failed: %s" % err)
 
         c_address = to_checksum_address(self.args.contract_address)
         w_address = to_checksum_address(self.args.wallet_address)
-        self.unlock_wallet(w_address, self.args.wallet_password)
+        if self.args.wallet_password:
+            log.info("unlocking wallet %s", w_address)
+            self.unlock_wallet(w_address, self.args.wallet_password)
         receipt = self.transact_and_wait(
             function_name="multiswap"
             , from_address=w_address
@@ -424,7 +437,6 @@ class Attack(ContractCalling, CachedEntities):
             ioloop = get_event_loop()
             ioloop.run_until_complete(trace_call())
 
-
     def preflight_check(self, i: Intervention):
         try:
             c_address = to_checksum_address(self.args.contract_address)
@@ -439,11 +451,29 @@ class Attack(ContractCalling, CachedEntities):
             txt = txt.replace("Pancake: ", "")
             txt = txt.replace("BOFH:", "")
             txt = txt.replace("execution reverted:", "")
-            if txt == "K":
-                txt = "WRONG_RATIO"
+            txt = txt.strip()
             return False, txt
 
-    def pack_intervention_payload(self, i: Intervention):
+    def diagnose_k_error(self, i: Intervention):
+        c_address = to_checksum_address(self.args.contract_address)
+        w_address = to_checksum_address(self.args.wallet_address)
+        for j, step in enumerate(i.steps):
+            try:
+                res = self.call(function_name="multiswap"
+                          , from_address=w_address
+                          , to_address=c_address
+                          , call_args=self.pack_intervention_payload(i, stop_after_pool=j+1)
+                          )
+                print("pool[%u]: OK" % j, res)
+            except ContractLogicError as err:
+                txt = str(err)
+                txt = txt.replace("Pancake: ", "")
+                txt = txt.replace("BOFH:", "")
+                txt = txt.replace("execution reverted:", "")
+                txt = txt.strip()
+                print("pool[%u]: %s" % (j, txt))
+
+    def pack_intervention_payload(self, i: Intervention, stop_after_pool=None):
         pools = []
         fees = []
         initialAmount = i.amountIn
@@ -462,7 +492,8 @@ class Attack(ContractCalling, CachedEntities):
         return self.pack_args_payload(pools=pools
                                       , fees=fees
                                       , initialAmount=initialAmount
-                                      , expectedAmount=expectedAmount)
+                                      , expectedAmount=expectedAmount
+                                      , stop_after_pool=stop_after_pool)
 
 
 def main():

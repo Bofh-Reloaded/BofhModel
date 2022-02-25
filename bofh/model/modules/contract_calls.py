@@ -62,7 +62,22 @@ class ContractCalling:
         address = to_checksum_address(address)
         self.w3.geth.personal.unlock_account(address, password, timeout)
 
-    def transact(self, function_name, from_address, to_address, abi=None, call_args=None) -> HexBytes:
+    def transact(self, function_name, from_address, to_address, abi=None, call_args=None, gas=None) -> HexBytes:
+        to_address = to_checksum_address(to_address)
+        if from_address:
+            from_address = to_checksum_address(from_address)
+            d_from = {"from": from_address}
+        else:
+            d_from = {}
+        if call_args is None:
+            call_args = ()
+        if gas is not None:
+            d_from.update(gas=gas)
+        contract_instance = self.get_contract(address=to_address, abi=abi)
+        callable = getattr(contract_instance.functions, function_name)
+        return callable(*call_args).transact(d_from)
+
+    def estimate_gas(self, function_name, from_address, to_address, abi=None, call_args=None) -> int:
         to_address = to_checksum_address(to_address)
         if from_address:
             from_address = to_checksum_address(from_address)
@@ -73,10 +88,10 @@ class ContractCalling:
             call_args = ()
         contract_instance = self.get_contract(address=to_address, abi=abi)
         callable = getattr(contract_instance.functions, function_name)
-        return callable(*call_args).transact(d_from)
+        return callable(*call_args).estimateGas(d_from)
 
-    def transact_and_wait(self, function_name, from_address, to_address, abi=None, call_args=None) -> TxReceipt:
-        txhash = self.transact(function_name=function_name, from_address=from_address, to_address=to_address, abi=abi, call_args=call_args)
+    def transact_and_wait(self, function_name, from_address, to_address, abi=None, call_args=None, gas=None) -> TxReceipt:
+        txhash = self.transact(function_name=function_name, from_address=from_address, to_address=to_address, abi=abi, call_args=call_args, gas=gas)
         return self.w3.eth.wait_for_transaction_receipt(txhash)
 
     def get_calldata(self, function_name, from_address=None, to_address=None, abi=None, call_args=None):
@@ -147,14 +162,18 @@ class ContractCalling:
         log.info("new contract address is established at %s", self.args.contract_address)
 
     @staticmethod
-    def pack_args_payload(pools: list, fees: list, initialAmount: int, expectedAmount: int):
+    def pack_args_payload(pools: list, fees: list, initialAmount: int, expectedAmount: int, stop_after_pool=None):
         assert len(pools) == len(fees)
         assert len(pools) <= 4
         args = []
-        for addr, fee in zip(pools, fees):
-            args.append(int(str(addr), 16) | (fee << 160))
+        for i, (addr, fee) in enumerate(zip(pools, fees)):
+            val = int(str(addr), 16) | (fee << 160)
+            if stop_after_pool == i:
+                val |= (1 << 180) # set this bit. on Debug contracts, it triggers OPT_BREAK_EARLY
+            args.append(val)
         amounts_word = \
             ((initialAmount & 0xffffffffffffffffffffffffffffffff) << 0) | \
             ((expectedAmount & 0xffffffffffffffffffffffffffffffff) << 128)
         args.append(amounts_word)
+
         return [args]

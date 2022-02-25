@@ -1,4 +1,5 @@
 from asyncio import sleep
+from collections import defaultdict
 from threading import Thread, Event
 from time import time
 
@@ -19,6 +20,7 @@ class ConstantPrediction:
     def start(self):
         self._constant_prediction_terminated = Event()
         self.search_opportunities_by_prediction_thread()
+        self.pools_vs_txhashes = {}
 
     def stop(self):
         try:
@@ -107,6 +109,7 @@ class ConstantPrediction:
                                     return
                                 new_entry = self.post_intervention_to_db(intervention, match, contract)
                                 if new_entry:
+                                    self.execute_attack(intervention.tag)
                                     interventions += 1
                                 else:
                                     log.debug("match having path id %r is already in mute_cache. "
@@ -136,11 +139,16 @@ class ConstantPrediction:
             intervention.amountIn = int(str(match.initial_balance()))
             intervention.amountOut = int(str(match.final_balance()))
             payload = self.pack_payload_from_pathResult(match)
-            intervention.calldata = str(contract.encodeABI("multiswap", (payload,)))
+            intervention.calldata = str(contract.encodeABI("multiswap", payload))
             intervention.steps = steps = []
+            tx, tid = None, None
             for i in range(match.path.size()):
                 swap = match.path.get(i)
                 pool = swap.pool
+                try:
+                    tx, tid = self.pools_vs_txhashes[pool.tag]
+                except KeyError:
+                    pass
                 steps.append(InterventionStep(pool_id=pool.tag
                                               , pool_addr=pool.address
                                               , reserve0=int(str(pool.reserve0))
@@ -153,6 +161,7 @@ class ConstantPrediction:
                                               , tokenOut_id=swap.tokenDest.tag
                                               , feePPM=swap.feesPPM()
                                               ))
+            intervention.origin_tx = tx
             curs.add_intervention(intervention)
             return True
 
@@ -171,6 +180,10 @@ class ConstantPrediction:
             if not pool:
                 logger.debug("unknown pool of interest: %s", address)
                 continue
+            tx = log["tx"]
+            txindex = log["transactionIndex"]
+            self.pools_vs_txhashes[pool.tag] = (tx, txindex)
+            logger.info("pool %s involved in tx %s", pool.address, tx)
             topic0 = log["topic0"]
             if topic0 == PREDICTION_LOG_TOPIC0_SYNC:
                 events += 1
