@@ -1,9 +1,6 @@
-from json import dump
-from threading import Lock
 from time import strftime, gmtime
 
 from eth_utils import to_checksum_address
-from jsonrpc_websocket import Server
 from tabulate import tabulate
 from web3.exceptions import ContractLogicError
 
@@ -17,10 +14,12 @@ from bofh.utils.web3 import JSONRPCConnector
 from dataclasses import dataclass, fields, MISSING
 from logging import basicConfig, Filter, getLogger
 
+from bofh.model.modules.graph import TheGraph
 from bofh.model.database import ModelDB, StatusScopedCursor, Intervention
 
 
 # add bofh.contract/contracts to get_abi() seach path:
+
 
 @dataclass
 class Args:
@@ -59,6 +58,7 @@ class Args:
     yes: bool = False
     allow_net_losses: bool = False
     allow_break_even: bool = False
+    fetch_reserves: bool = False
 
 
     DB_CACHED_PARAMETERS = {
@@ -145,6 +145,7 @@ Options:
     --yield_min=<percent>                 filter by minimum target yield percent (1 means 1% gain). Default is {Args.yield_min}
     --yield_max=<percent>                 filter by minimum target yield percent (1 means 1% gain). Default is {Args.yield_max}
     --origin_tx                           display origin (trigger) tx
+    --fetch_reserves                      use pool reserves obtained via web3 (fresh data!)
  
   --describe=<id>                         describe a swap attack in its inferred details.
   When using --describe, these options also apply:
@@ -188,21 +189,28 @@ def prompt(args: Args, msg):
         raise ManagedAbort("Bailing out due to user choice")
 
 
-class Attack(ContractCalling, CachedEntities):
+class Attack(ContractCalling, CachedEntities, TheGraph):
     def __init__(self, args: Args):
         ContractCalling.__init__(self)
         self.args = args
-        self.db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=self.args.status_db_dsn)
+        self.db = ModelDB(schema_name="status"
+                          , cursor_factory=StatusScopedCursor
+                          , db_dsn=self.args.status_db_dsn)
         self.db.open_and_priming()
         CachedEntities.__init__(self, self.db)
-        self.attacks_db = ModelDB(schema_name="attacks", cursor_factory=StatusScopedCursor, db_dsn=self.args.attacks_db_dsn)
+        self.attacks_db = ModelDB(schema_name="attacks"
+                                  , cursor_factory=StatusScopedCursor
+                                  , db_dsn=self.args.attacks_db_dsn)
         self.attacks_db.open_and_priming()
+        TheGraph.__init__(self, self.db, attacks_db=self.attacks_db)
         self.args.sync_db(self.db)
-        self.status_lock = Lock()
         self.tokens = {}
         self.pools = {}
         self.exchanges = {}
         self.args.sync_db(self.db)
+        if self.args.fetch_reserves:
+            # override reserves fetch routine
+            self.graph.set_fetch_lp_reserves_tag_cb(self.fetch_reserves)
 
     def __call__(self, *args, **kwargs):
         try:
@@ -217,43 +225,12 @@ class Attack(ContractCalling, CachedEntities):
         except ManagedAbort as err:
             log.error(str(err))
 
-    def get_path_short(self, i: Intervention):
-        symbols = []
-        for step in i.steps:
-            s = self.get_token(address_or_id=step.tokenIn_addr)
-            symbols.append(s.get_symbol() or s.address[0:8])
-        symbols.append(symbols[0])
-        return "-".join(symbols)
-
-    def get_initial_token(self, i: Intervention):
-        return self.get_token(address_or_id=i.steps[0].tokenIn_addr)
-
-    def get_token_before_step(self, i: Intervention, n):
-        return self.get_token(address_or_id=i.steps[n].tokenIn_addr)
-
-    def get_token_after_step(self, i: Intervention, n):
-        return self.get_token(address_or_id=i.steps[n].tokenOut_addr)
-
-    def get_intervention(self, id, patch=False):
-        with self.attacks_db as curs:
-            i = curs.get_intervention(id)
-            if patch:
-                if self.args.fees_ppm:
-                    for s in i.steps:
-                        s.feePPM = self.args.fees_ppm
-                if self.args.initial_amount:
-                    i.amountOut = i.amountIn = self.args.initial_amount
-                if self.args.min_gain_amount:
-                    new = i.amountIn + self.args.min_gain_amount
-                    i.amountOut = max(i.amountOut, new)
-                if self.args.min_gain_ppm:
-                    new = int(i.amountIn * (1000000+self.args.min_gain_ppm) / 1000000)
-                    i.amountOut = max(i.amountOut, new)
-                if self.args.allow_break_even:
-                    i.amountOut = i.amountIn
-                if self.args.allow_net_losses:
-                    i.amountOut = 0
-            return i
+    def fetch_reserves(self, pool):
+        contract = self.get_contract(str(pool.address), abi="IGenericLiquidityPool")
+        callable = contract.functions.getReserves()
+        r0, r1, _ = callable.call()
+        pool.setReserves(r0, r1)
+        return pool
 
     def list(self):
         direction = self.args.asc and "ASC" or "DESC"
@@ -288,27 +265,28 @@ class Attack(ContractCalling, CachedEntities):
             where += " AND (%s)" % (" OR ").join(wheres_or)
         if wheres_and:
             where += " AND (%s)" % (" AND ").join(wheres_and)
-        sql = f"SELECT id FROM interventions {where} {order_by} {direction} {limit}"
+        sql = f"SELECT id, path_id, blockNr, origin_tx " \
+              f"FROM interventions {where} {order_by} {direction} {limit}"
         with self.attacks_db as curs:
-            headers = ["id", "path", "len", "yield%", "initial", "final", "block#"]
+            headers = ["id", "path", "len", "yield%", "block#"]
             if self.args.origin_tx:
                 headers.append("tx")
             if self.args.check:
                 headers.append("good?")
             table = []
-            for id, in list(curs.execute(sql, args).get_all()):
-                i = self.get_intervention(id, patch=False)
-                initial_token = self.get_initial_token(i)
-                row = [i.tag
-                       , self.get_path_short(i)
-                       , len(i.steps)
-                       , "%0.4f"%i.yieldPercent
-                       , self.amount_hr(i.amountIn, initial_token)
-                       , self.amount_hr(i.amountOut, initial_token)
-                       , i.blockNr
+            for id, path_id, blockNr, origin_tx in list(curs.execute(sql, args).get_all()):
+                path = self.graph.lookup_path(int(path_id))
+                constraints = self.get_constraint(path.initial_token())
+                result = path.evaluate(constraints, False)
+                yieldPercent = 100.0*(result.yield_ratio()-1.0)
+                row = [id
+                       , path.get_symbols()
+                       , path.size()
+                       , "%0.4f"%yieldPercent
+                       , blockNr
                        ]
                 if self.args.origin_tx:
-                    row.append(i.origin_tx or "")
+                    row.append(origin_tx or "")
                 if self.args.check:
                     i = self.get_intervention(id, patch=True)
                     good, err = self.preflight_check(i)
@@ -319,99 +297,176 @@ class Attack(ContractCalling, CachedEntities):
                 table.append(row)
             print(tabulate(table, headers=headers, tablefmt="orgtbl"))
 
+    def get_constraint(self, initial_token):
+        res = super(Attack, self).get_constraint()
+        if self.args.initial_amount:
+            res.initial_token_wei_balance = self.args.initial_amount
+        else:
+            res.initial_token_wei_balance = 10 ** initial_token.decimals
+        return res
+
+    def find_best_amount(self, path, amount_min, amount_max):
+        amount_min = int(str(amount_min))
+        amount_max = int(str(amount_max))
+        c = super(Attack, self).get_constraint()
+
+        def yield_with_amount(amount):
+            c.initial_token_wei_balance = amount
+            result = path.evaluate(c, False)
+            return int(str(result.final_balance())) \
+                   - int(str(result.initial_balance()))
+
+        fractions = 1000
+        step = int((amount_max-amount_min) / fractions)
+
+        base = amount_min
+        y0 = yield_with_amount(base)
+        y1 = yield_with_amount(base + step)
+        if y0 < y1:
+            find_max_from_base()
+        if y0 > y1:
+            find_max_from_top()
+
+        if init > nxt:
+            return amount_min
+        nxt2 = yield_with_amount(amount_min + step*2)
+        if nxt > nxt2:
+            return amount_min + step
+        nxt3 = yield_with_amount(amount_min + step*3)
+        if nxt2 > nxt3:
+            return amount_min + step*2
+
+        return
+
+
+
+        step = (amount_max - amount_min) // 50
+        data = []
+        for i in range(50):
+            a = amount_min+i*step
+            y = yield_with_amount(a)
+            data.append([str(a), str(y)])
+        print(tabulate(data))
+        return
+        amount_mid = int((amount_max + amount_min) / 2)
+        a = yield_with_amount(amount_min)
+        mid = yield_with_amount(amount_mid)
+        b = yield_with_amount(amount_max)
+        print(amount_mid, a)
+        print(amount_mid, mid)
+        print(amount_max, b)
+
     def describe(self, attack_id):
-        i = self.get_intervention(attack_id, patch=False)
-        initial_token = self.get_initial_token(i)
-        print( "Description of financial attack %r" % i.tag)
-        print( "   \\___ this is a %u-way swap" % len(i.steps))
-        print(f"   \\___ detection origin is {i.origin} at block {i.blockNr}")
-        ots = strftime("%c UTC", gmtime(int(i.origin_ts)))
-        print(f"   \\___ origin timestamp is {ots} (unix_time={i.origin_ts})")
-        hr_amountin = self.amount_hr(i.amountIn, initial_token)
-        hr_amountout = self.amount_hr(i.amountOut, initial_token)
+        with self.attacks_db as curs:
+            path_id, origin, blockNr, origin_tx, origin_ts, calldata = \
+                    curs.execute("SELECT path_id, origin, blockNr, origin_tx, origin_ts, calldata "
+                                 "FROM interventions WHERE id = ?", (attack_id,)).get()
+            path_id = int(path_id)
+        path = self.graph.lookup_path(path_id)
+        initial_token = path.initial_token()
+        print( "Description of financial attack %r" % attack_id)
+        print( "   \\___ this is a %u-way swap" % path.size())
+        print(f"   \\___ detection origin is {origin} at block {blockNr}, tx {origin_tx}")
+        ots = strftime("%c UTC", gmtime(int(origin_ts)))
+        print(f"   \\___ origin timestamp is {ots} (unix_time={origin_ts})")
+        constraint = self.get_constraint(initial_token)
+        result = path.evaluate(constraint, False)
+        hr_amountin = self.amount_hr(result.initial_balance(), initial_token)
+        hr_amountout = self.amount_hr(result.final_balance(), initial_token)
         weis = ""
         if self.args.weis:
-            weis = f"({i.amountIn} weis)"
-        print(f"   \\___ attack estimation had {hr_amountin} {initial_token.get_symbol()} of input balance {weis}")
-        print(f"   \\___ estimated yield was {hr_amountout} {initial_token.get_symbol()} ({i.amountOut} weis)")
-        print(f"   \\___ path unique identifier is {i.path_id}")
-        print(f"   \\___ target BOfH contract is {i.contract}")
+            weis = f"({result.initial_balance()} weis)"
+        print(f"   \\___ attack estimation had {hr_amountin} {initial_token.symbol} of input balance {weis}")
+        print(f"   \\___ estimated yield was {hr_amountout} {initial_token.symbol} ({result.final_balance()} weis)")
+        print(f"   \\___ path unique identifier is {path.id()}")
+        print(f"   \\___ target BOfH contract is {self.args.contract_address}")
         if self.args.print_calldata:
-            print(f"         \\___ calldata is {i.calldata}")
+            print(f"         \\___ calldata is {calldata}")
         print(f"   \\___ detail of the path traversal:")
-        print(f"       \\___ initial balance is {hr_amountin} of {initial_token.get_symbol()} (token {initial_token.address})")
+        print(f"       \\___ initial balance is {hr_amountin} of {initial_token.symbol} (token {initial_token.address})")
         last_exc = None
-        for si, step in enumerate(i.steps):
-            pool = self.get_pool(address=step.pool_addr)
-            exc = self.get_exchange(pool.exchange_id)
+        for i in range(path.size()):
+            swap = path.get(i)
+            pool = swap.pool
+            exc = pool.exchange
             if exc != last_exc:
                 last_exc = exc
                 part = f"is sent to exchange {exc.name}"
             else:
                 part = f"stays on exchange {exc.name}"
-            pn = self.get_pool_name(pool)
-            token_in = self.get_token_before_step(i, si)
-            token_out = self.get_token_after_step(i, si)
-            hr_amountin = self.amount_hr(step.amountIn, token_in)
-            hr_amountout = self.amount_hr(step.amountOut, token_out)
-            t0, t1 = self.get_pool_tokens(pool)
-            hr_r0 = self.amount_hr(step.reserve0, t0)
-            hr_r1 = self.amount_hr(step.reserve1, t1)
-            print(f"       \\___ this {part} via pool {pn} ({pool.address})")
+            token_in = result.token_before_step(i)
+            token_out = result.token_after_step(i)
+            amountIn = int(str(result.balance_before_step(i)))
+            amountOut = int(str(result.balance_after_step(i)))
+            hr_amountin = self.amount_hr(amountIn, token_in)
+            hr_amountout = self.amount_hr(amountOut, token_out)
+            rin, rout = int(str(pool.getReserve(token_in))), int(str(pool.getReserve(token_out)))
+            hr_rin  = self.amount_hr(rin, token_in)
+            hr_rout = self.amount_hr(rout, token_out)
+            print(f"       \\___ this {part} via pool {pool.get_name()} ({pool.address})")
             print(f"       |     \\___ this pool stores:")
-            print(f"       |     |     \\___ reserve0 is ~= {hr_r0} {t0.get_symbol()}")
+            print(f"       |     |     \\___ reserveIn is ~= {hr_rin} {token_in.symbol}")
             if self.args.weis:
-                print(f"       |     |     |     \\___ or ~= {step.reserve0} weis of token {t0.address} ")
-            print(f"       |     |     \\___ reserve1 is ~= {hr_r1} {t1.get_symbol()}")
+                print(f"       |     |     |     \\___ or ~= {rin} weis of token {token_in.address} ")
+            print(f"       |     |     \\___ reserve1 is ~= {hr_rout} {token_out.symbol}")
             if self.args.weis:
-                print(f"       |     |           \\___ or ~= {step.reserve1} weis of token {t1.address} ")
+                print(f"       |     |           \\___ or ~= {rout} weis of token {token_out.address} ")
             weis = ""
             if self.args.weis:
-                weis = f" ({step.amountIn} weis)"
-            print(f"       |     \\___ the swaps sends in {hr_amountin}{weis} of {token_in.get_symbol()}")
+                weis = f" ({amountIn} weis)"
+            print(f"       |     \\___ the swaps sends in {hr_amountin}{weis} of {token_in.symbol}")
             weis = ""
             if self.args.weis:
-                weis = f" ({step.amountOut} weis)"
-            print(f"       |     \\___ and exchanges to {hr_amountout}{weis} of {token_out.get_symbol()}")
-            print( "       |           \\___ effective rate of change is %0.5f %s-%s" % (step.amountOut/step.amountIn, token_out.get_symbol(), token_in.get_symbol()))
-            print( "       |           \\___ this includes a %0.4f%% swap fee" % (step.feePPM/10000))
-        print(f"       \\___ final balance is {hr_amountout} of {initial_token.get_symbol()} (token {initial_token.address})")
-        gap = i.amountOut - i.amountIn
+                weis = f" ({amountOut} weis)"
+            print(f"       |     \\___ and exchanges to {hr_amountout}{weis} of {token_out.symbol}")
+            print( "       |           \\___ effective rate of change is %0.5f %s" % (amountOut/amountIn, pool.get_name()))
+            print( "       |           \\___ this includes a %0.4f%% swap fee" % ((pool.feesPPM()/1000000)*100))
+        print(f"       \\___ final balance is {hr_amountout} of {initial_token.symbol} (token {initial_token.address})")
+        gap = int(str(result.final_balance())) - int(str(result.initial_balance()))
+        yieldPercent = (result.yield_ratio()-1)*100
         if gap > 0:
             hr_g = self.amount_hr(gap, initial_token)
-            gain = f"net gain of {hr_g} {initial_token.get_symbol()}"
+            gain = f"net gain of {hr_g} {initial_token.symbol}"
             if self.args.weis:
                 gain += f" (+{gap} weis)"
         else:
             gap = -gap
             hr_g = self.amount_hr(gap, initial_token)
-            gain = f"net loss of {hr_g} {initial_token.get_symbol()}"
+            gain = f"net loss of {hr_g} {initial_token.symbol}"
             if self.args.weis:
                 gain += f" (-{gap} weis)"
         print(f"           \\___ this results in a {gain}")
-        print( "                 \\___ which is a %0.4f%% net yield" % i.yieldPercent)
+        print( "                 \\___ which is a %0.4f%% net yield" % yieldPercent)
 
     def execute(self, attack_id):
+        with self.attacks_db as curs:
+            path_id, = \
+                curs.execute("SELECT path_id "
+                             "FROM interventions WHERE id = ?", (attack_id,)).get()
+            path_id = int(path_id)
+        path = self.graph.lookup_path(path_id)
         self.describe(attack_id)
         prompt(self.args, f"Execute attack {attack_id}?")
-        i = self.get_intervention(attack_id, patch=True)
-        initial_token = self.get_initial_token(i)
-        hr_amountin = self.amount_hr(i.amountIn, initial_token)
-        hr_amountout = self.amount_hr(i.amountOut, initial_token)
-        log.info(f"prospected attack balance for attack is {hr_amountin} {initial_token.get_symbol()} ({i.amountIn} weis), "
-                 f"final balance would be {hr_amountout} {initial_token.get_symbol()}")
-        res = input(f"Override attack balance? [{i.amountIn}]")
+        initial_token = path.initial_token()
+        constraint = self.get_constraint(initial_token)
+        trade_plan = path.estimate(constraint, False)
+        amountIn = int(str(trade_plan.initial_balance()))
+        amountOut = int(str(trade_plan.final_balance()))
+        hr_amountin = self.amount_hr(amountIn, initial_token)
+        hr_amountout = self.amount_hr(amountOut, initial_token)
+        log.info(f"prospected attack balance for attack is {hr_amountin} {initial_token.symbol} ({amountIn} weis), "
+                 f"final balance would be {hr_amountout} {initial_token.symbol}")
+        res = input(f"Override attack balance? [{amountIn}]")
         if res:
-            i.amountIn = eval(res)
-            hr_amountin = self.amount_hr(i.amountIn, initial_token)
-            log.info(f"new attack balance is {hr_amountin} {initial_token.get_symbol()} ({i.amountIn} weis)")
+            amountIn = eval(res)
+            hr_amountin = self.amount_hr(amountIn, initial_token)
+            log.info(f"new attack balance is {hr_amountin} {initial_token.symbol} ({amountIn} weis)")
         log.info("performing preflight check...")
-        good, err = self.preflight_check(i)
+        good, err = self.preflight_check(trade_plan.path, amountIn, amountOut)
         if not good:
             if err == "K":
-                self.diagnose_k_error(i)
+                self.diagnose_k_error(trade_plan.path, amountIn, amountOut)
             raise ManagedAbort("preflight check failed: %s" % err)
-
         c_address = to_checksum_address(self.args.contract_address)
         w_address = to_checksum_address(self.args.wallet_address)
         if self.args.wallet_password:
@@ -421,30 +476,18 @@ class Attack(ContractCalling, CachedEntities):
             function_name="multiswap"
             , from_address=w_address
             , to_address=c_address
-            , call_args=self.pack_intervention_payload(i)
+            , call_args=self.pack_intervention_payload(trade_plan.path, amountIn, amountOut)
         )
         log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"].hex())
-        if False:
 
-            async def trace_call():
-                server = Server(self.args.web3_rpc_url)
-                await server.ws_connect()
-                res = await server.debug_traceCall({"from": w_address, "to": c_address, "data": i.calldata}, "latest")
-                with open("coso.json", "w") as fd:
-                    dump(res, fd)
-
-            from asyncio import get_event_loop
-            ioloop = get_event_loop()
-            ioloop.run_until_complete(trace_call())
-
-    def preflight_check(self, i: Intervention):
+    def preflight_check(self, path, amountIn, expectedAmountOut):
         try:
             c_address = to_checksum_address(self.args.contract_address)
             w_address = to_checksum_address(self.args.wallet_address)
             self.call(function_name="multiswap"
                       , from_address=w_address
                       , to_address=c_address
-                      , call_args=self.pack_intervention_payload(i))
+                      , call_args=self.pack_intervention_payload(path, amountIn, expectedAmountOut))
             return True, None
         except ContractLogicError as err:
             txt = str(err)
@@ -454,41 +497,44 @@ class Attack(ContractCalling, CachedEntities):
             txt = txt.strip()
             return False, txt
 
-    def diagnose_k_error(self, i: Intervention):
+    def diagnose_k_error(self, path, amountIn, expectedAmountOut):
         c_address = to_checksum_address(self.args.contract_address)
         w_address = to_checksum_address(self.args.wallet_address)
-        for j, step in enumerate(i.steps):
+        for i in range(path.size()):
             try:
                 res = self.call(function_name="multiswap"
-                          , from_address=w_address
-                          , to_address=c_address
-                          , call_args=self.pack_intervention_payload(i, stop_after_pool=j+1)
-                          )
-                print("pool[%u]: OK" % j, res)
+                                , from_address=w_address
+                                , to_address=c_address
+                                , call_args=self.pack_intervention_payload(path
+                                                                           , amountIn
+                                                                           , expectedAmountOut
+                                                                           , stop_after_pool=i) )
+                print("pool[%u]: OK" % i, res)
             except ContractLogicError as err:
                 txt = str(err)
                 txt = txt.replace("Pancake: ", "")
                 txt = txt.replace("BOFH:", "")
                 txt = txt.replace("execution reverted:", "")
                 txt = txt.strip()
-                print("pool[%u]: %s" % (j, txt))
+                print("pool[%u]: %s" % (i, txt))
 
-    def pack_intervention_payload(self, i: Intervention, stop_after_pool=None):
+    def pack_intervention_payload(self, path, amountIn, expectedAmountOut, stop_after_pool=None):
         pools = []
         fees = []
-        initialAmount = i.amountIn
-        expectedAmount = i.amountOut
 
+        initialAmount = amountIn
+        expectedAmount = expectedAmountOut
         if self.args.allow_net_losses:
             expectedAmount = 0
         if self.args.initial_amount:
             initialAmount = self.args.initial_amount
-        for step in i.steps:
-            pools.append(to_checksum_address(step.pool_addr))
+        for i in range(path.size()):
+            swap = path.get(i)
+            pools.append(str(swap.pool.address))
             if self.args.fees_ppm:
                 fees.append(self.args.fees_ppm)
             else:
-                fees.append(step.feePPM)
+                fees.append(swap.pool.feesPPM())
         return self.pack_args_payload(pools=pools
                                       , fees=fees
                                       , initialAmount=initialAmount

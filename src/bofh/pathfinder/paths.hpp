@@ -3,6 +3,7 @@
 #include <bofh/model/bofh_model_fwd.hpp>
 #include <bofh/model/bofh_types.hpp>
 #include <functional>
+#include <exception>
 #include <cstring>
 #include <iostream>
 #include <vector>
@@ -11,6 +12,12 @@ namespace bofh {
 namespace pathfinder {
 
 using OperableSwap = model::OperableSwap;
+using PathEvalutionConstraints = model::PathEvalutionConstraints;
+
+struct PathConsistencyError: std::runtime_error
+{
+    using std::runtime_error::runtime_error;
+};
 
 
 typedef enum {
@@ -18,6 +25,39 @@ typedef enum {
     PATH_4WAY = 4,
 } PathLength;
 constexpr auto MAX_PATHS = PATH_4WAY;
+
+struct Path;
+
+struct PathResult {
+    explicit PathResult(const Path *p) : path(p) {}
+    PathResult() = delete;
+    PathResult(const PathResult &) = default;
+
+    const Path   *path;
+    std::array<model::balance_t, MAX_PATHS+1> balances;
+
+    bool operator==(const PathResult &o) const noexcept
+    {
+        return id() == o.id();
+    }
+
+    std::string infos() const;
+    model::balance_t initial_balance() const;
+    model::balance_t final_balance() const;
+    model::balance_t balance_before_step(unsigned idx) const;
+    model::balance_t balance_after_step(unsigned idx) const;
+    const model::Token *initial_token() const;
+    const model::Token *final_token() const;
+    const model::Token *token_before_step(unsigned idx) const;
+    const model::Token *token_after_step(unsigned idx) const;
+    double yield_ratio() const;
+    std::size_t id() const;
+};
+typedef std::vector<PathResult> PathResultList;
+
+std::ostream& operator<< (std::ostream& stream, const Path& o);
+std::ostream& operator<< (std::ostream& stream, const PathResult& o);
+
 
 /**
  * @brief The Path struct
@@ -64,7 +104,7 @@ struct Path: std::array<const OperableSwap *, MAX_PATHS>
     typedef std::function<void(const Path *)> listener_t;
 
     std::string print_addr() const;
-    std::string print_symbols() const;
+    std::string get_symbols() const;
 
     /**
      * @brief identifier of a known path
@@ -81,33 +121,17 @@ struct Path: std::array<const OperableSwap *, MAX_PATHS>
     {
         return id() == o.id();
     }
+
+    const model::Token *initial_token() const;
+    const model::Token *final_token() const;
+    const model::Token *token_before_step(unsigned idx) const;
+    const model::Token *token_after_step(unsigned idx) const;
+
+    bool check_consistency(bool no_except=false) const;
+
+    PathResult evaluate(const PathEvalutionConstraints &
+                        , bool observe_predicted_state=false) const;
 };
-
-struct PathResult {
-    const pathfinder::Path   *path;
-    const model::Token       *start_token;
-    const model::Token       *token;
-    double                    yieldRatio;
-    std::array<model::balance_t, MAX_PATHS+1> balances;
-
-    bool operator==(const PathResult &o) const noexcept
-    {
-        return id() == o.id();
-    }
-
-    std::string infos() const;
-    model::balance_t initial_balance() const { return balances[0]; }
-    model::balance_t final_balance() const { return balances[path->size()]; }
-    model::balance_t balance_before_step(unsigned idx) const { return balances[idx]; }
-    model::balance_t balance_after_step(unsigned idx) const { return balances[idx+1]; }
-    std::size_t id() const { return path->id(); };
-
-};
-typedef std::vector<PathResult> PathResultList;
-
-std::ostream& operator<< (std::ostream& stream, const Path& o);
-std::ostream& operator<< (std::ostream& stream, const PathResult& o);
-
 
 
 } // namespace pathfinder

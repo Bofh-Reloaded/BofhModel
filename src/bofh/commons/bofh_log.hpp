@@ -24,6 +24,10 @@
 
 #include <boost/format.hpp>
 #include <boost/python/object_fwd.hpp>
+#include <csignal>
+
+
+#define trigger_breakpoint() std::raise(SIGINT)
 
 typedef enum {
     log_level_trace,
@@ -97,6 +101,23 @@ void log_emit_ll(log_level lvl, const std::string &msg);
 #define log_emit_14(lvl, msg, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12)      if(log_trigger(lvl)) log_emit_ll(lvl, boost::str(boost::format(msg) % (a1) % (a2) % (a3) % (a4) % (a5) % (a6) % (a7) % (a8) % (a9) % (a10) % (a11) % (a12)))
 #define log_emit_15(lvl, msg, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13) if(log_trigger(lvl)) log_emit_ll(lvl, boost::str(boost::format(msg) % (a1) % (a2) % (a3) % (a4) % (a5) % (a6) % (a7) % (a8) % (a9) % (a10) % (a11) % (a12) % (a13)))
 #define log_emit(...) _VFUNC(log_emit_, __NARG__(__VA_ARGS__)) (__VA_ARGS__)
+
+#define strfmt_1(msg)                                                          boost::str(boost::format(msg))
+#define strfmt_2(msg, a1)                                                      boost::str(boost::format(msg) % (a1))
+#define strfmt_3(msg, a1, a2)                                                  boost::str(boost::format(msg) % (a1) % (a2))
+#define strfmt_4(msg, a1, a2, a3)                                              boost::str(boost::format(msg) % (a1) % (a2) % (a3))
+#define strfmt_5(msg, a1, a2, a3, a4)                                          boost::str(boost::format(msg) % (a1) % (a2) % (a3) % (a4))
+#define strfmt_6(msg, a1, a2, a3, a4, a5)                                      boost::str(boost::format(msg) % (a1) % (a2) % (a3) % (a4) % (a5))
+#define strfmt_7(msg, a1, a2, a3, a4, a5, a6)                                  boost::str(boost::format(msg) % (a1) % (a2) % (a3) % (a4) % (a5) % (a6))
+#define strfmt_8(msg, a1, a2, a3, a4, a5, a6, a7)                              boost::str(boost::format(msg) % (a1) % (a2) % (a3) % (a4) % (a5) % (a6) % (a7))
+#define strfmt_9(msg, a1, a2, a3, a4, a5, a6, a7, a8)                          boost::str(boost::format(msg) % (a1) % (a2) % (a3) % (a4) % (a5) % (a6) % (a7) % (a8))
+#define strfmt_10(msg, a1, a2, a3, a4, a5, a6, a7, a8, a9)                     boost::str(boost::format(msg) % (a1) % (a2) % (a3) % (a4) % (a5) % (a6) % (a7) % (a8) % (a9))
+#define strfmt_11(msg, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10)                boost::str(boost::format(msg) % (a1) % (a2) % (a3) % (a4) % (a5) % (a6) % (a7) % (a8) % (a9) % (a10))
+#define strfmt_12(msg, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11)           boost::str(boost::format(msg) % (a1) % (a2) % (a3) % (a4) % (a5) % (a6) % (a7) % (a8) % (a9) % (a10) % (a11))
+#define strfmt_13(msg, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12)      boost::str(boost::format(msg) % (a1) % (a2) % (a3) % (a4) % (a5) % (a6) % (a7) % (a8) % (a9) % (a10) % (a11) % (a12))
+#define strfmt_14(msg, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13) boost::str(boost::format(msg) % (a1) % (a2) % (a3) % (a4) % (a5) % (a6) % (a7) % (a8) % (a9) % (a10) % (a11) % (a12) % (a13))
+#define strfmt(...) _VFUNC(strfmt_, __NARG__(__VA_ARGS__)) (__VA_ARGS__)
+
 
 // here, use these:
 #define log_trace(...)   log_emit(log_level_trace  , __VA_ARGS__)

@@ -17,8 +17,10 @@
 #include "bofh_model_fwd.hpp"
 #include "bofh_types.hpp"
 #include "bofh_entity_idx_fwd.hpp"
+#include "bofh_constraints.hpp"
 #include "bofh_amm_estimation.hpp"
 #include <boost/noncopyable.hpp>
+#include <boost/python/object.hpp>
 #include <set>
 #include <memory>
 #include <mutex>
@@ -59,13 +61,16 @@ struct Entity: boost::noncopyable
     const EntityType_e type;    ///< type identifier
     const datatag_t    tag;     ///< model consumes attach their identifiers to this member. It will be indexed. Not that it's non-const.
     const address_t    address; ///< 320bit blockchain address of the thing. also indexed.
+    TheGraph          *parent;
 
     Entity(const EntityType_e type_
            , datatag_t        tag_
-           , const address_t &address_)
+           , const address_t &address_
+           , TheGraph *parent_)
         : type(type_)
         , tag(tag_)
         , address(address_)
+        , parent(parent_)
     {}
 };
 
@@ -130,11 +135,12 @@ struct Token: Entity, Ref<Token>
 
     Token(datatag_t tag_
           , const address_t &address_
+          , TheGraph *parent_
           , const string &name_
           , const std::string &symbol_
           , unsigned int decimals_
           , bool is_stable_)
-        : Entity(TYPE_TOKEN, tag_, address_)
+        : Entity(TYPE_TOKEN, tag_, address_, parent_)
         , name(name_)
         , is_stable(is_stable_)
         , symbol(symbol_)
@@ -164,6 +170,7 @@ struct Exchange: Entity, Ref<Exchange> {
 
     Exchange(datatag_t tag_
              , const address_t &address_
+             , TheGraph *parent_
              , const string &name_);
     Exchange(const Exchange &) = delete;
 
@@ -190,7 +197,7 @@ struct Exchange: Entity, Ref<Exchange> {
  */
 struct LiquidityPool: Entity, Ref<LiquidityPool>
 {
-    struct busy_error: std::runtime_error
+    struct MissingReservesError: std::runtime_error
     {
         using std::runtime_error::runtime_error;
     };
@@ -200,23 +207,30 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
     const Exchange* exchange;
     Token* token0;
     Token* token1;
+    const OperableSwap *swaps[2];
     balance_t reserve0;
     balance_t reserve1;
+    bool reserves_set = false;
+
+    typedef std::tuple<bool, const balance_t&, const balance_t&> reserves_ref;
 
     LiquidityPool(datatag_t tag_
                   , const address_t &address_
+                  , TheGraph *parent_
                   , const Exchange* exchange_
                   , Token* token0_
                   , Token* token1_)
-      : Entity(TYPE_LP, tag_, address_),
+      : Entity(TYPE_LP, tag_, address_, parent_),
         exchange(exchange_),
         token0(token0_),
         token1(token1_)
     { }
 
-    void setReserve(const Token *token, const balance_t &reserve);
     void setReserves(const balance_t &reserve0, const balance_t &reserve1);
-    const balance_t &getReserve(const Token *token) const noexcept;
+    const balance_t getReserve(const Token *token) const noexcept;
+    reserves_ref getReserves() const noexcept;
+    std::string get_name() const;
+
 
     /**
      * @brief calculates the cost to buy a given wantedAmount of wantedToken
@@ -261,7 +275,8 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
  *
  * We want to be in that neighborhood.
  */
-struct TheGraph: boost::noncopyable, Ref<TheGraph> {
+struct TheGraph: boost::noncopyable, Ref<TheGraph>
+{
 
     //std::unique_ptr<idx::EntityIndex> entity_index;
     idx::EntityIndex *entity_index; // TODO: so, I'm purposefully leaking this
@@ -362,6 +377,7 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
     const LiquidityPool *lookup_lp(const address_t &address);
     const LiquidityPool *lookup_lp(const char *address) { return lookup_lp(address_t(address)); }
     std::vector<const OperableSwap *> lookup_swap(datatag_t token0, datatag_t token1);
+    std::vector<const OperableSwap *> lookup_swap(const Token *token0, const Token *token1);
 
     /**
      * @brief fetch a known LP node by tag id
@@ -376,94 +392,11 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
     void calculate_paths();
 
 
-    /**
-     * @brief Constraints to be used in path opportunity searches
-     *
-     * @note using a struct because they can add up quickly during development,
-     *       and I don't want to pass them as a bunch of individual parameters.
-     */
-    struct PathEvalutionConstraints {
-        /**
-         * @brief initial_token_wei_balance
-         *
-         * specifies the balance amount of start_token
-         * weis that whole path MUST be able to handle
-         * without inflicting unbalance in any of
-         * the transit LPs
-         *
-         * @default 0 (no constraint)
-         */
-        balance_t    initial_token_wei_balance = 0;
-
-        /**
-         * @brief max_lp_reserves_stress
-         *
-         * specifies the maximum reserves stress that the path
-         * can induce in each of the traversed pool. This accounts
-         * for balance inflow and outflow of each executed swap.
-         *
-         * If any of the pools in the path would receive a reserve
-         * shock > @p max_lp_reserves_stress, then the path is discarded
-         *
-         * @default 0.33 (about 1/3 of LP reserves)
-         */
-        double       max_lp_reserves_stress = 0.33;
-
-        /**
-         * @brief convenience_min_threshold
-         *
-         * specifies the minimum yield a path should
-         * provide, including fees, in order to
-         * be considered a candidate.
-         * This is intended  to exclude paths that predictably don't yield
-         * past a certain acceptable gain threshold.
-         *
-         * @default 1.0 (break-even or gain only)
-         */
-        double       convenience_min_threshold=1.0f;
-
-        /**
-         * @brief convenience_max_threshold
-         *
-         * specifies the maximum yield a path should
-         * provide, including fees, in order to
-         * be considered a candidate.
-         *
-         * This is intended to exclude the majority of paths that cross
-         * one or more LPs which are simply broken in some way, whose
-         * maths is completely unbalanced and for which
-         * a real swap operation would probably perform unpredictably.
-         *
-         * @default: 2.0 (or 200% gain, which is way over the top)
-         */
-        double       convenience_max_threshold=2.0f;
-
-        /**
-         * @brief match limit
-         *
-         * limit to the amount of matching paths
-         * (does not sort for best or worst. It just stops the output
-         * after a certain amount of random matches)
-         *
-         * @default 0 (no constraint)
-         */
-        unsigned int match_limit=0;
-
-        /**
-         * @brief routine loop limit
-         *
-         * limit to the amount of examined paths
-         * (does not sort for best or worst. It just stops the output
-         * after a certain amount of examination loops are completed)
-         *
-         * @default 0 (no constraint)
-         */
-        unsigned int limit=0;
-    };
-
-
+    using Path = pathfinder::Path;
     using PathResult = pathfinder::PathResult;
     using PathResultList = pathfinder::PathResultList;
+
+
 
     /**
      * Evaluate all known paths for convenience (debug usage. Just prints output)
@@ -480,8 +413,41 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph> {
     PathResult evaluate_path(const PathEvalutionConstraints &constraints
                              , const pathfinder::Path *path
                              , bool observe_predicted_state) const;
+    PathResult evaluate_path(const PathEvalutionConstraints &constraints, std::size_t path_hash) const;
     std::set<LiquidityPool*> lp_of_interest;
 
+    const Path *lookup_path(std::size_t id) const;
+    const Path *add_path(const LiquidityPool *p0
+                         , const LiquidityPool *p1
+                         , const LiquidityPool *p2);
+    const Path *add_path(const LiquidityPool *p0
+                         , const LiquidityPool *p1
+                         , const LiquidityPool *p2
+                         , const LiquidityPool *p3);
+    const Path *add_path(datatag_t p0
+                         , datatag_t p1
+                         , datatag_t p2);
+    const Path *add_path(datatag_t p0
+                         , datatag_t p1
+                         , datatag_t p2
+                         , datatag_t p3);
+
+
+    void set_fetch_exchange_tag_cb(boost::python::object cb);
+    void set_fetch_token_tag_cb(boost::python::object cb);
+    void set_fetch_lp_tag_cb(boost::python::object cb);
+    void set_fetch_lp_reserves_tag_cb(boost::python::object cb);
+    void set_fetch_path_tag_cb(boost::python::object cb);
+    void set_fetch_token_addr_cb(boost::python::object cb);
+    void set_fetch_lp_addr_cb(boost::python::object cb);
+
+    boost::python::object m_fetch_exchange_tag_cb;
+    boost::python::object m_fetch_token_tag_cb;
+    boost::python::object m_fetch_lp_tag_cb;
+    boost::python::object m_fetch_lp_reserves_tag_cb;
+    boost::python::object m_fetch_path_tag_cb;
+    boost::python::object m_fetch_token_addr_cb;
+    boost::python::object m_fetch_lp_addr_cb;
 };
 
 

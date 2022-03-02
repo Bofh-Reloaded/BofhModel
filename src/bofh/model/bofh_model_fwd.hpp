@@ -12,6 +12,7 @@ struct LiquidityPool;
 struct OperableSwap;
 struct TheGraph;
 struct Exchange;
+struct PathEvalutionConstraints;
 
 } // namespace model
 } // namespace bofh

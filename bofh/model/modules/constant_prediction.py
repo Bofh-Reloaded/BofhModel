@@ -183,7 +183,6 @@ class ConstantPrediction:
             tx = log["tx"]
             txindex = log["transactionIndex"]
             self.pools_vs_txhashes[pool.tag] = (tx, txindex)
-            logger.info("pool %s involved in tx %s", pool.address, tx)
             topic0 = log["topic0"]
             if topic0 == PREDICTION_LOG_TOPIC0_SYNC:
                 events += 1

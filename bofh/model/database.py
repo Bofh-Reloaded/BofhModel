@@ -313,6 +313,37 @@ class StatusScopedCursor(BasicScopedCursor):
             for i in seq:
                 yield i
 
+    def get_exchange_vals(self, id):
+        return self.execute("SELECT id, router_address, name "
+                            "FROM exchanges WHERE id = ?", (id,)).get()
+
+    def get_topic_vals(self, id):
+        return self.execute("SELECT id, address, name, symbol, decimals, is_stabletoken "
+                            "FROM tokens WHERE id = ?", (id,)).get()
+
+    def get_topic_vals_by_addr(self, addr):
+        return self.execute("SELECT id, address, name, symbol, decimals, is_stabletoken "
+                            "FROM tokens WHERE address = ?", (str(addr),)).get()
+
+    def get_lp_vals(self, id):
+        return self.execute("SELECT id, address, exchange_id, token0_id, token1_id "
+                            "FROM pools WHERE id = ?", (id,)).get()
+
+    def get_lp_vals_by_addr(self, addr):
+        return self.execute("SELECT id, address, exchange_id, token0_id, token1_id "
+                            "FROM pools WHERE address = ?", (str(addr),)).get()
+
+    def get_lp_reserves_vals(self, id):
+        return self.execute("SELECT reserve0, reserve1 "
+                            "FROM pool_reserves WHERE id = ?", (id,)).get()
+
+    def get_attack_pool_ids(self, path_hash):
+        return map(lambda x: x[0],
+                   self.execute("SELECT pool_id FROM intervention_steps "
+                                "WHERE fk_intervention IN ("
+                                "   SELECT MAX(id) FROM interventions WHERE path_id = ?) "
+                                "ORDER BY id", (str(path_hash),)).get_all())
+
     def count_tokens(self):
         return self.execute("SELECT COUNT(1) FROM tokens WHERE NOT disabled").get_int()
 

@@ -174,7 +174,7 @@ struct EntityIndex: EntityIndex_base {
  * @brief Base multi_index implementation
  */
 typedef multi_index_container<
-  OperableSwap*,
+  const OperableSwap*,
   indexed_by<
           ordered_non_unique< tag<by_src_token>,  composite_key<OperableSwap,
                  member<OperableSwap, const Token*, &OperableSwap::tokenSrc>

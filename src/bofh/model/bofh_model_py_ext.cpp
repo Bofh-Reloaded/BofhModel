@@ -3,6 +3,7 @@
 #include <boost/python.hpp>
 #include <boost/python/suite/indexing/vector_indexing_suite.hpp>
 #include <boost/python/suite/indexing/map_indexing_suite.hpp>
+#include <sstream>
 #include "longobject.h"
 #include "unicodeobject.h"
 #include "bofh_model.hpp"
@@ -105,10 +106,10 @@ struct balance_from_python_long
         PyObject* obj_ptr,
         converter::rvalue_from_python_stage1_data* data)
     {
-        // Grab pointer to memory into which to construct the new QString
+        // Grab pointer to memory into which to construct the new value
         balance_t* storage = reinterpret_cast<balance_t*>(((converter::rvalue_from_python_storage<balance_t>*)data)->storage.bytes);
 
-        // in-place construct the new QString using the character data
+        // in-place construct the new value using the character data
         // extraced from the python object
         new (storage) balance_t(PyLong_AsBalance(obj_ptr));
 
@@ -116,6 +117,33 @@ struct balance_from_python_long
         data->convertible = storage;
     }
 
+};
+
+
+struct balance_to_python_long
+{
+    static void install()
+    {
+        converter::registry::insert(
+                    &balance_to_python_long::convert_from_ptr
+                    , type_id<balance_t>());
+//        boost::python::to_python_converter<
+//            balance_t,
+//            balance_to_python_long>();
+    }
+    static PyObject* convert(balance_t const& o)
+    {
+        std::stringstream ss;
+        ss << o;
+        return boost::python::incref(PyLong_FromString(ss.str().c_str(), nullptr, 0));
+    }
+    static PyObject* convert_from_ptr(const void *p)
+    {
+        const balance_t *o = static_cast<const balance_t *>(p);
+        std::stringstream ss;
+        ss << *o;
+        return boost::python::incref(PyLong_FromString(ss.str().c_str(), nullptr, 0));
+    }
 };
 
 
@@ -187,15 +215,14 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def_readwrite("reserve1" , &LiquidityPool::reserve1)
             .def("SwapTokensForExactTokens" , &LiquidityPool::SwapTokensForExactTokens)
             .def("SwapExactTokensForTokens" , &LiquidityPool::SwapExactTokensForTokens)
-            .def("enter_predicted_state", &LiquidityPool::enter_predicted_state, dont_manage_returned_pointer())
-            .def("leave_predicted_state", &LiquidityPool::leave_predicted_state)
-            .def("get_predicted_state", &LiquidityPool::get_predicted_state, dont_manage_returned_pointer())
-            .def("set_predicted_reserves", &LiquidityPool::set_predicted_reserves)
-            .def("setReserves", &LiquidityPool::setReserves)
-//            .def("getReserve", &LiquidityPool::getReserve)
-//            .def("simpleSwap", &LiquidityPool::simpleSwap)
-//            .def("swapRatio", &LiquidityPool::swapRatio)
-//            .def("fees", &LiquidityPool::fees)
+            .def("enter_predicted_state"    , &LiquidityPool::enter_predicted_state, dont_manage_returned_pointer())
+            .def("leave_predicted_state"    , &LiquidityPool::leave_predicted_state)
+            .def("get_predicted_state"      , &LiquidityPool::get_predicted_state, dont_manage_returned_pointer())
+            .def("set_predicted_reserves"   , &LiquidityPool::set_predicted_reserves)
+            .def("setReserves"              , &LiquidityPool::setReserves)
+            .def("getReserve"               , &LiquidityPool::getReserve)
+            .def("feesPPM"                  , &LiquidityPool::feesPPM)
+            .def("get_name"                 , &LiquidityPool::get_name)
             ;
 
     register_ptr_to_python<const LiquidityPool*>();
@@ -206,25 +233,32 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def(init<Path::value_type, Path::value_type, Path::value_type, Path::value_type>())
             .def("size"                 , &Path::size)
             .def("print_addr"           , &Path::print_addr)
-            .def("print_symbols"        , &Path::print_symbols)
+            .def("get_symbols"        , &Path::get_symbols)
             .def("get"                  , &Path::get, dont_manage_returned_pointer())
             .def("id"                   , &Path::id)
+            .def("initial_token"        , &Path::initial_token    , dont_manage_returned_pointer())
+            .def("final_token"          , &Path::final_token      , dont_manage_returned_pointer())
+            .def("token_before_step"    , &Path::token_before_step, dont_manage_returned_pointer())
+            .def("token_after_step"     , &Path::token_after_step , dont_manage_returned_pointer())
+            .def("check_consistency"    , &Path::check_consistency)
+            .def("evaluate"             , &Path::evaluate)
             .def(self_ns::repr(self_ns::self))
             .def(self_ns::str(self_ns::self))
             ;
     register_ptr_to_python<const Path*>();
     register_ptr_to_python<Path*>();
 
-    class_<PathResult>("PathResult")
-            .def_readonly("yieldRatio"      , &PathResult::yieldRatio)
-            .def_readonly("token"           , &PathResult::token)
-            .def_readonly("start_token"     , &PathResult::start_token)
-            .def_readonly("path"            , &PathResult::path)
+    class_<PathResult>("PathResult", init<const Path*>())
+            .def("infos"                    , &PathResult::infos)
             .def("initial_balance"          , &PathResult::initial_balance)
             .def("final_balance"            , &PathResult::final_balance)
             .def("balance_before_step"      , &PathResult::balance_before_step)
             .def("balance_after_step"       , &PathResult::balance_after_step)
-            .def("infos"                    , &PathResult::infos)
+            .def("initial_token"            , &PathResult::initial_token    , dont_manage_returned_pointer())
+            .def("final_token"              , &PathResult::final_token      , dont_manage_returned_pointer())
+            .def("token_before_step"        , &PathResult::token_before_step, dont_manage_returned_pointer())
+            .def("token_after_step"         , &PathResult::token_after_step , dont_manage_returned_pointer())
+            .def("yield_ratio"              , &PathResult::yield_ratio)
             .def("id"                       , &PathResult::id)
             .def(self_ns::repr(self_ns::self))
             .def(self_ns::str(self_ns::self))
@@ -235,35 +269,44 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     class_<PathResultList>("PathResultList")
             .def(vector_indexing_suite<PathResultList>());
 
-    class_<TheGraph::PathEvalutionConstraints>("PathEvalutionConstraints")
-            .def_readwrite("initial_token_wei_balance"  , &TheGraph::PathEvalutionConstraints::initial_token_wei_balance)
-            .def_readwrite("max_lp_reserves_stress"     , &TheGraph::PathEvalutionConstraints::max_lp_reserves_stress)
-            .def_readwrite("convenience_min_threshold"  , &TheGraph::PathEvalutionConstraints::convenience_min_threshold)
-            .def_readwrite("convenience_max_threshold"  , &TheGraph::PathEvalutionConstraints::convenience_max_threshold)
-            .def_readwrite("limit"                      , &TheGraph::PathEvalutionConstraints::limit)
-            .def_readwrite("match_limit"                , &TheGraph::PathEvalutionConstraints::match_limit)
+    class_<PathEvalutionConstraints>("PathEvalutionConstraints")
+            .def_readwrite("initial_token_wei_balance"  , &PathEvalutionConstraints::initial_token_wei_balance)
+            .def_readwrite("max_lp_reserves_stress"     , &PathEvalutionConstraints::max_lp_reserves_stress)
+            .def_readwrite("convenience_min_threshold"  , &PathEvalutionConstraints::convenience_min_threshold)
+            .def_readwrite("convenience_max_threshold"  , &PathEvalutionConstraints::convenience_max_threshold)
+            .def_readwrite("limit"                      , &PathEvalutionConstraints::limit)
+            .def_readwrite("match_limit"                , &PathEvalutionConstraints::match_limit)
             ;
-    register_ptr_to_python<const TheGraph::PathEvalutionConstraints*>();
-    register_ptr_to_python<TheGraph::PathEvalutionConstraints*>();
+    register_ptr_to_python<const PathEvalutionConstraints*>();
+    register_ptr_to_python<PathEvalutionConstraints*>();
 
     class_<TheGraph, dont_make_copies>("TheGraph")
-            .def_readwrite("start_token" , &TheGraph::start_token)
-            .def("add_exchange"   , &TheGraph::add_exchange    , dont_manage_returned_pointer())
-            .def("add_token"      , &TheGraph::add_token       , dont_manage_returned_pointer())
-            .def("add_lp"         , &TheGraph::add_lp          , dont_manage_returned_pointer())
-            .def("lookup_exchange", &TheGraph::lookup_exchange , dont_manage_returned_pointer())
-            .def("lookup_token"   , static_cast<const Token    *(TheGraph::*)(const char *          )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
-            .def("lookup_token"   , static_cast<const Token    *(TheGraph::*)(datatag_t             )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
-            .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(const address_t &)>(&TheGraph::lookup_lp)   , dont_manage_returned_pointer())
-            .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(const char *     )>(&TheGraph::lookup_lp)   , dont_manage_returned_pointer())
-            .def("lookup_lp"      , static_cast<const LiquidityPool *(TheGraph::*)(datatag_t        )>(&TheGraph::lookup_lp)   , dont_manage_returned_pointer())
-            .def("lookup_swap"    , &TheGraph::lookup_swap)
-            .def("calculate_paths", &TheGraph::calculate_paths)
+            .def_readwrite("start_token"     , &TheGraph::start_token)
+            .def("add_exchange"              , &TheGraph::add_exchange    , dont_manage_returned_pointer())
+            .def("add_token"                 , &TheGraph::add_token       , dont_manage_returned_pointer())
+            .def("add_lp"                    , &TheGraph::add_lp          , dont_manage_returned_pointer())
+            .def("lookup_exchange"           , &TheGraph::lookup_exchange , dont_manage_returned_pointer())
+            .def("lookup_token"              , static_cast<const Token    *(TheGraph::*)(const char *          )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
+            .def("lookup_token"              , static_cast<const Token    *(TheGraph::*)(datatag_t             )>(&TheGraph::lookup_token), dont_manage_returned_pointer())
+            .def("lookup_lp"                 , static_cast<const LiquidityPool *(TheGraph::*)(const address_t &)>(&TheGraph::lookup_lp)   , dont_manage_returned_pointer())
+            .def("lookup_lp"                 , static_cast<const LiquidityPool *(TheGraph::*)(const char *     )>(&TheGraph::lookup_lp)   , dont_manage_returned_pointer())
+            .def("lookup_lp"                 , static_cast<const LiquidityPool *(TheGraph::*)(datatag_t        )>(&TheGraph::lookup_lp)   , dont_manage_returned_pointer())
+            .def("lookup_path"               , &TheGraph::lookup_path     , dont_manage_returned_pointer())
+            .def("add_path"                  , static_cast<const Path *(TheGraph::*)(const LiquidityPool *, const LiquidityPool *, const LiquidityPool *)>(&TheGraph::add_path)                          , dont_manage_returned_pointer())
+            .def("add_path"                  , static_cast<const Path *(TheGraph::*)(const LiquidityPool *, const LiquidityPool *, const LiquidityPool *, const LiquidityPool *)>(&TheGraph::add_path)   , dont_manage_returned_pointer())
+            .def("add_path"                  , static_cast<const Path *(TheGraph::*)(datatag_t, datatag_t, datatag_t)>(&TheGraph::add_path)                                                                  , dont_manage_returned_pointer())
+            .def("add_path"                  , static_cast<const Path *(TheGraph::*)(datatag_t, datatag_t, datatag_t, datatag_t)>(&TheGraph::add_path)                                                       , dont_manage_returned_pointer())
+            .def("calculate_paths"           , &TheGraph::calculate_paths           )
             .def("debug_evaluate_known_paths", &TheGraph::debug_evaluate_known_paths)
-            .def("add_lp_of_interest", &TheGraph::add_lp_of_interest)
-            .def("clear_lp_of_interest", &TheGraph::clear_lp_of_interest)
-            .def("evaluate_paths_of_interest", &TheGraph::evaluate_paths_of_interest)
-
+            .def("add_lp_of_interest"        , &TheGraph::add_lp_of_interest        )
+            .def("clear_lp_of_interest"      , &TheGraph::clear_lp_of_interest      )
+            .def("set_fetch_exchange_tag_cb"   , &TheGraph::set_fetch_exchange_tag_cb     )
+            .def("set_fetch_token_tag_cb"      , &TheGraph::set_fetch_token_tag_cb        )
+            .def("set_fetch_lp_tag_cb"         , &TheGraph::set_fetch_lp_tag_cb           )
+            .def("set_fetch_lp_reserves_tag_cb", &TheGraph::set_fetch_lp_reserves_tag_cb  )
+            .def("set_fetch_path_tag_cb"       , &TheGraph::set_fetch_path_tag_cb         )
+            .def("set_fetch_token_addr_cb"      , &TheGraph::set_fetch_token_addr_cb        )
+            .def("set_fetch_lp_addr_cb"         , &TheGraph::set_fetch_lp_addr_cb           )
             ;
 
     enum_<log_level>("log_level")

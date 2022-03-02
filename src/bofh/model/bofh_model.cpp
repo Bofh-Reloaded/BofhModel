@@ -2,9 +2,15 @@
 #include "../commons/bofh_log.hpp"
 #include "bofh_entity_idx.hpp"
 #include "../pathfinder/swaps_idx.hpp"
+#include "../pathfinder/paths.hpp"
 #include "../pathfinder/finder_3way.hpp"
+#include <boost/python/extract.hpp>
+#include <boost/python/str.hpp>
+#include <boost/python/import.hpp>
+#include <boost/stacktrace.hpp>
 #include <sstream>
 #include <exception>
+#include <assert.h>
 
 
 namespace bofh {
@@ -12,6 +18,74 @@ namespace model {
 
 using namespace idx;
 using namespace pathfinder::idx;
+
+static std::string m_parse_python_exception()
+{
+    namespace py = boost::python;
+
+    PyObject *type_ptr = NULL, *value_ptr = NULL, *traceback_ptr = NULL;
+    // Fetch the exception info from the Python C API
+    PyErr_Fetch(&type_ptr, &value_ptr, &traceback_ptr);
+
+    // Fallback error
+    std::string ret("Unfetchable Python error");
+    // If the fetch got a type pointer, parse the type into the exception string
+    if(type_ptr != NULL){
+        py::handle<> h_type(type_ptr);
+        py::str type_pstr(h_type);
+        // Extract the string from the boost::python object
+        py::extract<std::string> e_type_pstr(type_pstr);
+        // If a valid string extraction is available, use it
+        //  otherwise use fallback
+        if(e_type_pstr.check())
+            ret = e_type_pstr();
+        else
+            ret = "Unknown exception type";
+    }
+    // Do the same for the exception value (the stringification of the exception)
+    if(value_ptr != NULL){
+        py::handle<> h_val(value_ptr);
+        py::str a(h_val);
+        py::extract<std::string> returned(a);
+        if(returned.check())
+            ret +=  ": " + returned();
+        else
+            ret += std::string(": Unparseable Python error: ");
+    }
+    // Parse lines from the traceback using the Python traceback module
+    if(traceback_ptr != NULL){
+        py::handle<> h_tb(traceback_ptr);
+        // Load the traceback module and the format_tb function
+        py::object tb(py::import("traceback"));
+        py::object fmt_tb(tb.attr("format_tb"));
+        // Call format_tb to get a list of traceback strings
+        py::object tb_list(fmt_tb(h_tb));
+        // Join the traceback strings into a single string
+        py::object tb_str(py::str("\n").join(tb_list));
+        // Extract the string, check the extraction, and fallback in necessary
+        py::extract<std::string> returned(tb_str);
+        if(returned.check())
+            ret += ": " + returned();
+        else
+            ret += std::string(": Unparseable Python traceback");
+    }
+    return ret;
+}
+
+
+template<typename ResType, typename T>
+static ResType m_call_cb(const boost::python::object &cb, const T &arg)
+{
+    if (cb) try
+    {
+        return boost::python::extract<ResType>(cb(arg));
+    }
+    catch(boost::python::error_already_set const &){
+        std::cout << "Error in Python: " << m_parse_python_exception() << std::endl;
+    }
+    return nullptr;
+}
+
 
 struct bad_argument: public std::runtime_error
 {
@@ -27,34 +101,47 @@ int OperableSwap::feesPPM() const
 
 Exchange::Exchange(datatag_t tag_
                    , const address_t &address_
+                   , TheGraph *parent_
                    , const string &name_)
-    : Entity(TYPE_EXCHANGE, tag_, address_)
+    : Entity(TYPE_EXCHANGE, tag_, address_, parent_)
     , name(name_)
     , estimator(new amm::EstimatorWithProportionalFees)
 {}
 
-
-void LiquidityPool::setReserve(const Token *token, const balance_t &reserve)
+const balance_t LiquidityPool::getReserve(const Token *token) const noexcept
 {
+    auto res = getReserves();
     assert(token == token1 || token == token0);
-    if (token == token0)
-    {
-        reserve0 = reserve;
-    }
-    else if (token == token1)
-    {
-        reserve1 = reserve;
-    }
+    return token == token0 ? std::get<1>(res) : std::get<2>(res);
 }
 
-const balance_t &LiquidityPool::getReserve(const Token *token) const noexcept
+LiquidityPool::reserves_ref LiquidityPool::getReserves() const noexcept
 {
-    assert(token == token1 || token == token0);
-    return token == token0 ? reserve0 : reserve1;
+    if (!reserves_set)
+    {
+        auto &cb = parent->m_fetch_lp_reserves_tag_cb;
+        if (cb) try
+        {
+            cb(boost::python::ptr(this));
+        }
+        catch(boost::python::error_already_set const &){
+            std::cout << "Error in Python: " << m_parse_python_exception() << std::endl;
+        }
+    }
+
+    return reserves_ref{reserves_set, reserve0, reserve1};
 }
+
+
+std::string LiquidityPool::get_name() const
+{
+    return strfmt("%1%-%2%", token0->symbol, token1->symbol);
+}
+
 
 void LiquidityPool::setReserves(const balance_t &reserve0_, const balance_t &reserve1_)
 {
+    reserves_set = true;
     reserve0 = reserve0_;
     reserve1 = reserve1_;
 }
@@ -91,10 +178,9 @@ int LiquidityPool::feesPPM() const
 
 
 LiquidityPool::LPPredictedState::LPPredictedState(const LiquidityPool &o):
-    pool(new LiquidityPool(o.tag, o.address, o.exchange, o.token0, o.token1))
+    pool(new LiquidityPool(o.tag, o.address, o.parent, o.exchange, o.token0, o.token1))
 {
-    pool->reserve0 = o.reserve0;
-    pool->reserve1 = o.reserve1;
+    pool->setReserves(o.reserve0, o.reserve1);
 }
 
 const LiquidityPool *LiquidityPool::enter_predicted_state()
@@ -148,100 +234,6 @@ const LiquidityPool *LiquidityPool::get_predicted_state() const
 
 
 
-//balance_t LiquidityPool::simpleSwap(const Token *tokenIn, const balance_t &amountIn, bool updateReserves)
-//{
-//    assert(tokenIn == token1 || tokenIn == token0);
-
-//    // Let's simulate how an Uniswap's AMM compliant LP would behave. Let's take
-//    // for example an hypotetical ETH/LTC pool.
-//    //
-//    // Such pool has: reserveETH=100 and reserveLTC=200, making LTC more abundant than ETH
-//    // The k value of the pool is reserveETH*reserveLTC = 100*200 = 20000
-
-//    // A consumer comes and wants to swap balanceIn=45 of LTC into a ETH using this pool.
-//    // Respective of the pool's reserves, such operation would entail:
-//    // - adding LTC to the pool (in) --> reserveLTC+=amountIn
-//    // - subtracting ETH from the pool (out) --> reserveETH-=amountOut
-
-//    // As per Uniswap's AMM specifications, here is what is set in stone for the operation:
-//    // - by contract constraint, the pool must maintain k=200000 after the swap
-//    // - the pool will have reserveLTC+balanceIn = 200+45 = 245 LTC in its reserves
-//    // - a number of ETH must be calculated to substract in order to maintain k constant
-//    // - since k=reserveETH*reserveLTC=20000 --->
-//    //     k=(reserveETH-amountOut)*(reserveLTC+amountIn) --->
-//    //     reserveETH-amountOut = k / (reserveLTC+amountIn) --->
-//    // (written in a form compatible with uints) -->
-//    //     amountOut = reserveETH - (k / (reserveLTC+amountIn))
-
-//    balance_t reserveIn  = tokenIn == token0 ? reserve0 : reserve1;
-//    balance_t reserveOut = tokenIn == token0 ? reserve1 : reserve0;
-
-//    balance_t newReserveIn = reserveIn+amountIn;
-//    balance_t amountOutIdeal = reserveOut - k / newReserveIn;
-//    balance_t amountOutWithFees(amountOutIdeal.convert_to<double>() * (1.0f-fees()));
-
-//    if (updateReserves)
-//    {
-//        (tokenIn == token0 ? reserve0 : reserve1) = newReserveIn;
-//        (tokenIn == token0 ? reserve1 : reserve0) = reserveOut - amountOutWithFees;
-//        k = reserve0 * reserve1;
-//        fk = k.convert_to<double>();
-//        freserve0 = reserve0.convert_to<double>();
-//        freserve1 = reserve1.convert_to<double>();
-//    }
-
-//    return amountOutWithFees;
-//}
-
-//double LiquidityPool::simpleSwapF(const Token *tokenIn, double amountIn) const noexcept
-//{
-//    assert(tokenIn == token1 || tokenIn == token0);
-
-//    double reserveOut = tokenIn == token0 ? freserve0 : freserve1;
-//    double reserveIn  = tokenIn == token0 ? freserve1 : freserve0;
-
-//    return (reserveOut - (fk / (reserveIn+amountIn))) * (1.0f - fees());
-//}
-
-//double LiquidityPool::swapRatio(const Token *tokenIn) const noexcept
-//{
-//    return simpleSwapF(tokenIn, 1.0f);
-//}
-
-//double LiquidityPool::estimateSwapStress(const Token *tokenIn, const balance_t &amountInB) const
-//{
-//    assert(tokenIn == token1 || tokenIn == token0);
-
-//    double reserveOut = tokenIn == token0 ? freserve0 : freserve1;
-//    double reserveIn  = tokenIn == token0 ? freserve1 : freserve0;
-//    double amountIn = amountInB.convert_to<double>();
-
-//    // assumption:
-//    //     fk = (reserveIn+amountIn) * (reserveOut-amountOut);
-//    //
-//    // need to compute:
-//    //     inbalanceOut = amountOut / reserveOut (amountOut not known yet)
-//    //
-//    // rewriting the equation as:
-//    //     inbalanceOut =
-//    //         amountOut / reserveOut =
-//    //             (reserveOut - (k / (reserveIn+amountIn))) / reserveOut
-//    //
-//    // perk:
-//    //     amountOut isn't explicitly needed anymore
-
-//    double inbalanceIn = amountIn/reserveIn;
-//    double inbalanceOut = (reserveOut - (fk / (reserveIn+amountIn))) / reserveOut;
-
-//    // in LPs that are reasonably financed, inbalanceIn should be
-//    // roughly equal to inbalanceOut, but they tend to deviate sharply as
-//    // LP reserves run low. As a security measure, we calculate both and return
-//    // the worst one.
-
-//    return std::max(inbalanceIn, inbalanceOut);
-//}
-
-
 TheGraph::TheGraph()
     : entity_index(new EntityIndex)
     , swap_index(new SwapIndex)
@@ -269,7 +261,7 @@ const Exchange *TheGraph::add_exchange(datatag_t tag
                                        )
 {
     lock_guard_t lock_guard(m_update_mutex);
-    auto ptr = std::make_unique<Exchange>(tag, address, name);
+    auto ptr = std::make_unique<Exchange>(tag, address, this, name);
     auto item = entity_index->emplace(ptr.get());
     if (already_exists(item))
     {
@@ -281,7 +273,28 @@ const Exchange *TheGraph::add_exchange(datatag_t tag
 
 const Exchange *TheGraph::lookup_exchange(datatag_t tag)
 {
-    return entity_index->lookup<Exchange, TYPE_EXCHANGE>(tag);
+    const Exchange *res = entity_index->lookup<Exchange, TYPE_EXCHANGE>(tag);
+    auto &cb = m_fetch_exchange_tag_cb;
+
+    if (res == nullptr && cb)
+    {
+        res = m_call_cb<const Exchange *>(cb, tag);
+        assert(res == nullptr || res->tag == tag);
+    }
+
+    if (res == nullptr)
+    {
+        log_error("lookup_exchange(%1%) failed", tag);
+        static bool alerted = false;
+        if (!cb && !alerted)
+        {
+            alerted = true;
+            log_warning("TheGraph needs a way to fetch Exchange objects. "
+                        "Please post a callback with set_fetch_exchange_tag_cb()");
+        }
+    }
+
+    return res;
 }
 
 
@@ -295,6 +308,7 @@ const Token *TheGraph::add_token(datatag_t tag
     lock_guard_t lock_guard(m_update_mutex);
     auto ptr = std::make_unique<Token>(tag
                                        , address
+                                       , this
                                        , name
                                        , symbol
                                        , decimals
@@ -310,13 +324,55 @@ const Token *TheGraph::add_token(datatag_t tag
 
 const Token *TheGraph::lookup_token(const char *address)
 {
-    return entity_index->lookup<Token, TYPE_TOKEN>(address);
+    auto res = entity_index->lookup<Token, TYPE_TOKEN>(address);
+    auto &cb = m_fetch_token_addr_cb;
+
+    if (res == nullptr && cb)
+    {
+        res = m_call_cb<const Token *>(cb, address);
+        assert(res == nullptr || res->address == address_t(address));
+    }
+
+    if (res == nullptr)
+    {
+        log_error("lookup_token(%1%) failed", address);
+        static bool alerted = false;
+        if (!cb && !alerted)
+        {
+            alerted = true;
+            log_warning("TheGraph needs a way to fetch Token objects. "
+                        "Please post a callback with set_fetch_token_addr_cb()");
+        }
+    }
+
+    return res;
 }
 
 
 const Token *TheGraph::lookup_token(datatag_t tag)
 {
-    return entity_index->lookup<Token, TYPE_TOKEN>(tag);
+    auto res = entity_index->lookup<Token, TYPE_TOKEN>(tag);
+    auto &cb = m_fetch_token_tag_cb;
+
+    if (res == nullptr && cb)
+    {
+        res = m_call_cb<const Token *>(cb, tag);
+        assert(res == nullptr || res->tag == tag);
+    }
+
+    if (res == nullptr)
+    {
+        log_error("lookup_token(%1%) failed", tag);
+        static bool alerted = false;
+        if (!cb && !alerted)
+        {
+            alerted = true;
+            log_warning("TheGraph needs a way to fetch Token objects. "
+                        "Please post a callback with set_fetch_token_tag_cb()");
+        }
+    }
+
+    return res;
 }
 
 
@@ -331,6 +387,7 @@ const LiquidityPool *TheGraph::add_lp_ll(datatag_t tag
     check_not_null_arg(token1);
     auto ptr = std::make_unique<LiquidityPool>(tag
                                                , address
+                                               , this
                                                , exchange
                                                , token0
                                                , token1);
@@ -342,10 +399,13 @@ const LiquidityPool *TheGraph::add_lp_ll(datatag_t tag
         return nullptr;
     }
     auto lp = reinterpret_cast<LiquidityPool*>(ptr.release());
-
     // create OperableSwap objects
-    swap_index->emplace(OperableSwap::make(token0, token1, lp));
-    swap_index->emplace(OperableSwap::make(token1, token0, lp));
+    lp->swaps[0] = OperableSwap::make(token0, token1, lp);
+    lp->swaps[1] = OperableSwap::make(token1, token0, lp);
+    for (auto os: lp->swaps)
+    {
+        swap_index->emplace(os);
+    }
 
     return lp;
 }
@@ -369,7 +429,28 @@ const LiquidityPool *TheGraph::add_lp(datatag_t tag
 
 const LiquidityPool *TheGraph::lookup_lp(const address_t &address)
 {
-    return entity_index->lookup<LiquidityPool, TYPE_LP>(address);
+    auto res = entity_index->lookup<LiquidityPool, TYPE_LP>(address);
+    auto &cb = m_fetch_lp_tag_cb;
+
+    if (res == nullptr && cb)
+    {
+        res = m_call_cb<const LiquidityPool *>(cb, address);
+        assert(res == nullptr || res->address == address_t(address));
+    }
+
+    if (res == nullptr)
+    {
+        log_error("lookup_lp(%1%) failed", address);
+        static bool alerted = false;
+        if (!cb && !alerted)
+        {
+            alerted = true;
+            log_warning("TheGraph needs a way to fetch LiquidityPool objects. "
+                        "Please post a callback with set_fetch_lp_addr_cb()");
+        }
+    }
+
+    return res;
 }
 
 std::vector<const OperableSwap *> TheGraph::lookup_swap(datatag_t token0, datatag_t token1)
@@ -389,6 +470,15 @@ std::vector<const OperableSwap *> TheGraph::lookup_swap(datatag_t token0, datata
         return res;
     }
 
+    return lookup_swap(t0, t1);
+}
+
+std::vector<const OperableSwap *> TheGraph::lookup_swap(const Token *t0, const Token *t1)
+{
+    assert(t0 != nullptr);
+    assert(t1 != nullptr);
+    std::vector<const OperableSwap *> res;
+
     auto range = swap_index->get<idx::by_src_and_dest_token>().equal_range(boost::make_tuple(t0, t1));
     for (auto i = range.first; i != range.second; ++i)
     {
@@ -399,10 +489,30 @@ std::vector<const OperableSwap *> TheGraph::lookup_swap(datatag_t token0, datata
 }
 
 
-
 const LiquidityPool *TheGraph::lookup_lp(datatag_t tag)
 {
-    return entity_index->lookup<LiquidityPool, TYPE_LP>(tag);
+    auto res = entity_index->lookup<LiquidityPool, TYPE_LP>(tag);
+    auto &cb = m_fetch_lp_tag_cb;
+
+    if (res == nullptr && cb)
+    {
+        res = m_call_cb<const LiquidityPool *>(cb, tag);
+        assert(res == nullptr || res->tag == tag);
+    }
+
+    if (res == nullptr)
+    {
+        log_error("lookup_lp(%1%) failed", tag);
+        static bool alerted = false;
+        if (!cb && !alerted)
+        {
+            alerted = true;
+            log_warning("TheGraph needs a way to fetch LiquidityPool objects. "
+                        "Please post a callback with set_fetch_lp_tag_cb()");
+        }
+    }
+
+    return res;
 }
 
 static auto clear_existing_paths_if_any = [](TheGraph *graph)
@@ -410,14 +520,14 @@ static auto clear_existing_paths_if_any = [](TheGraph *graph)
     assert(graph);
     assert(graph->paths_index);
 
-    for (auto p: graph->paths_index->holder)
+    for (auto p: graph->paths_index->path_idx)
     {
-        assert(p != nullptr);
-        delete p;
+        assert(p.second != nullptr);
+        delete p.second;
     }
 
-    graph->paths_index->paths.clear();
-    graph->paths_index->holder.clear();
+    graph->paths_index->path_by_lp_idx.clear();
+    graph->paths_index->path_idx.clear();
 };
 
 void TheGraph::calculate_paths()
@@ -441,28 +551,21 @@ void TheGraph::calculate_paths()
 
     auto listener = [&](const Path *path)
     {
-        paths_index->holder.emplace_back(path);
-        // TODO: fix theoretical memleak in case of emplace() exception
-
         log_trace("found path: [%1%, %2%, %3%, %4%]"
                   , (*path)[0]->tokenSrc->tag
                   , (*path)[1]->tokenSrc->tag
                   , (*path)[2]->tokenSrc->tag
                   , (*path)[2]->tokenDest->tag);
-
-        for (unsigned int i = 0; i < path->size(); ++i)
-        {
-            paths_index->paths.emplace((*path)[i]->pool, path);
-        }
+        paths_index->add_path(path);
     };
 
     f.find_all_paths_3way_var(listener, start_token);
     log_info("computed: %u paths, %u entries in hot swaps index"
-             , paths_index->holder.size()
-             , paths_index->paths.size());
+             , paths_index->path_idx.size()
+             , paths_index->path_by_lp_idx.size());
 }
 
-static void check_constrants_consistency(TheGraph *g, const TheGraph::PathEvalutionConstraints &c)
+static void check_constrants_consistency(TheGraph *g, const PathEvalutionConstraints &c)
 {
     assert(g != nullptr);
     if (g->start_token == nullptr)
@@ -529,20 +632,20 @@ static std::string log_path_nodes(const pathfinder::Path *path, bool include_add
 
 
 static void print_swap_candidate(TheGraph *g
-                                 , const TheGraph::PathEvalutionConstraints &c
+                                 , const PathEvalutionConstraints &c
                                  , const pathfinder::Path *path
                                  , const TheGraph::PathResult &r)
 {
     log_debug("candidate path %s would yield %0.5f%%"
              , log_path_nodes(path).c_str()
-             , (r.yieldRatio-1)*100);
+             , (r.yield_ratio()-1)*100);
     log_trace(" \\__ initial balance of %1% %2% (%3% Weis) "
              "turned in %4% %5% (%6% Weis)"
-             , r.start_token->fromWei(r.initial_balance())
-             , r.start_token->symbol
+             , r.initial_token()->fromWei(r.initial_balance())
+             , r.initial_token()->symbol
              , r.initial_balance()
-             , r.token->fromWei(r.final_balance())
-             , r.token->symbol
+             , r.final_token()->fromWei(r.final_balance())
+             , r.final_token()->symbol
              , r.final_balance()
              );
 };
@@ -564,15 +667,15 @@ TheGraph::PathResultList TheGraph::debug_evaluate_known_paths(const PathEvalutio
 
     unsigned int ctr = 0;
     unsigned int matches = 0;
-    for (auto path: paths_index->holder) try
+    for (auto i: paths_index->path_idx) try
     {
         // @note: loop body is a try block
 
-        auto r = evaluate_path(c, path, false);
-        assert(r.token != nullptr);
+        auto r = evaluate_path(c, i.second, false);
+        assert(r.final_token() != nullptr);
 
         matches++;
-        print_swap_candidate(this, c, path, r);
+        print_swap_candidate(this, c, i.second, r);
         res.emplace_back(r);
 
         if (c.match_limit > 0 && matches >= c.match_limit)
@@ -609,78 +712,18 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
                                              , const pathfinder::Path *path
                                              , bool observe_predicted_state) const
 {
-    balance_t    balance = c.initial_token_wei_balance;
-    const Token *token   = start_token;
-    TheGraph::PathResult result {path, path->get(0)->tokenSrc, token};
+    assert(path != nullptr);
+    auto result = path->evaluate(c);
+    auto token = path->initial_token();
 
-    log_trace("evaluating path %1%", log_path_nodes(path, true));
-
-    // walk the swap path:
-    result.balances[0] = balance;
-    for (unsigned int i = 0; i < path->size(); ++i)
-    {
-        // excuse the following assert soup. They are only intended to
-        // early catch of inconsistencies in debug builds. None is functional.
-        auto swap = path->get(i);
-        assert(swap != nullptr);
-        auto pool = swap->pool;
-        if (observe_predicted_state)
-        {
-            auto ppool = pool->get_predicted_state();
-            if (ppool)
-            {
-                pool = ppool;
-            }
-        }
-
-        assert(pool != nullptr);
-
-        assert(token == swap->tokenSrc);
-        assert(token == pool->token0 || token == pool->token1);
-
-        log_trace(" \\__ current token is %1%", token->symbol);
-
-        log_trace(" \\__ current balance is %1% (%2% Weis)"
-                  , token->fromWei(balance)
-                  , balance);
-        try {
-            balance = pool->SwapExactTokensForTokens(token, balance);
-        } catch (...)
-        {
-            log_trace(" \\__ ERROR: unable to actually run the calculation. bailing out of this one");
-            // TODO: mark the pool bad
-            throw ConstraintViolation();
-        };
-
-        token = swap->tokenDest;
-        assert(token != nullptr);
-        result.balances[i+1] = balance;
-        log_trace(" \\__ after the swap, the new balance would be %1% %2% (%3% Weis)"
-                  , token->fromWei(balance)
-                  , token->symbol
-                  , balance);
-    }
-    if (token != start_token)
-    {
-        log_error("BROKEN SWAP: it's not circular. start_token is %1%,"
-                  " terminal token is %2%"
-                  , start_token->symbol
-                  , token->symbol);
-
-        throw ConstraintViolation();
-    }
-
-
-    result.yieldRatio = result.final_balance().convert_to<double>()
-                        / result.initial_balance().convert_to<double>();
-    if (result.yieldRatio > 1.0f)
+    if (result.yield_ratio() > 1.0f)
     {
         log_trace(" \\__ after the final swap, the realized gain would be %0.5f%%"
-                  , (result.yieldRatio-1)*100.0);
+                  , (result.yield_ratio()-1)*100.0);
     }
     else {
         log_trace(" \\__ after the final swap, the realized loss would be %0.5f%%"
-                  , (1-result.yieldRatio)*100.0);
+                  , (1-result.yield_ratio())*100.0);
     }
     if (result.final_balance() > result.initial_balance())
     {
@@ -701,13 +744,13 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
                   , gap
                   , token->symbol);
     }
-    if (c.convenience_min_threshold >= 0 && result.yieldRatio < c.convenience_min_threshold)
+    if (c.convenience_min_threshold >= 0 && result.yield_ratio() < c.convenience_min_threshold)
     {
         log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
         throw ConstraintViolation();
     }
 
-    if (c.convenience_max_threshold >= 0 && result.yieldRatio > c.convenience_max_threshold)
+    if (c.convenience_max_threshold >= 0 && result.yield_ratio() > c.convenience_max_threshold)
     {
         log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
         throw ConstraintViolation();
@@ -727,13 +770,13 @@ TheGraph::PathResultList TheGraph::evaluate_paths_of_interest(const PathEvalutio
 
     for (auto pool: lp_of_interest)
     {
-        auto r = paths_index->paths.equal_range(pool);
+        auto r = paths_index->path_by_lp_idx.equal_range(pool);
         for (auto i = r.first; i != r.second; i++)
         {
             try {
                 const pathfinder::Path *path = i->second;
                 auto r = evaluate_path(c, path, observe_predicted_state);
-                assert(r.token != nullptr);
+                assert(r.final_token() != nullptr);
                 print_swap_candidate(this, c, path, r);
                 res.emplace_back(r);
             } catch (ConstraintViolation&) { continue; }
@@ -742,6 +785,149 @@ TheGraph::PathResultList TheGraph::evaluate_paths_of_interest(const PathEvalutio
     }
     return res;
 }
+
+
+const TheGraph::Path *TheGraph::lookup_path(std::size_t id) const
+{
+    auto i = paths_index->path_idx.find(id);
+    auto &cb = m_fetch_path_tag_cb;
+
+    if (i != paths_index->path_idx.end())
+    {
+        return i->second;
+    }
+
+    const Path *res = nullptr;
+
+    if (cb)
+    {
+        res = m_call_cb<const Path *>(cb, id);
+    }
+
+    if (res && res->id() != id)
+    {
+        log_error("fetch'd path object does not match requested hash_id "
+                  "(expected %1%, obtained %2%)"
+                  , id, res->id());
+        return nullptr;
+    }
+
+    if (res == nullptr)
+    {
+        log_error("lookup_path(%1%) failed", id);
+        static bool alerted = false;
+        if (!cb && !alerted)
+        {
+            alerted = true;
+            log_warning("TheGraph needs a way to fetch Path objects. "
+                        "Please post a callback with set_fetch_path_tag_cb()");
+        }
+    }
+
+    return res;
+}
+
+
+static inline const OperableSwap *m_get_swap(const Token *enter_token
+                                             , const LiquidityPool *pool)
+{
+    if (enter_token == pool->token0) return pool->swaps[0];
+    assert(enter_token == pool->token1);
+    return pool->swaps[1];
+}
+
+static const Token *m_find_start_token(const LiquidityPool *pools[])
+{
+    if (pools[0]->token0 == pools[1]->token0 ||
+        pools[0]->token0 == pools[1]->token1)
+    {
+        return pools[0]->token1;
+    }
+    assert(pools[0]->token1 == pools[1]->token0 ||
+           pools[0]->token1 == pools[1]->token1);
+    return pools[0]->token0;
+}
+
+
+static const TheGraph::Path *m_add_path_ll(TheGraph *g
+                                     , const LiquidityPool *pools[]
+                                     , std::size_t size
+                                     )
+{
+    using namespace pathfinder;
+    const Token *token = m_find_start_token(pools);
+
+    const OperableSwap *oswaps[MAX_PATHS];
+    for (unsigned i = 0; i < size; ++i)
+    {
+        const OperableSwap *os;
+        oswaps[i] = os = m_get_swap(token, pools[i]);
+        assert(os->tokenSrc == token);
+        token = os->tokenDest;
+    }
+    std::unique_ptr<TheGraph::Path> res;
+    switch (PathLength(size))
+    {
+    case PATH_3WAY: res.reset(new TheGraph::Path(oswaps[0], oswaps[1], oswaps[2])); break;
+    case PATH_4WAY: res.reset(new TheGraph::Path(oswaps[0], oswaps[1], oswaps[2], oswaps[3])); break;
+    }
+    assert(res != nullptr);
+
+    auto &idx = g->paths_index->path_idx;
+    auto found = idx.find(res->m_hash);
+    if (found != idx.end())
+    {
+        return found->second;
+    }
+
+    return g->paths_index->add_path(res.release());
+}
+
+const TheGraph::Path *TheGraph::add_path(const LiquidityPool *p0
+                                         , const LiquidityPool *p1
+                                         , const LiquidityPool *p2)
+{
+    const LiquidityPool *pools[] = {p0, p1, p2};
+    return m_add_path_ll(this, pools, sizeof(pools)/sizeof(pools[0]));
+}
+const TheGraph::Path *TheGraph::add_path(const LiquidityPool *p0
+                                         , const LiquidityPool *p1
+                                         , const LiquidityPool *p2
+                                         , const LiquidityPool *p3)
+{
+    const LiquidityPool *pools[] = {p0, p1, p2, p3};
+    return m_add_path_ll(this, pools, sizeof(pools)/sizeof(pools[0]));
+}
+
+const TheGraph::Path *TheGraph::add_path(datatag_t p0
+                               , datatag_t p1
+                               , datatag_t p2)
+{
+    return add_path(lookup_lp(p0)
+                    , lookup_lp(p1)
+                    , lookup_lp(p2)
+                    );
+}
+const TheGraph::Path *TheGraph::add_path(datatag_t p0
+                               , datatag_t p1
+                               , datatag_t p2
+                               , datatag_t p3)
+{
+    return add_path(lookup_lp(p0)
+                    , lookup_lp(p1)
+                    , lookup_lp(p2)
+                    , lookup_lp(p3)
+                    );
+}
+
+void TheGraph::set_fetch_exchange_tag_cb(boost::python::object cb)    { m_fetch_exchange_tag_cb = cb; }
+void TheGraph::set_fetch_token_tag_cb(boost::python::object cb)       { m_fetch_token_tag_cb = cb; }
+void TheGraph::set_fetch_lp_tag_cb(boost::python::object cb)          { m_fetch_lp_tag_cb = cb; }
+void TheGraph::set_fetch_lp_reserves_tag_cb(boost::python::object cb) { m_fetch_lp_reserves_tag_cb = cb; }
+void TheGraph::set_fetch_path_tag_cb(boost::python::object cb)        { m_fetch_path_tag_cb = cb; }
+void TheGraph::set_fetch_token_addr_cb(boost::python::object cb)      { m_fetch_token_addr_cb = cb; }
+void TheGraph::set_fetch_lp_addr_cb(boost::python::object cb)         { m_fetch_lp_addr_cb = cb; }
+
 
 
 } // namespace model

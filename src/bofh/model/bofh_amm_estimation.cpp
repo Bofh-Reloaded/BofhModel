@@ -26,7 +26,7 @@ namespace amm {
 static balance_t getAmountOut(const balance_t &amountIn
                               , const balance_t &reserveIn
                               , const balance_t &reserveOut
-                              , unsigned int feePPK = 0)
+                              , unsigned int feePPM = 0)
 {
     if (amountIn <= 0)
     {
@@ -37,9 +37,9 @@ static balance_t getAmountOut(const balance_t &amountIn
         throw swap_error("INSUFFICIENT_LIQUIDITY");
     }
 
-    const auto amountInWithFee = amountIn * (1000-feePPK);
+    const auto amountInWithFee = amountIn * (1000000-feePPM);
     const auto numerator = amountInWithFee * reserveOut;
-    const auto denominator = (reserveIn * 1000) + amountInWithFee;
+    const auto denominator = (reserveIn * 1000000) + amountInWithFee;
     return numerator / denominator;
 }
 
@@ -49,7 +49,7 @@ static balance_t getAmountOut(const balance_t &amountIn
 static balance_t getAmountIn(const balance_t &amountOut
                               , const balance_t &reserveIn
                               , const balance_t &reserveOut
-                              , unsigned int feePPK = 0)
+                              , unsigned int feePPM = 0)
 {
     if (amountOut <= 0)
     {
@@ -60,52 +60,10 @@ static balance_t getAmountIn(const balance_t &amountOut
         throw swap_error("INSUFFICIENT_LIQUIDITY");
     }
 
-    const auto numerator = reserveIn * amountOut * 1000;
-    const auto denominator = (reserveOut - amountOut) * (1000-feePPK);
+    const auto numerator = reserveIn * amountOut * 1000000;
+    const auto denominator = (reserveOut - amountOut) * (1000000-feePPM);
     return (numerator / denominator) + 1;
 }
-
-
-#if 0
-// OBSOLETE CODE: uses floating point. It's not ideal (sometimes error >0.1%)
-typedef balance_t DeltaX; // amount of token sold
-typedef balance_t DeltaY; // amount of token bought
-typedef double Beta;  // output token reserve impact
-typedef double Alpha; // input token reserve impact
-typedef double Gamma; // fees
-
-
-static auto the_other_token = [](auto pool, auto token)
-{
-    assert(token == pool->token0 || token == pool->token1);
-    return token == pool->token0 ? pool->token1 : pool->token0;
-};
-
-static DeltaX calcRequiredToBuy(const LiquidityPool *pool
-                                , const Token *wantedToken
-                                , const DeltaY &dy
-                                , Gamma gamma = 1.0f)
-{
-    const auto soldToken = the_other_token(pool, wantedToken);
-    const auto x = pool->getReserve(wantedToken).convert_to<double>();
-    const auto y = pool->getReserve(soldToken);
-    const Beta beta = dy.convert_to<double>() / y.convert_to<double>();
-    return DeltaX(((beta * x) / gamma) / (1 - beta));
-}
-
-
-static DeltaY calcBoughtPerAmountSold(const LiquidityPool *pool
-                                      , const Token *soldToken
-                                      , const DeltaX &dx
-                                      , Gamma gamma = 1.0f)
-{
-    const auto wantedToken = the_other_token(pool, soldToken);
-    const auto x = pool->getReserve(soldToken);
-    const auto y = pool->getReserve(wantedToken).convert_to<double>();
-    const Alpha alpha = (dx.convert_to<Alpha>() / x.convert_to<Alpha>()) * gamma;
-    return DeltaY((alpha * y) / (1 - alpha));
-}
-#endif
 
 
 balance_t IdealEstimator::SwapTokensForExactTokens(const LiquidityPool *pool, const Token *boughtToken, const balance_t &boughtAmount) const
@@ -124,17 +82,37 @@ balance_t IdealEstimator::SwapExactTokensForTokens(const LiquidityPool *pool, co
 
 balance_t EstimatorWithProportionalFees::SwapTokensForExactTokens(const LiquidityPool *pool, const Token *boughtToken, const balance_t &boughtAmount) const
 {
+    auto res = pool->getReserves();
+    bool available = std::get<0>(res);
+    auto &reserve0 = std::get<1>(res);
+    auto &reserve1 = std::get<2>(res);
+    if (! available)
+    {
+        throw LiquidityPool::MissingReservesError(strfmt("missing pool reserves: id=%1%, %2%"
+                                                         , pool->tag
+                                                         , pool->address));
+    }
     return getAmountIn(boughtAmount
-                       , pool->getReserve(boughtToken == pool->token0 ? pool->token1 : pool->token0)
-                       , pool->getReserve(boughtToken)
+                       , boughtToken == pool->token0 ? reserve1 : reserve0
+                       , boughtToken == pool->token0 ? reserve0 : reserve1
                        , feesPPM());
 }
 
 balance_t EstimatorWithProportionalFees::SwapExactTokensForTokens(const LiquidityPool *pool, const Token *soldToken, const balance_t &soldAmount) const
 {
+    auto res = pool->getReserves();
+    bool available = std::get<0>(res);
+    auto &reserve0 = std::get<1>(res);
+    auto &reserve1 = std::get<2>(res);
+    if (! available)
+    {
+        throw LiquidityPool::MissingReservesError(strfmt("missing pool reserves: id=%1%, %2%"
+                                                         , pool->tag
+                                                         , pool->address));
+    }
     return getAmountOut(soldAmount
-                        , pool->getReserve(soldToken)
-                        , pool->getReserve(soldToken == pool->token0 ? pool->token1 : pool->token0)
+                        , soldToken == pool->token0 ? reserve0 : reserve1
+                        , soldToken == pool->token0 ? reserve1 : reserve0
                         , feesPPM());
 }
 

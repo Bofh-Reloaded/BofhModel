@@ -6,6 +6,8 @@ src/bofh/model/bofh_entity_idx.hpp
 src/bofh/model/bofh_entity_idx.cpp
 src/bofh/model/bofh_types.cpp
 src/bofh/model/bofh_types.hpp
+src/bofh/model/bofh_constraints.hpp
+src/bofh/model/bofh_constraints.cpp
 src/bofh/model/bofh_model.cpp
 src/bofh/model/bofh_model.hpp
 src/bofh/model/bofh_model_fwd.hpp
