@@ -11,6 +11,7 @@ class EntitiesPreloader:
 
     def load(self):
         log = Loggers.preloader
+        self.pool_addresses = set()
         self.preload_exchanges()
         self.preload_tokens()
         start_token = self.graph.lookup_token(self.args.start_token_address)
@@ -63,7 +64,7 @@ class EntitiesPreloader:
                                                    " eta={eta_hr} at {rate:.0f} items/s) ..."
                                               , on_same_line=True)
             with print_progress:
-
+                bad_pools = list()
                 for id, address, exchange_id, token0_id, token1_id in curs.list_pools():
                     print_progress()
                     # t0 = self.graph.lookup_token(token0_id)
@@ -78,11 +79,14 @@ class EntitiesPreloader:
                     # pool = self.graph.add_lp(id, address, exchange, t0, t1)
                     pool = self.graph.add_lp(id, address, exchange_id, token0_id, token1_id)
                     if pool is None:
-                        log.debug("integrity error: pool address is already not of a pool: id=%r, %r", id, address)
+                        log.debug("integrity error: unable to load: id=%r, %r", id, address)
+                        bad_pools.append([id])
                         continue
-                    self.pools.add(pool)
+                    self.pool_addresses.add(address)
+                if bad_pools:
+                    curs.mark_pool_disabled_many(bad_pools)
 
-            log.info("POOLS set loaded, size is %r items", print_progress.ctr)
+            log.info("POOLS set loaded, size is %r items", print_progress.ctr)#self.graph.pools_count())
             missing = print_progress.tot - print_progress.ctr
             if missing > 0:
                 log.info("  \\__ %r over pool the total %r were not loaded due to "
@@ -126,10 +130,9 @@ class EntitiesPreloader:
                 ok = 0
                 disc = 0
                 for poolid, reserve0, reserve1 in curs.execute("SELECT id, reserve0, reserve1 FROM pool_reserves").get_all():
-                    pool = self.graph.lookup_lp(poolid)
                     print_progress()
+                    pool = self.graph.lookup_lp(poolid, False)
                     if not pool:
-                        log.debug("pool id not found: %r", poolid)
                         disc += 1
                         continue
                     pool.setReserves(reserve0, reserve1)
@@ -141,7 +144,7 @@ class EntitiesPreloader:
     def download_reserves_snapshot_from_web3(self):
         log = Loggers.preloader
         log.info("downloading a new reserves snapshot from Web3")
-        print_progress = progress_printer(self.pools_ctr
+        print_progress = progress_printer(self.graph.pools_count()
                                           , "fetching pool reserves {percent}% ({count} of {tot}"
                                             " eta={eta_hr} at {rate:.0f} items/s) ..."
                                           , on_same_line=True)
@@ -151,7 +154,7 @@ class EntitiesPreloader:
                      "\n\t- on Web3 servant at %s"
                      "\n\t- using %d workers"
                      "\n\t- each with a %d preload queue"
-                      , self.pools_ctr
+                      , self.graph.pools_count()
                       , self.args.web3_rpc_url
                       , self.args.max_workers
                       , self.args.chunk_size
@@ -160,8 +163,8 @@ class EntitiesPreloader:
                 try:
                     currentBlockNr = self.w3.eth.block_number
                     def pool_addresses_iter():
-                        for p in self.pools:
-                            yield str(p.address)
+                        for addr in self.pool_addresses:
+                            yield addr
                     for pool_addr, reserve0, reserve1, blockTimestampLast in executor.map(getReserves, pool_addresses_iter(), chunksize=self.args.chunk_size):
                         try:
                             if reserve0 is None or reserve1 is None:

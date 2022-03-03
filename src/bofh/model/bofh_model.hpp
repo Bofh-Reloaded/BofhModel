@@ -307,6 +307,9 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
      * @warning This takes O(n) time
      */
     const Exchange *lookup_exchange(datatag_t tag);
+    const Exchange *lookup_exchange(datatag_t tag, bool fetch_if_missing);
+    bool has_exchange(datatag_t tag) const;
+    bool has_exchange(const char *address) const;
 
 
     /**
@@ -363,11 +366,16 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
      * @return reference to the token node, if existing. Otherwise nullptr
      */
     const Token *lookup_token(const char *address);
+    const Token *lookup_token(const char *address, bool fetch_if_missing);
     /**
      * @brief fetch a known token node by tag id
      * @warning This takes O(n) time
      */
     const Token *lookup_token(datatag_t tag);
+    const Token *lookup_token(datatag_t tag, bool fetch_if_missing);
+    bool has_token(datatag_t tag) const;
+    bool has_token(const char *address) const;
+
 
     /**
      * @brief fetch a known LP edge
@@ -375,15 +383,20 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
      * @return reference to the LP, if existing. Otherwise nullptr
      */
     const LiquidityPool *lookup_lp(const address_t &address);
-    const LiquidityPool *lookup_lp(const char *address) { return lookup_lp(address_t(address)); }
-    std::vector<const OperableSwap *> lookup_swap(datatag_t token0, datatag_t token1);
-    std::vector<const OperableSwap *> lookup_swap(const Token *token0, const Token *token1);
-
+    const LiquidityPool *lookup_lp(const address_t &address, bool fetch_if_missing);
+    const LiquidityPool *lookup_lp(const char *address);
+    const LiquidityPool *lookup_lp(const char *address, bool fetch_if_missing);
     /**
      * @brief fetch a known LP node by tag id
      * @warning This takes O(n) time
      */
     const LiquidityPool *lookup_lp(datatag_t tag);
+    const LiquidityPool *lookup_lp(datatag_t tag, bool fetch_if_missing);
+    bool has_lp(datatag_t tag) const;
+    bool has_lp(const char *address) const;
+    std::vector<const OperableSwap *> lookup_swap(datatag_t token0, datatag_t token1);
+    std::vector<const OperableSwap *> lookup_swap(const Token *token0, const Token *token1);
+
 
     /**
      * initially called (once) to pre-compute all useful swap paths,
@@ -417,6 +430,7 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
     std::set<LiquidityPool*> lp_of_interest;
 
     const Path *lookup_path(std::size_t id) const;
+    const Path *lookup_path(std::size_t id, bool fetch_if_missing) const;
     const Path *add_path(const LiquidityPool *p0
                          , const LiquidityPool *p1
                          , const LiquidityPool *p2);
@@ -448,6 +462,14 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
     boost::python::object m_fetch_path_tag_cb;
     boost::python::object m_fetch_token_addr_cb;
     boost::python::object m_fetch_lp_addr_cb;
+
+    std::size_t exchanges_ctr = 0;
+    std::size_t tokens_ctr = 0;
+    std::size_t pools_ctr = 0;
+    std::size_t exchanges_count() const;
+    std::size_t tokens_count() const;
+    std::size_t pools_count() const;
+    std::size_t paths_count() const;
 };
 
 

@@ -83,7 +83,7 @@ class SyncEventRealtimeTracker:
         self.checkpoint(events=self.events, new_pools=self.new_pools)
         self.events += 1
         with self.status_lock:
-            pool = self.graph.lookup_lp(address)
+            pool = self.graph.lookup_lp(address, False)
             if pool:
                 log.debug("use Sync event to update reserves of pool %r: %s(%s-%s), reserve=%r, reserve1=%r"
                               , pool.address

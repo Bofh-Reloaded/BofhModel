@@ -10,8 +10,7 @@ from bofh.utils.deploy_contract import deploy_contract
 from web3.exceptions import ContractLogicError
 
 from bofh.utils.solidity import get_abi, find_contract, add_solidity_search_path
-from bofh.utils.web3 import Web3Connector, JSONRPCConnector
-
+from bofh.utils.web3 import Web3Connector
 
 log = Loggers.contract_activation
 
@@ -19,26 +18,21 @@ add_solidity_search_path(join(dirname(dirname(dirname(dirname(realpath(__file__)
 
 
 class ContractCalling:
+    def __init__(self, args):
+        self.__args = args
+
     @property
     def w3(self):
         try:
             return self.__w3
         except AttributeError:
-            self.__w3 = Web3Connector.get_connection(self.args.web3_rpc_url)
+            self.__w3 = Web3Connector.get_connection(self.__args.web3_rpc_url)
         return self.__w3
-
-    @property
-    def jsonrpc(self):
-        try:
-            return self.__jsonrpc
-        except AttributeError:
-            self.__jsonrpc = JSONRPCConnector.get_connection(self.args.web3_rpc_url)
-        return self.__jsonrpc
 
     @lru_cache
     def get_contract(self, address=None, abi=None):
         if address is None:
-            address = self.args.contract_address
+            address = self.__args.contract_address
         if abi is None:
             abi = "BofhContract"
         return self.w3.eth.contract(address=address, abi=get_abi(abi))
@@ -114,17 +108,16 @@ class ContractCalling:
         callable = getattr(contract_instance.functions, function_name)
         return callable(*call_args).call(d_from)
 
-
     def _call(self, name, *args, address=None, abi=None):
         contract_instance = self.get_contract(address=address, abi=abi)
         callable = getattr(contract_instance.functions, name)
-        return callable(*args).call({"from": self.args.wallet_address})
+        return callable(*args).call({"from": self.__args.wallet_address})
 
     def _transact(self, name, *args, address=None, abi=None):
         contract_instance = self.get_contract(address=address, abi=abi)
-        self.w3.geth.personal.unlock_account(self.args.wallet_address, self.args.wallet_password, 120)
+        self.w3.geth.personal.unlock_account(self.__args.wallet_address, self.__args.wallet_password, 120)
         callable = getattr(contract_instance.functions, name)
-        return callable(*args).transact({"from": self.args.wallet_address})
+        return callable(*args).transact({"from": self.__args.wallet_address})
 
     def add_funding(self, amount, to_address, token):
         if hasattr(token, "address"):
@@ -136,30 +129,30 @@ class ContractCalling:
         self.transact("adoptAllowance")
 
     def repossess_funding(self):
-        caddr = self.args.contract_address
+        caddr = self.__args.contract_address
         log.info("calling withdrawFunds() on contract at %s", caddr)
-        self.transact("approve", caddr, 0, address=self.args.start_token_address, abi="IGenericFungibleToken")
+        self.transact("approve", caddr, 0, address=self.__args.start_token_address, abi="IGenericFungibleToken")
         self.transact("withdrawFunds")
 
     def kill_contract(self):
-        caddr = self.args.contract_address
-        self.transact("approve", caddr, 0, address=self.args.start_token_address, abi="IGenericFungibleToken")
+        caddr = self.__args.contract_address
+        self.transact("approve", caddr, 0, address=self.__args.start_token_address, abi="IGenericFungibleToken")
         log.info("calling kill() on contract at %s", caddr)
         self.transact("kill")
 
     def contract_balance(self):
-        return self.getTokenBalance(self.args.contract_address, self.args.start_token_address)
+        return self.getTokenBalance(self.__args.contract_address, self.__args.start_token_address)
 
     def redeploy_contract(self, fpath="BofhContract.sol"):
         try:
             self.kill_contract()
         except ContractLogicError:
-            log.exception("unable to kill existing contract at %s", self.args.contract_address)
+            log.exception("unable to kill existing contract at %s", self.__args.contract_address)
         fpath = find_contract(fpath)
         log.info("attempting to deploy contract from %s", fpath)
-        self.args.contract_address = deploy_contract(self.args.wallet_address, self.args.wallet_password, fpath,
-                                                self.args.start_token_address)
-        log.info("new contract address is established at %s", self.args.contract_address)
+        self.__args.contract_address = deploy_contract(self.__args.wallet_address, self.__args.wallet_password, fpath,
+                                                self.__args.start_token_address)
+        log.info("new contract address is established at %s", self.__args.contract_address)
 
     @staticmethod
     def pack_args_payload(pools: list, fees: list, initialAmount: int, expectedAmount: int, stop_after_pool=None):
@@ -177,3 +170,4 @@ class ContractCalling:
         args.append(amounts_word)
 
         return [args]
+

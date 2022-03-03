@@ -7,6 +7,7 @@ from coloredlogs import ColoredFormatter
 from eth_utils import to_checksum_address
 from web3.exceptions import ContractLogicError
 
+from bofh.model.modules.graph import TheGraph
 from bofh.model.modules.constant_prediction import ConstantPrediction
 from bofh.model.modules.constants import START_TOKEN, ENV_SWAP_CONTRACT_ADDRESS, ENV_BOFH_WALLET_ADDRESS, \
     ENV_BOFH_WALLET_PASSWD
@@ -24,7 +25,7 @@ from dataclasses import dataclass, fields, MISSING
 from logging import basicConfig, Filter, getLogger
 
 from bofh.model.database import ModelDB, StatusScopedCursor, Intervention
-from bofh_model_ext import TheGraph, log_level, log_register_sink, log_set_level, PathEvalutionConstraints
+from bofh_model_ext import log_level, log_register_sink, log_set_level, PathEvalutionConstraints
 
 # add bofh.contract/contracts to get_abi() seach path:
 
@@ -190,10 +191,14 @@ Options:
 log = Loggers.runner
 
 
-class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker, ContractCalling):
+class Runner(TheGraph
+             , EntitiesPreloader
+             , ConstantPrediction
+             , SyncEventRealtimeTracker
+             , ContractCalling
+             ):
 
     def __init__(self, args: Args):
-        self.graph = TheGraph()
         self.args = args
         self.db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=self.args.status_db_dsn)
         self.db.open_and_priming()
@@ -201,7 +206,8 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker, Co
         self.reports_db.open_and_priming()
         self.attacks_db = ModelDB(schema_name="attacks", cursor_factory=StatusScopedCursor, db_dsn=self.args.attacks_db_dsn)
         self.attacks_db.open_and_priming()
-        self.pools = set()
+        ContractCalling.__init__(self, args=self.args)
+        TheGraph.__init__(self, self.db, attacks_db=self.attacks_db)
         self.ioloop = get_event_loop()
         self.args.sync_db(self.db)
         self.consistency_checks()
@@ -235,31 +241,25 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker, Co
     def check_all_paths(self):
         constraint = self.get_constraints()
         contract = self.get_contract()
-
-        intervention = Intervention(origin="sweep")
-        intervention.blockNr = self.w3.eth.block_number
-        intervention.contract = str(to_checksum_address(self.args.contract_address))
-        intervention.amountIn = int(str(constraint.initial_token_wei_balance))
         matches = self.graph.debug_evaluate_known_paths(constraint)
-        interventions = 0
-        for i, match in enumerate(matches):
+        for i, attack_plan in enumerate(matches):
             if constraint.match_limit and i >= constraint.match_limit:
                 return
-            new_entry = self.post_intervention_to_db(intervention, match, contract)
-            if new_entry:
-                interventions += 1
-            else:
+            new_entry = self.post_intervention_to_db(attack_plan=attack_plan
+                                                     , contract=contract
+                                                     , origin="sweep")
+            if not new_entry:
                 log.debug("match having path id %r is already in mute_cache. "
-                          "activation inhibited", match.id())
+                          "activation inhibited", attack_plan.id())
 
-    def preflight_check(self, i: Intervention):
+    def preflight_check(self, path, amountIn, expectedAmountOut):
         try:
             c_address = to_checksum_address(self.args.contract_address)
             w_address = to_checksum_address(self.args.wallet_address)
             self.call(function_name="multiswap"
                       , from_address=w_address
                       , to_address=c_address
-                      , call_args=self.pack_intervention_payload(i))
+                      , call_args=self.path_attack_payload(path, amountIn, expectedAmountOut))
             return True, None
         except ContractLogicError as err:
             txt = str(err)
@@ -269,7 +269,24 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker, Co
             txt = txt.strip()
             return False, txt
 
-    def pack_intervention_payload(self, i: Intervention, initialAmount=None, expectedAmount=None):
+    # def preflight_check(self, i: Intervention):
+    #     try:
+    #         c_address = to_checksum_address(self.args.contract_address)
+    #         w_address = to_checksum_address(self.args.wallet_address)
+    #         self.call(function_name="multiswap"
+    #                   , from_address=w_address
+    #                   , to_address=c_address
+    #                   , call_args=self.path_attack_payload(i))
+    #         return True, None
+    #     except ContractLogicError as err:
+    #         txt = str(err)
+    #         txt = txt.replace("Pancake: ", "")
+    #         txt = txt.replace("BOFH:", "")
+    #         txt = txt.replace("execution reverted:", "")
+    #         txt = txt.strip()
+    #         return False, txt
+
+    def path_attack_payload(self, i: Intervention, initialAmount=None, expectedAmount=None):
         pools = []
         fees = []
         if initialAmount is None:
@@ -305,24 +322,19 @@ class Runner(EntitiesPreloader, ConstantPrediction, SyncEventRealtimeTracker, Co
                     function_name="multiswap"
                     , from_address=w_address
                     , to_address=c_address
-                    , call_args=self.pack_intervention_payload(i, expectedAmount=0)
+                    , call_args=self.path_attack_payload(i, expectedAmount=0)
                 )
                 log.info("attempting attack %r... (gas=%r)", id, gas)
                 receipt = self.transact_and_wait(
                     function_name="multiswap"
                     , from_address=w_address
                     , to_address=c_address
-                    , call_args=self.pack_intervention_payload(i)
+                    , call_args=self.path_attack_payload(i)
                     , gas=gas
                 )
                 log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"].hex())
         except:
             log.exception("Error during execution of attack %r", id)
-
-
-    @property
-    def pools_ctr(self):
-        return len(self.pools)
 
     def get_constraints(self):
         constraint = PathEvalutionConstraints()

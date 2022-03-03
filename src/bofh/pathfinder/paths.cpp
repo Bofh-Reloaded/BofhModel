@@ -129,40 +129,46 @@ bool Path::check_consistency(bool no_except) const
 PathResult Path::evaluate(const PathEvalutionConstraints &c
                           , bool observe_predicted_state) const
 {
-    check_consistency(false);
-
-    if (c.initial_token_wei_balance <= 0)
-    {
-        throw ContraintConsistencyError("initial_token_wei_balance must be > 0");
-    }
-
     TheGraph::PathResult result(this);
-
-    // walk the swap path:
-    result.balances[0] = c.initial_token_wei_balance;
-    for (unsigned int i = 0; i < size(); ++i)
+    try
     {
-        // excuse the following assert soup. They are only intended to
-        // early catch of inconsistencies in debug builds. None is functional.
-        auto swap = get(i);
-        assert(swap != nullptr);
-        auto pool = swap->pool;
-        if (observe_predicted_state)
+        check_consistency(false);
+
+        if (c.initial_token_wei_balance <= 0)
         {
-            auto ppool = pool->get_predicted_state();
-            if (ppool)
-            {
-                pool = ppool;
-            }
+            throw ContraintConsistencyError("initial_token_wei_balance must be > 0");
         }
-        assert(pool != nullptr);
-        assert(swap->tokenSrc != nullptr);
 
-        result.balances[i+1] =
-                pool->SwapExactTokensForTokens(swap->tokenSrc
-                                               , result.balances[i]);
+
+        // walk the swap path:
+        result.balances[0] = c.initial_token_wei_balance;
+        for (unsigned int i = 0; i < size(); ++i)
+        {
+            // excuse the following assert soup. They are only intended to
+            // early catch of inconsistencies in debug builds. None is functional.
+            auto swap = get(i);
+            assert(swap != nullptr);
+            auto pool = swap->pool;
+            if (observe_predicted_state)
+            {
+                auto ppool = pool->get_predicted_state();
+                if (ppool)
+                {
+                    pool = ppool;
+                }
+            }
+            assert(pool != nullptr);
+            assert(swap->tokenSrc != nullptr);
+
+            result.balances[i+1] =
+                    pool->SwapExactTokensForTokens(swap->tokenSrc
+                                                   , result.balances[i]);
+        }
     }
-
+    catch (...)
+    {
+        result.failed = true;
+    }
     return result;
 }
 
@@ -194,6 +200,29 @@ double PathResult::yield_ratio() const
 }
 
 std::size_t PathResult::id() const { return path->id(); }
+
+const balance_t PathResult::pool_reserve(unsigned idx, unsigned reserve0_or_1) const
+{
+    if (pool_reserves == nullptr)
+    {
+        return 0;
+    }
+    const auto k = (idx*2) + (reserve0_or_1 ? 1 : 0);
+    assert(k < pool_reserves->size());
+    return (*pool_reserves)[k];
+}
+
+void PathResult::set_pool_reserve(unsigned idx, unsigned reserve0_or_1, const model::balance_t &val)
+{
+    if (pool_reserves == nullptr)
+    {
+        pool_reserves.reset(new pool_reserves_t);
+        pool_reserves->resize(path->size()*2);
+    }
+    const auto k = (idx*2) + (reserve0_or_1 ? 1 : 0);
+    assert(k < pool_reserves->size());
+    (*pool_reserves)[k] = val;
+}
 
 std::ostream& operator<< (std::ostream& stream, const Path& o)
 {

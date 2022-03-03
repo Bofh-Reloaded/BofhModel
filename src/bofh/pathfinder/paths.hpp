@@ -41,6 +41,7 @@ struct PathResult {
         return id() == o.id();
     }
 
+    bool failed = false;
     std::string infos() const;
     model::balance_t initial_balance() const;
     model::balance_t final_balance() const;
@@ -52,6 +53,14 @@ struct PathResult {
     const model::Token *token_after_step(unsigned idx) const;
     double yield_ratio() const;
     std::size_t id() const;
+
+    // some reference data can be externally attached here:
+    model::datatag_t tag;
+    std::string calldata;
+    typedef std::vector<model::balance_t> pool_reserves_t;
+    std::shared_ptr<pool_reserves_t> pool_reserves;
+    const model::balance_t pool_reserve(unsigned idx, unsigned reserve0_or_1) const;
+    void set_pool_reserve(unsigned idx, unsigned reserve0_or_1, const model::balance_t &val);
 };
 typedef std::vector<PathResult> PathResultList;
 

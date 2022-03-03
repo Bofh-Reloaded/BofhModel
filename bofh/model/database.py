@@ -9,6 +9,7 @@ from glob import glob
 from os.path import realpath, dirname, join, basename
 
 from bofh.model.modules.loggers import Loggers
+from bofh.utils.web3 import bsc_blocknr2ts
 
 schemadir = join(dirname(realpath(__file__)), "schema")
 
@@ -347,14 +348,16 @@ class StatusScopedCursor(BasicScopedCursor):
     def count_tokens(self):
         return self.execute("SELECT COUNT(1) FROM tokens WHERE NOT disabled").get_int()
 
-    def list_tokens(self):
-        assert self.conn is not None
-        self.execute("SELECT id"
+    TOKENS_SELECT_TUPLE = ("SELECT id"
                      ", address"
                      ", SUBSTR(COALESCE(name, ''), 0, ?)"
                      ", SUBSTR(COALESCE(symbol, ''), 0, ?)"
                      ", decimals"
-                     ", is_stabletoken FROM tokens WHERE NOT disabled", (self.MAX_TOKEN_NAME_LEN, self.MAX_TOKEN_SYMBOL_LEN))
+                     ", is_stabletoken FROM tokens ")
+
+    def list_tokens(self):
+        assert self.conn is not None
+        self.execute(self.TOKENS_SELECT_TUPLE + "WHERE NOT disabled", (self.MAX_TOKEN_NAME_LEN, self.MAX_TOKEN_SYMBOL_LEN))
             # note: using COALESCE() bc many tokens simply does not have, nor will have, a known name
             # The token name is just used for logging purposes though. It's just a human label attribute.
         while True:
@@ -369,13 +372,18 @@ class StatusScopedCursor(BasicScopedCursor):
 
     def list_pools(self):
         assert self.conn is not None
-        self.execute("SELECT id,address,exchange_id,token0_id,token1_id FROM pools")
+        self.execute("SELECT id,address,exchange_id,token0_id,token1_id FROM pools WHERE NOT disabled")
         while True:
             seq = self.curs.fetchmany()
             if not seq:
                 return
             for i in seq:
                 yield i
+
+    def mark_pool_disabled_many(self, tags, value=True):
+        self.executemany("UPDATE pools SET disabled = %u WHERE id = ?" % (value and 1 or 0),tags)
+
+
 
     RAISE_ERROR=object()
 
@@ -421,11 +429,12 @@ class StatusScopedCursor(BasicScopedCursor):
     def update_pool_reserves_batch(self, tuples):
         self.executemany("UPDATE pool_reserves SET reserve0 = ?, reserve1 = ? WHERE id = ?", tuples)
 
-    def intervention_is_in_mute_cache(self, o: Intervention, cache_deadline, max_size=0):
+    def intervention_is_in_mute_cache(self, attack_plan, cache_deadline, max_size=0):
         ts_of_largest_collection = None
-        path_id = str(o.path_id)
+        path_id = str(attack_plan.id())
         if max_size:
-            ts_of_largest_collection_sql = "SELECT origin_ts FROM interventions ORDER BY origin_ts DESC LIMIT 1 OFFSET %u" % max_size
+            ts_of_largest_collection_sql = "SELECT origin_ts FROM interventions " \
+                                           "ORDER BY origin_ts DESC LIMIT 1 OFFSET %u" % max_size
             try:
                 ts_of_largest_collection = self.execute(ts_of_largest_collection_sql).get_int()
             except:
@@ -437,20 +446,75 @@ class StatusScopedCursor(BasicScopedCursor):
             args = (path_id, int(time() - cache_deadline))
         return self.execute(check_colliding_sql, args).get_int() > 0
 
-    def add_intervention(self, o: Intervention):
-        path_id = str(o.path_id)
-        args = (o.origin, o.blockNr, o.origin_tx, int(o.origin_ts), str(o.amountIn), str(o.amountOut), float(o.amountOut/o.amountIn), path_id, len(o.steps), o.contract, o.calldata)
-        self.execute("INSERT INTO interventions (origin, blockNr, origin_tx, origin_ts, amountIn, amountOut, yieldRatio, path_id, path_size, contract, calldata) "
+    def add_intervention(self, attack_plan, origin=None, blockNr=None, origin_tx=None, contract_address=None):
+        path_id = str(attack_plan.id())
+        if not origin:
+            origin = ""
+        if not blockNr:
+            blockNr = 0
+            origin_ts = time()
+        else:
+            origin_ts = bsc_blocknr2ts(blockNr)
+        if not origin_tx:
+            origin_tx = ""
+        if not contract_address:
+            contract_address = ""
+        args = (origin
+                , blockNr
+                , origin_tx
+                , int(origin_ts)
+                , str(attack_plan.initial_balance())
+                , str(attack_plan.final_balance())
+                , attack_plan.yield_ratio()
+                , path_id
+                , attack_plan.path.size()
+                , contract_address
+                , attack_plan.calldata)
+        self.execute("INSERT INTO interventions ("
+                     "origin"
+                     ", blockNr"
+                     ", origin_tx"
+                     ", origin_ts"
+                     ", amountIn"
+                     ", amountOut"
+                     ", yieldRatio"
+                     ", path_id"
+                     ", path_size"
+                     ", contract"
+                     ", calldata) "
                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", args)
-        o.tag = self.execute("SELECT last_insert_rowid()").get_int()
+        attack_plan.tag = self.execute("SELECT last_insert_rowid()").get_int()
+
         def steps_iter():
-            for step in o.steps:
-                yield (o.tag, step.pool_id, norm_address(step.pool_addr), str(step.reserve0), str(step.reserve1),
-                       norm_address(step.tokenIn_addr), norm_address(step.tokenOut_addr), step.tokenIn_id, step.tokenOut_id,
-                       str(step.amountIn), step.feePPM, str(step.amountOut))
-        self.executemany("INSERT INTO intervention_steps (fk_intervention, pool_id, pool_addr, reserve0, reserve1, "
-                         "tokenIn_addr, tokenOut_addr, tokenIn_id, tokenOut_id, amountIn, feePPM, amountOut) "
-                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", steps_iter())
+            for i in range(attack_plan.path.size()):
+                swap = attack_plan.path.get(i)
+                yield (attack_plan.tag
+                       , swap.pool.tag
+                       , str(swap.pool.address)
+                       , str(attack_plan.pool_reserve(i, 0))
+                       , str(attack_plan.pool_reserve(i, 1))
+                       , str(swap.tokenSrc.address)
+                       , str(swap.tokenDest.address)
+                       , swap.tokenSrc.tag
+                       , swap.tokenDest.tag
+                       , str(attack_plan.balance_before_step(i))
+                       , swap.pool.feesPPM()
+                       , str(attack_plan.balance_after_step(i))
+                       )
+        self.executemany("INSERT INTO intervention_steps ("
+                         "fk_intervention"
+                         ", pool_id"
+                         ", pool_addr"
+                         ", reserve0"
+                         ", reserve1"
+                         ", tokenIn_addr"
+                         ", tokenOut_addr"
+                         ", tokenIn_id"
+                         ", tokenOut_id"
+                         ", amountIn"
+                         ", feePPM"
+                         ", amountOut"
+                         ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", steps_iter())
 
     def add_unknown_pool(self, address):
         try:

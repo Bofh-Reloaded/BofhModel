@@ -267,35 +267,76 @@ const Exchange *TheGraph::add_exchange(datatag_t tag
     {
         return nullptr;
     }
+    exchanges_ctr++;
     return reinterpret_cast<Exchange*>(ptr.release());
 }
 
 
 const Exchange *TheGraph::lookup_exchange(datatag_t tag)
 {
+    return lookup_exchange(tag, true);
+}
+
+const Exchange *TheGraph::lookup_exchange(datatag_t tag, bool fetch_if_missing)
+{
     const Exchange *res = entity_index->lookup<Exchange, TYPE_EXCHANGE>(tag);
-    auto &cb = m_fetch_exchange_tag_cb;
 
-    if (res == nullptr && cb)
+    if (fetch_if_missing)
     {
-        res = m_call_cb<const Exchange *>(cb, tag);
-        assert(res == nullptr || res->tag == tag);
-    }
+        auto &cb = m_fetch_exchange_tag_cb;
 
-    if (res == nullptr)
-    {
-        log_error("lookup_exchange(%1%) failed", tag);
-        static bool alerted = false;
-        if (!cb && !alerted)
+        if (res == nullptr && cb)
         {
-            alerted = true;
-            log_warning("TheGraph needs a way to fetch Exchange objects. "
-                        "Please post a callback with set_fetch_exchange_tag_cb()");
+            res = m_call_cb<const Exchange *>(cb, tag);
+            assert(res == nullptr || res->tag == tag);
+        }
+
+        if (res == nullptr)
+        {
+            log_error("lookup_exchange(%1%) failed", tag);
+            static bool alerted = false;
+            if (!cb && !alerted)
+            {
+                alerted = true;
+                log_warning("TheGraph needs a way to fetch Exchange objects. "
+                            "Please post a callback with set_fetch_exchange_tag_cb()");
+            }
         }
     }
 
     return res;
 }
+
+bool TheGraph::has_exchange(datatag_t tag) const
+{
+    return entity_index->lookup<Exchange, TYPE_EXCHANGE>(tag) != nullptr;
+}
+
+bool TheGraph::has_exchange(const char *address) const
+{
+    return entity_index->lookup<Exchange, TYPE_EXCHANGE>(address) != nullptr;
+}
+
+bool TheGraph::has_token(datatag_t tag) const
+{
+    return entity_index->lookup<Token, TYPE_TOKEN>(tag) != nullptr;
+}
+
+bool TheGraph::has_token(const char *address) const
+{
+    return entity_index->lookup<Token, TYPE_TOKEN>(address) != nullptr;
+}
+
+bool TheGraph::has_lp(datatag_t tag) const
+{
+    return entity_index->lookup<LiquidityPool, TYPE_LP>(tag) != nullptr;
+}
+
+bool TheGraph::has_lp(const char *address) const
+{
+    return entity_index->lookup<LiquidityPool, TYPE_LP>(address) != nullptr;
+}
+
 
 
 const Token *TheGraph::add_token(datatag_t tag
@@ -318,30 +359,40 @@ const Token *TheGraph::add_token(datatag_t tag
     {
         return nullptr;
     }
+    tokens_ctr++;
     return reinterpret_cast<Token*>(ptr.release());
 }
 
 
 const Token *TheGraph::lookup_token(const char *address)
 {
+    return lookup_token(address, true);
+}
+
+const Token *TheGraph::lookup_token(const char *address, bool fetch_if_missing)
+{
     auto res = entity_index->lookup<Token, TYPE_TOKEN>(address);
-    auto &cb = m_fetch_token_addr_cb;
 
-    if (res == nullptr && cb)
+    if (fetch_if_missing)
     {
-        res = m_call_cb<const Token *>(cb, address);
-        assert(res == nullptr || res->address == address_t(address));
-    }
+        auto &cb = m_fetch_token_addr_cb;
 
-    if (res == nullptr)
-    {
-        log_error("lookup_token(%1%) failed", address);
-        static bool alerted = false;
-        if (!cb && !alerted)
+        if (res == nullptr && cb)
         {
-            alerted = true;
-            log_warning("TheGraph needs a way to fetch Token objects. "
-                        "Please post a callback with set_fetch_token_addr_cb()");
+            res = m_call_cb<const Token *>(cb, address);
+            assert(res == nullptr || res->address == address_t(address));
+        }
+
+        if (res == nullptr)
+        {
+            log_error("lookup_token(%1%) failed", address);
+            static bool alerted = false;
+            if (!cb && !alerted)
+            {
+                alerted = true;
+                log_warning("TheGraph needs a way to fetch Token objects. "
+                            "Please post a callback with set_fetch_token_addr_cb()");
+            }
         }
     }
 
@@ -351,24 +402,33 @@ const Token *TheGraph::lookup_token(const char *address)
 
 const Token *TheGraph::lookup_token(datatag_t tag)
 {
+    return lookup_token(tag, true);
+}
+
+const Token *TheGraph::lookup_token(datatag_t tag, bool fetch_if_missing)
+{
     auto res = entity_index->lookup<Token, TYPE_TOKEN>(tag);
-    auto &cb = m_fetch_token_tag_cb;
 
-    if (res == nullptr && cb)
+    if (fetch_if_missing)
     {
-        res = m_call_cb<const Token *>(cb, tag);
-        assert(res == nullptr || res->tag == tag);
-    }
+        auto &cb = m_fetch_token_tag_cb;
 
-    if (res == nullptr)
-    {
-        log_error("lookup_token(%1%) failed", tag);
-        static bool alerted = false;
-        if (!cb && !alerted)
+        if (res == nullptr && cb)
         {
-            alerted = true;
-            log_warning("TheGraph needs a way to fetch Token objects. "
-                        "Please post a callback with set_fetch_token_tag_cb()");
+            res = m_call_cb<const Token *>(cb, tag);
+            assert(res == nullptr || res->tag == tag);
+        }
+
+        if (res == nullptr)
+        {
+            log_error("lookup_token(%1%) failed", tag);
+            static bool alerted = false;
+            if (!cb && !alerted)
+            {
+                alerted = true;
+                log_warning("TheGraph needs a way to fetch Token objects. "
+                            "Please post a callback with set_fetch_token_tag_cb()");
+            }
         }
     }
 
@@ -399,6 +459,7 @@ const LiquidityPool *TheGraph::add_lp_ll(datatag_t tag
         return nullptr;
     }
     auto lp = reinterpret_cast<LiquidityPool*>(ptr.release());
+    pools_ctr++;
     // create OperableSwap objects
     lp->swaps[0] = OperableSwap::make(token0, token1, lp);
     lp->swaps[1] = OperableSwap::make(token1, token0, lp);
@@ -429,24 +490,43 @@ const LiquidityPool *TheGraph::add_lp(datatag_t tag
 
 const LiquidityPool *TheGraph::lookup_lp(const address_t &address)
 {
+    return lookup_lp(address, true);
+}
+
+const LiquidityPool *TheGraph::lookup_lp(const char *address)
+{
+    return lookup_lp(address, true);
+}
+
+const LiquidityPool *TheGraph::lookup_lp(const char *address, bool fetch_if_missing)
+{
+    return lookup_lp(address_t(address), fetch_if_missing);
+}
+
+const LiquidityPool *TheGraph::lookup_lp(const address_t &address, bool fetch_if_missing)
+{
     auto res = entity_index->lookup<LiquidityPool, TYPE_LP>(address);
-    auto &cb = m_fetch_lp_tag_cb;
 
-    if (res == nullptr && cb)
+    if (fetch_if_missing)
     {
-        res = m_call_cb<const LiquidityPool *>(cb, address);
-        assert(res == nullptr || res->address == address_t(address));
-    }
+        auto &cb = m_fetch_lp_addr_cb;
 
-    if (res == nullptr)
-    {
-        log_error("lookup_lp(%1%) failed", address);
-        static bool alerted = false;
-        if (!cb && !alerted)
+        if (res == nullptr && cb)
         {
-            alerted = true;
-            log_warning("TheGraph needs a way to fetch LiquidityPool objects. "
-                        "Please post a callback with set_fetch_lp_addr_cb()");
+            res = m_call_cb<const LiquidityPool *>(cb, boost::python::ptr(&address));
+            assert(res == nullptr || res->address == address_t(address));
+        }
+
+        if (res == nullptr)
+        {
+            log_error("lookup_lp(%1%) failed", address);
+            static bool alerted = false;
+            if (!cb && !alerted)
+            {
+                alerted = true;
+                log_warning("TheGraph needs a way to fetch LiquidityPool objects. "
+                            "Please post a callback with set_fetch_lp_addr_cb()");
+            }
         }
     }
 
@@ -491,24 +571,33 @@ std::vector<const OperableSwap *> TheGraph::lookup_swap(const Token *t0, const T
 
 const LiquidityPool *TheGraph::lookup_lp(datatag_t tag)
 {
+    return lookup_lp(tag, true);
+}
+
+const LiquidityPool *TheGraph::lookup_lp(datatag_t tag, bool fetch_if_missing)
+{
     auto res = entity_index->lookup<LiquidityPool, TYPE_LP>(tag);
-    auto &cb = m_fetch_lp_tag_cb;
 
-    if (res == nullptr && cb)
+    if (fetch_if_missing)
     {
-        res = m_call_cb<const LiquidityPool *>(cb, tag);
-        assert(res == nullptr || res->tag == tag);
-    }
+        auto &cb = m_fetch_lp_tag_cb;
 
-    if (res == nullptr)
-    {
-        log_error("lookup_lp(%1%) failed", tag);
-        static bool alerted = false;
-        if (!cb && !alerted)
+        if (res == nullptr && cb)
         {
-            alerted = true;
-            log_warning("TheGraph needs a way to fetch LiquidityPool objects. "
-                        "Please post a callback with set_fetch_lp_tag_cb()");
+            res = m_call_cb<const LiquidityPool *>(cb, tag);
+            assert(res == nullptr || res->tag == tag);
+        }
+
+        if (res == nullptr)
+        {
+            log_error("lookup_lp(%1%) failed", tag);
+            static bool alerted = false;
+            if (!cb && !alerted)
+            {
+                alerted = true;
+                log_warning("TheGraph needs a way to fetch LiquidityPool objects. "
+                            "Please post a callback with set_fetch_lp_tag_cb()");
+            }
         }
     }
 
@@ -672,6 +761,7 @@ TheGraph::PathResultList TheGraph::debug_evaluate_known_paths(const PathEvalutio
         // @note: loop body is a try block
 
         auto r = evaluate_path(c, i.second, false);
+        if (r.failed) continue;
         assert(r.final_token() != nullptr);
 
         matches++;
@@ -714,49 +804,53 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
 {
     assert(path != nullptr);
     auto result = path->evaluate(c);
-    auto token = path->initial_token();
 
-    if (result.yield_ratio() > 1.0f)
+    if (!result.failed)
     {
-        log_trace(" \\__ after the final swap, the realized gain would be %0.5f%%"
-                  , (result.yield_ratio()-1)*100.0);
-    }
-    else {
-        log_trace(" \\__ after the final swap, the realized loss would be %0.5f%%"
-                  , (1-result.yield_ratio())*100.0);
-    }
-    if (result.final_balance() > result.initial_balance())
-    {
-        auto gap = result.final_balance() - result.initial_balance();
-        log_trace(" \\__ the operation gains %0.5f %s"
-                  , token->fromWei(gap)
-                  , token->symbol.c_str());
-        log_trace("         \\__ or +%1% %2% Weis :)"
-                  , gap
-                  , token->symbol);
-    }
-    else {
-        auto gap = result.initial_balance() - result.final_balance();
-        log_trace(" \\__ the operation loses %0.5f %s"
-                  , token->fromWei(gap)
-                  , token->symbol.c_str());
-        log_trace("         \\__ or -%1% %2% Weis :("
-                  , gap
-                  , token->symbol);
-    }
-    if (c.convenience_min_threshold >= 0 && result.yield_ratio() < c.convenience_min_threshold)
-    {
-        log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
-        throw ConstraintViolation();
-    }
+        auto token = path->initial_token();
 
-    if (c.convenience_max_threshold >= 0 && result.yield_ratio() > c.convenience_max_threshold)
-    {
-        log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
-        throw ConstraintViolation();
-    }
+        if (result.yield_ratio() > 1.0f)
+        {
+            log_trace(" \\__ after the final swap, the realized gain would be %0.5f%%"
+                      , (result.yield_ratio()-1)*100.0);
+        }
+        else {
+            log_trace(" \\__ after the final swap, the realized loss would be %0.5f%%"
+                      , (1-result.yield_ratio())*100.0);
+        }
+        if (result.final_balance() > result.initial_balance())
+        {
+            auto gap = result.final_balance() - result.initial_balance();
+            log_trace(" \\__ the operation gains %0.5f %s"
+                      , token->fromWei(gap)
+                      , token->symbol.c_str());
+            log_trace("         \\__ or +%1% %2% Weis :)"
+                      , gap
+                      , token->symbol);
+        }
+        else {
+            auto gap = result.initial_balance() - result.final_balance();
+            log_trace(" \\__ the operation loses %0.5f %s"
+                      , token->fromWei(gap)
+                      , token->symbol.c_str());
+            log_trace("         \\__ or -%1% %2% Weis :("
+                      , gap
+                      , token->symbol);
+        }
+        if (c.convenience_min_threshold >= 0 && result.yield_ratio() < c.convenience_min_threshold)
+        {
+            log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
+            throw ConstraintViolation();
+        }
 
-    assert(token == start_token);
+        if (c.convenience_max_threshold >= 0 && result.yield_ratio() > c.convenience_max_threshold)
+        {
+            log_trace(" \\__ final yield is under the set convenience_min_threshold (path skipped)");
+            throw ConstraintViolation();
+        }
+
+        assert(token == start_token);
+    }
 
     return result;
 }
@@ -776,6 +870,7 @@ TheGraph::PathResultList TheGraph::evaluate_paths_of_interest(const PathEvalutio
             try {
                 const pathfinder::Path *path = i->second;
                 auto r = evaluate_path(c, path, observe_predicted_state);
+                if (r.failed) continue;
                 assert(r.final_token() != nullptr);
                 print_swap_candidate(this, c, path, r);
                 res.emplace_back(r);
@@ -789,8 +884,12 @@ TheGraph::PathResultList TheGraph::evaluate_paths_of_interest(const PathEvalutio
 
 const TheGraph::Path *TheGraph::lookup_path(std::size_t id) const
 {
+    return lookup_path(id, true);
+}
+
+const TheGraph::Path *TheGraph::lookup_path(std::size_t id, bool fetch_if_missing) const
+{
     auto i = paths_index->path_idx.find(id);
-    auto &cb = m_fetch_path_tag_cb;
 
     if (i != paths_index->path_idx.end())
     {
@@ -799,28 +898,35 @@ const TheGraph::Path *TheGraph::lookup_path(std::size_t id) const
 
     const Path *res = nullptr;
 
-    if (cb)
+    if (fetch_if_missing)
     {
-        res = m_call_cb<const Path *>(cb, id);
-    }
+        auto &cb = m_fetch_path_tag_cb;
 
-    if (res && res->id() != id)
-    {
-        log_error("fetch'd path object does not match requested hash_id "
-                  "(expected %1%, obtained %2%)"
-                  , id, res->id());
-        return nullptr;
-    }
 
-    if (res == nullptr)
-    {
-        log_error("lookup_path(%1%) failed", id);
-        static bool alerted = false;
-        if (!cb && !alerted)
+
+        if (cb)
         {
-            alerted = true;
-            log_warning("TheGraph needs a way to fetch Path objects. "
-                        "Please post a callback with set_fetch_path_tag_cb()");
+            res = m_call_cb<const Path *>(cb, id);
+        }
+
+        if (res && res->id() != id)
+        {
+            log_error("fetch'd path object does not match requested hash_id "
+                      "(expected %1%, obtained %2%)"
+                      , id, res->id());
+            return nullptr;
+        }
+
+        if (res == nullptr)
+        {
+            log_error("lookup_path(%1%) failed", id);
+            static bool alerted = false;
+            if (!cb && !alerted)
+            {
+                alerted = true;
+                log_warning("TheGraph needs a way to fetch Path objects. "
+                            "Please post a callback with set_fetch_path_tag_cb()");
+            }
         }
     }
 
@@ -927,6 +1033,26 @@ void TheGraph::set_fetch_lp_reserves_tag_cb(boost::python::object cb) { m_fetch_
 void TheGraph::set_fetch_path_tag_cb(boost::python::object cb)        { m_fetch_path_tag_cb = cb; }
 void TheGraph::set_fetch_token_addr_cb(boost::python::object cb)      { m_fetch_token_addr_cb = cb; }
 void TheGraph::set_fetch_lp_addr_cb(boost::python::object cb)         { m_fetch_lp_addr_cb = cb; }
+
+std::size_t TheGraph::exchanges_count() const
+{
+    return exchanges_ctr;
+}
+
+std::size_t TheGraph::tokens_count() const
+{
+    return tokens_ctr;
+}
+
+std::size_t TheGraph::pools_count() const
+{
+    return pools_ctr;
+}
+
+std::size_t TheGraph::paths_count() const
+{
+    return paths_index->path_idx.size();
+}
 
 
 

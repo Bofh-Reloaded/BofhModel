@@ -4,7 +4,6 @@ from eth_utils import to_checksum_address
 from tabulate import tabulate
 from web3.exceptions import ContractLogicError
 
-from bofh.model.modules.cached_entities import CachedEntities
 from bofh.model.modules.constants import  ENV_SWAP_CONTRACT_ADDRESS, ENV_BOFH_WALLET_ADDRESS, \
     ENV_BOFH_WALLET_PASSWD
 from bofh.model.modules.contract_calls import ContractCalling
@@ -15,7 +14,7 @@ from dataclasses import dataclass, fields, MISSING
 from logging import basicConfig, Filter, getLogger
 
 from bofh.model.modules.graph import TheGraph
-from bofh.model.database import ModelDB, StatusScopedCursor, Intervention
+from bofh.model.database import ModelDB, StatusScopedCursor
 
 
 # add bofh.contract/contracts to get_abi() seach path:
@@ -175,6 +174,7 @@ Logging options:
 
 log = getLogger("bofh.model.attack")
 
+
 class ManagedAbort(RuntimeError): pass
 
 
@@ -189,25 +189,20 @@ def prompt(args: Args, msg):
         raise ManagedAbort("Bailing out due to user choice")
 
 
-class Attack(ContractCalling, CachedEntities, TheGraph):
+class Attack(ContractCalling, TheGraph):
     def __init__(self, args: Args):
-        ContractCalling.__init__(self)
         self.args = args
         self.db = ModelDB(schema_name="status"
                           , cursor_factory=StatusScopedCursor
                           , db_dsn=self.args.status_db_dsn)
         self.db.open_and_priming()
-        CachedEntities.__init__(self, self.db)
         self.attacks_db = ModelDB(schema_name="attacks"
                                   , cursor_factory=StatusScopedCursor
                                   , db_dsn=self.args.attacks_db_dsn)
         self.attacks_db.open_and_priming()
+        self.args.sync_db(self.db)
+        ContractCalling.__init__(self, args=args)
         TheGraph.__init__(self, self.db, attacks_db=self.attacks_db)
-        self.args.sync_db(self.db)
-        self.tokens = {}
-        self.pools = {}
-        self.exchanges = {}
-        self.args.sync_db(self.db)
         if self.args.fetch_reserves:
             # override reserves fetch routine
             self.graph.set_fetch_lp_reserves_tag_cb(self.fetch_reserves)
@@ -288,8 +283,9 @@ class Attack(ContractCalling, CachedEntities, TheGraph):
                 if self.args.origin_tx:
                     row.append(origin_tx or "")
                 if self.args.check:
-                    i = self.get_intervention(id, patch=True)
-                    good, err = self.preflight_check(i)
+                    good, err = self.preflight_check(path
+                                                     , int(str(result.initial_balance()))
+                                                     , int(str(result.final_balance())))
                     if good:
                         row.append("OK")
                     else:
@@ -337,9 +333,6 @@ class Attack(ContractCalling, CachedEntities, TheGraph):
             return amount_min + step*2
 
         return
-
-
-
         step = (amount_max - amount_min) // 50
         data = []
         for i in range(50):
@@ -389,7 +382,7 @@ class Attack(ContractCalling, CachedEntities, TheGraph):
             swap = path.get(i)
             pool = swap.pool
             exc = pool.exchange
-            if exc != last_exc:
+            if last_exc and exc.tag != last_exc.tag:
                 last_exc = exc
                 part = f"is sent to exchange {exc.name}"
             else:
@@ -408,7 +401,7 @@ class Attack(ContractCalling, CachedEntities, TheGraph):
             print(f"       |     |     \\___ reserveIn is ~= {hr_rin} {token_in.symbol}")
             if self.args.weis:
                 print(f"       |     |     |     \\___ or ~= {rin} weis of token {token_in.address} ")
-            print(f"       |     |     \\___ reserve1 is ~= {hr_rout} {token_out.symbol}")
+            print(f"       |     |     \\___ reserveOut is ~= {hr_rout} {token_out.symbol}")
             if self.args.weis:
                 print(f"       |     |           \\___ or ~= {rout} weis of token {token_out.address} ")
             weis = ""
@@ -435,8 +428,16 @@ class Attack(ContractCalling, CachedEntities, TheGraph):
             gain = f"net loss of {hr_g} {initial_token.symbol}"
             if self.args.weis:
                 gain += f" (-{gap} weis)"
-        print(f"           \\___ this results in a {gain}")
-        print( "                 \\___ which is a %0.4f%% net yield" % yieldPercent)
+        print(f"       |   \\___ this results in a {gain}")
+        print( "       |         \\___ which is a %0.4f%% net yield" % yieldPercent)
+        good, err = self.preflight_check(path
+                                         , int(str(result.initial_balance()))
+                                         , int(str(result.final_balance())))
+        if good:
+            txt = "SUCCESS"
+        else:
+            txt = f"ERR: {err}"
+        print(f"       \\___ outcome of preflight check (using eth_call): {txt}")
 
     def execute(self, attack_id):
         with self.attacks_db as curs:
@@ -476,7 +477,7 @@ class Attack(ContractCalling, CachedEntities, TheGraph):
             function_name="multiswap"
             , from_address=w_address
             , to_address=c_address
-            , call_args=self.pack_intervention_payload(trade_plan.path, amountIn, amountOut)
+            , call_args=self.path_attack_payload(trade_plan.path, amountIn, amountOut)
         )
         log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"].hex())
 
@@ -487,7 +488,7 @@ class Attack(ContractCalling, CachedEntities, TheGraph):
             self.call(function_name="multiswap"
                       , from_address=w_address
                       , to_address=c_address
-                      , call_args=self.pack_intervention_payload(path, amountIn, expectedAmountOut))
+                      , call_args=self.path_attack_payload(path, amountIn, expectedAmountOut))
             return True, None
         except ContractLogicError as err:
             txt = str(err)
@@ -497,6 +498,9 @@ class Attack(ContractCalling, CachedEntities, TheGraph):
             txt = txt.strip()
             return False, txt
 
+    def amount_hr(self, amount, token):
+        return "%0.4f" % token.fromWei(amount)
+
     def diagnose_k_error(self, path, amountIn, expectedAmountOut):
         c_address = to_checksum_address(self.args.contract_address)
         w_address = to_checksum_address(self.args.wallet_address)
@@ -505,7 +509,7 @@ class Attack(ContractCalling, CachedEntities, TheGraph):
                 res = self.call(function_name="multiswap"
                                 , from_address=w_address
                                 , to_address=c_address
-                                , call_args=self.pack_intervention_payload(path
+                                , call_args=self.path_attack_payload(path
                                                                            , amountIn
                                                                            , expectedAmountOut
                                                                            , stop_after_pool=i) )
@@ -518,16 +522,17 @@ class Attack(ContractCalling, CachedEntities, TheGraph):
                 txt = txt.strip()
                 print("pool[%u]: %s" % (i, txt))
 
-    def pack_intervention_payload(self, path, amountIn, expectedAmountOut, stop_after_pool=None):
+    def path_attack_payload(self, path, amountIn, expectedAmountOut, stop_after_pool=None):
         pools = []
         fees = []
-
         initialAmount = amountIn
         expectedAmount = expectedAmountOut
         if self.args.allow_net_losses:
             expectedAmount = 0
         if self.args.initial_amount:
             initialAmount = self.args.initial_amount
+        if self.args.allow_break_even:
+            expectedAmount = min(initialAmount, expectedAmount)
         for i in range(path.size()):
             swap = path.get(i)
             pools.append(str(swap.pool.address))
