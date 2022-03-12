@@ -81,6 +81,7 @@ def get_edge_weight(graph,start,end,key):
     dict = graph[start][end]
     return dict[0][key]
 
+#lists the pools connecting two tokens (generally from different exchanges)
 def get_edge_pool(graph,start,end,key):
     pools = []
     edges = graph[start][end]
@@ -134,11 +135,17 @@ def compute_weights_in_path(path,graph,fee):
     return ((amount/start_amount), amount, start_amount, pools)
 
 
+#Get the gain on each edge. To be updated to get the fee from the pool object
 def gain_per_edge(pool,amount,fee):
     return amount * pool.reserve1/pool.reserve0 * (1-fee)
 
+#temporary, to be updated with C++ code
 def max_flux(pool):
     return abs(pool.reserve1 - pool.reserve0)/3
+
+#to be implemented following C++ code
+def max_flux_on_path(path):
+    return 0
 
 #not used for now - to be debugged
 def automagical_formula_3_way (r1,r2,path, graph, delta):
@@ -160,6 +167,7 @@ def automagical_formula_3_way (r1,r2,path, graph, delta):
     gain = (r1 * r2 * ((r1**2 * r2**2 * b1 * c2 * a3)/(b2*c3+r1*r2*b1*c3*r1**2*r2**2*b1*c2)/((a1*b2*c3))/(b2*c3+r1*r2*b1*c3+r1**2*r2**2*b1*c2)+r1*delta)-1)*delta
     return gain
 
+#utility functions
 def read_paths_from_file (file):
     buffer = open(file, "r")
     content = buffer.read()
@@ -167,6 +175,7 @@ def read_paths_from_file (file):
     print(len(content_list))
     buffer.close()
     return content_list
+
 
 def extract_differences (file1, file2) :
     list1 = read_paths_from_file(file1)
@@ -254,7 +263,7 @@ with open('3waystest.txt','w') as file:
             print(f"{weight:.3} {pools}")
             print(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:.3} -> {amount:.3}, {pools}", file=file)
             arbitrage_opportunity.append(analyzed_path)
-print ('The difference is: ',extract_differences('3waystest.txt','3waystestmod.txt' ))
+#print ('The difference is: ',extract_differences('3waystest.txt','3waystestmod.txt' ))
 #print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths_4))
 #print("Printing the list of possible paths and their cost:")
 #for analyzed_path in possible_paths_4:
