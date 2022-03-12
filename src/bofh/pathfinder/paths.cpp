@@ -357,47 +357,6 @@ PathResult Path::evaluate_max_yield(const PathEvalutionConstraints &c
     c0.initial_balance = ideal;
     return evaluate(c0, observe_predicted_state);
 
-
-//    if (!amount_min) amount_min = c.initial_balance;
-//    if (!amount_max) amount_max = c.initial_balance;
-//    auto step = (amount_max - amount_min) / c.optimal_amount_search_sections;
-//    auto c0 = c;
-//    auto c1 = c;
-
-//    auto gain = [](const auto &res) {
-//        return res.final_balance().template convert_to<double>()
-//                - res.initial_balance().template convert_to<double>();
-//    };
-
-//    c0.initial_balance = amount_min;
-//    auto y0 = evaluate(c0, observe_predicted_state);
-//    auto gy0 = gain(y0);
-
-//    if (gy0 < 0)
-//    {
-//        log_info("with %1% y0 is already in loss. bail out :(", c0.initial_balance);
-//        y0.failed = true;
-//        return y0;
-//    }
-
-//    log_info("with %1% y0 is %2%", c0.initial_balance, gy0);
-//    for (;;)
-//    {
-//        c1.initial_balance = c0.initial_balance+step;
-//        auto y1 = evaluate(c1, observe_predicted_state);
-//        auto gy1 = gain(y1);
-//        log_info("with %1% y1 is %2%", c1.initial_balance, gy1);
-
-//        if (gy0 > gy1 || c0.initial_balance >= amount_max)
-//        {
-//            break;
-//        }
-
-//        y0 = y1;
-//        c0 = c1;
-//    }
-
-//    return y0;
 }
 
 
