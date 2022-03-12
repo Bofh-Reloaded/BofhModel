@@ -909,7 +909,7 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
                                              , bool observe_predicted_state) const
 {
     assert(path != nullptr);
-    auto result = path->evaluate2(c);
+    auto result = path->evaluate_max_yield(c);
 
     if (!result.failed)
     {

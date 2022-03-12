@@ -145,7 +145,7 @@ struct Path: std::array<const OperableSwap *, MAX_PATHS>
 
     PathResult evaluate(const PathEvalutionConstraints &
                         , bool observe_predicted_state=false) const;
-    PathResult evaluate2(const PathEvalutionConstraints &
+    PathResult evaluate_max_yield(const PathEvalutionConstraints &
                         , bool observe_predicted_state=false) const;
 };
 

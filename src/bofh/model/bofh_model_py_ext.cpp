@@ -254,7 +254,7 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def("token_after_step"     , &Path::token_after_step , dont_manage_returned_pointer())
             .def("check_consistency"    , &Path::check_consistency)
             .def("evaluate"             , &Path::evaluate)
-            .def("evaluate2"             , &Path::evaluate2)
+            .def("evaluate_max_yield"             , &Path::evaluate_max_yield)
             .def(self_ns::repr(self_ns::self))
             .def(self_ns::str(self_ns::self))
             ;

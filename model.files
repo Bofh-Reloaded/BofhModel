@@ -10,6 +10,8 @@ src/bofh/model/bofh_constraints.hpp
 src/bofh/model/bofh_constraints.cpp
 src/bofh/model/bofh_model.cpp
 src/bofh/model/bofh_model.hpp
+src/bofh/model/bofh_fees.cpp
+src/bofh/model/bofh_fees.hpp
 src/bofh/model/bofh_model_fwd.hpp
 src/bofh/model/bofh_model_py_ext.cpp
 src/bofh/model/bofh_amm_estimation.hpp

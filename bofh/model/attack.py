@@ -240,7 +240,7 @@ class Attack(ContractCalling, TheGraph):
         self.update_pool_reserves(attack_id, path)
         constraints = self.get_constraint(path.initial_token(), amountIn)
         if self.args.find_optimal_amount:
-            return path.evaluate2(constraints, False)
+            return path.evaluate_max_yield(constraints, False)
         return path.evaluate(constraints, False)
 
     def list(self):

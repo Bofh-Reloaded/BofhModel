@@ -264,84 +264,21 @@ PathResult Path::evaluate(const PathEvalutionConstraints &c
 //};
 
 
-PathResult Path::evaluate2(const PathEvalutionConstraints &c
+PathResult Path::evaluate_max_yield(const PathEvalutionConstraints &c
                     , bool observe_predicted_state) const
 {
-/*
-
-amount_min
-amount_max
-amount_window = amount_max - amount_min
-
-step = amount_window * 0.01
-amount = amount_min
-
-y0 = yield_with(amount)
-if y0 < 0:
-    return false // no go
-
-step1 = amount+step
-y1 = yield_with(step1)
-
-if y0 > y1:
-    return y0 // probably found
-
-// case y0 < y1: increasing input amount also increases final yield.
-// hypotesis: there is room for improvement
-
-// let's recalc yield with twice the step
-step2 *= step1 + step*2
-y2 = yield_with(step2)
-
-if (y1 > y2):
-    // overshoot. Max is somewhere in [step1, step2]
-    return bisect_search(step1, step2)
-
-// hypotesis: there is room for improvement
-
-// let's recalc yield with twice the step
-step3 *= step2 + step*4
-y3 = yield_with(step2)
-
-if (y2 > y3):
-    // overshoot. Max is somewhere in [step1, step2]
-    return bisect_search(step2, step3)
-
---------------
-
-def max_of_3(a, b, c):...
-
-def bisect_search(min, max, gap_min):
-    mid = (min+max)/2
-    gap = max - min;
-    if gap < gap_min:
-        return mid
-    ym = yield_with(min)
-    yM = yield_with(max)
-    yc = yield_with(mid)
-
-    k = max_of_3(ym, yc, yM)
-    switch (k)
-    {
-    case 0: // max is at yield_with(min)
-        return bisect_search(ym, yc);
-        break;
-    case 2: // max is at yield_with(max)
-        return bisect_search(yc, yM);
-        break;
-    case 1: // max is at yield_with(mid)
-        min = bisect_search(ym, yc);
-        max = bisect_search(yc, yM);
-        return bisect_search(min, max);
-        break;
-    }
-*/
     auto amount_min = c.initial_balance_min;
     auto amount_max = c.initial_balance_max;
     const auto gap_min = amount_min / 1000000;
     auto c0 = c;
 
-    struct yield_result {
+    // yield_result represents a gain or a loss if a certain balance amount.
+    // Since model::balance_t is basically an unsigned 256 bit integer with
+    // some speed optimizations,
+    // we resort to using this compound type HERE and HERE ONLY
+    // in order to also express negative yields.
+    struct yield_result
+    {
         const bool negative;
         const model::balance_t val;
         const bool operator<(const yield_result &o) const
@@ -353,6 +290,8 @@ def bisect_search(min, max, gap_min):
         }
         operator model::balance_t() const { return negative ? 0 : val; }
     };
+
+    // evaluate the path with a specific initial_amount. return a yield_result
     auto yield_with = [&](const auto &initial_amount) {
         c0.initial_balance = initial_amount;
         const auto plan = evaluate(c0, observe_predicted_state);
@@ -363,34 +302,54 @@ def bisect_search(min, max, gap_min):
         return yield_result{true, plan.initial_balance() - plan.final_balance()};
     };
 
+    // simplest compiler-optimizable form of the find-max-of-3 problem
     auto max_of_3 = [](const auto &a, const auto &b, const auto &c) {
         if (b < a && c < a) return 0;
         if (a < b && c < b) return 1;
         return 2;
     };
 
-    auto bisect_search = [&](const model::balance_t &min, const model::balance_t &max, auto cb)
+    // This is the recursive bisection search call (it calls itself).
+    // TODO: implement stack depth protection
+    auto bisect_search = [&](const model::balance_t &min
+                             , const model::balance_t &max
+                             , auto subcall)
     {
         const model::balance_t mid = (min+max)/2;
         const model::balance_t gap = max - min;
         if (gap <= gap_min)
         {
+            // Let's assume it makes no sense to keep refining the search
+            // with resolutions finer than gap_min.
+            // If we are here, we kind of found what we were looking for.
             return mid;
         }
-        const auto y0 = yield_with(min);
-        const auto y1 = yield_with(mid);
-        const auto y2 = yield_with(max);
-        const auto k = max_of_3(y0, y1, y2);
+        const auto y0 = yield_with(min); // yield with min amount
+        const auto y1 = yield_with(mid); // yield with midpoint amount
+        const auto y2 = yield_with(max); // yield with max amount
+        const auto k = max_of_3(y0, y1, y2); // who is the winner?
+
         switch (k)
         {
-        case 0: // max is at yield_with(min)
-            return cb(min, mid, cb);
-        case 2: // max is at yield_with(max)
-            return cb(mid, max, cb);
+        case 0:
+            // max yield was found with min amount.
+            // Assume there is an even better amount in the
+            // range [min, midpoint] and attempt a search there
+            return subcall(min, mid, subcall);
+        case 2:
+            // max yield was found with max amount
+            // Assume there is an even better amount in the
+            // range [midpoint, max] and attempt a search there
+            return subcall(mid, max, subcall);
         default:
-            const auto nmin = cb(min, mid, cb);
-            const auto nmax = cb(mid, max, cb);
-            return cb(nmin, nmax, cb);
+            // max yield was found with midpoint amount
+            // It's a little more complex:
+            // - find the best yield in the bracket [min, midpoint] --> nmin
+            // - find the best yield in the bracket [midpoint, max] --> nmax
+            // - return the best-yielding of the two
+            const auto nmin = subcall(min, mid, subcall);
+            const auto nmax = subcall(mid, max, subcall);
+            return yield_with(nmin) < yield_with(nmax) ? nmax : nmin;
         }
     };
 
