@@ -1,7 +1,7 @@
 CREATE TABLE schema_version(version INT);
 INSERT INTO schema_version(version) VALUES (0);
 
-CREATE TABLE interventions (
+CREATE TABLE attacks (
     id INTEGER PRIMARY KEY,
     origin TEXT NOT NULL DEFAULT 'pred', -- or 'scan'
     origin_tx TEXT DEFAULT NULL,
@@ -13,12 +13,13 @@ CREATE TABLE interventions (
     path_id TEXT NOT NULL,
     path_size INTEGER NOT NULL,
     contract TEXT NOT NULL,
-    calldata TEXT NOT NULL
+    calldata TEXT NOT NULL,
+    description TEXT NOT NULL
 );
 
-CREATE TABLE intervention_steps (
+CREATE TABLE attack_steps (
     id INTEGER PRIMARY KEY,
-    fk_intervention INTEGER NOT NULL,
+    fk_attack INTEGER NOT NULL,
     pool_id INTEGER NOT NULL,
     pool_addr TEXT NOT NULL,
     reserve0 TEXT NOT NULL,
@@ -32,9 +33,9 @@ CREATE TABLE intervention_steps (
     amountOut TEXT NOT NULL
 );
 
-CREATE TABLE intervention_outcomes (
+CREATE TABLE attack_outcomes (
     id INTEGER PRIMARY KEY,
-    fk_intervention INTEGER NOT NULL,
+    fk_attack INTEGER NOT NULL,
     ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     blockNr INT NOT NULL,
     outcome TEXT NOT NULL, -- ok, failed, error
@@ -46,7 +47,7 @@ CREATE TABLE intervention_outcomes (
 
 
 
-CREATE INDEX intervention_path_id_idx ON interventions(path_id);
-CREATE INDEX intervention_origin_ts_idx ON interventions(origin_ts);
-CREATE INDEX intervention_steps_fk_idx ON intervention_steps(fk_intervention);
-CREATE INDEX intervention_outcomes_fk_idx ON intervention_outcomes(fk_intervention);
+CREATE INDEX attack_path_id_idx ON attacks(path_id);
+CREATE INDEX attack_origin_ts_idx ON attacks(origin_ts);
+CREATE INDEX attack_steps_fk_idx ON attack_steps(fk_attack);
+CREATE INDEX attack_outcomes_fk_idx ON attack_outcomes(fk_attack);

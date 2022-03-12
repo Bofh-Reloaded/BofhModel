@@ -8,29 +8,15 @@
 namespace bofh {
 namespace model {
 
-static unsigned hex2nib(unsigned c)
-{
-    switch (c) {
-    case '0':           return 0x0;
-    case '1':           return 0x1;
-    case '2':           return 0x2;
-    case '3':           return 0x3;
-    case '4':           return 0x4;
-    case '5':           return 0x5;
-    case '6':           return 0x6;
-    case '7':           return 0x7;
-    case '8':           return 0x8;
-    case '9':           return 0x9;
-    case 'a': case 'A': return 0xA;
-    case 'b': case 'B': return 0xB;
-    case 'c': case 'C': return 0xC;
-    case 'd': case 'D': return 0xD;
-    case 'e': case 'E': return 0xE;
-    case 'f': case 'F': return 0xF;
-    default:
-        throw std::bad_cast();
-    }
+address_t::address_t() : bignum::uint160_t(0) {}
+address_t::address_t(const char *hexstring) : bignum::uint160_t(hexstring) {}
+
+
+struct addr_as_string {
+    char buf[address_t::nibs+1] = {0};
 };
+
+
 
 static inline bool is_digit(unsigned c)
 {
@@ -83,74 +69,30 @@ static inline char hex_upcase(char c)
     return c;
 }
 
-address_t::address_t()
+static unsigned hex2nib(unsigned c)
 {
-    fill(0);
-}
-
-address_t::address_t(const char *s):
-    address_t()
-{
-    auto s_read = s;
-    if (s_read == nullptr)
-    {
-        return;
-    }
-
-    // skip leading "0x0.." prequel, if any
-
-    const char *s_end = s_read + std::strlen(s_read);
-    if (s_end - s_read < address_t::nibs)
-    {
+    switch (c) {
+    case '0':           return 0x0;
+    case '1':           return 0x1;
+    case '2':           return 0x2;
+    case '3':           return 0x3;
+    case '4':           return 0x4;
+    case '5':           return 0x5;
+    case '6':           return 0x6;
+    case '7':           return 0x7;
+    case '8':           return 0x8;
+    case '9':           return 0x9;
+    case 'a': case 'A': return 0xA;
+    case 'b': case 'B': return 0xB;
+    case 'c': case 'C': return 0xC;
+    case 'd': case 'D': return 0xD;
+    case 'e': case 'E': return 0xE;
+    case 'f': case 'F': return 0xF;
+    default:
         throw std::bad_cast();
     }
-    if (s_read[0] == '0' && s_read[1] == 'x') s_read += 2;
-    auto w = begin();
-
-    unsigned shl = address_t::word_size;
-    unsigned nib = 0;
-    for (; nib < address_t::nibs && s_read < s_end; ++nib, ++s_read)
-    {
-        if (shl == 0)
-        {
-            shl = address_t::word_size;
-            w++;
-        }
-        shl -= 4;
-        *w |= (hex2nib(*s_read) << shl);
-    }
-    if (nib != address_t::nibs)
-    {
-        throw std::bad_cast();
-    }
-    if (s_read != s_end)
-    {
-        throw std::overflow_error(s);
-    }
-}
-
-struct addr_as_string {
-    char buf[address_t::nibs+1] = {0};
 };
 
-static void m_serialize_addr(addr_as_string &s, const address_t &o)
-{
-    char *w = s.buf;
-    static const char hex[] = "0123456789abcdef";
-
-    unsigned rhl = address_t::word_size;
-    auto r = o.cbegin();
-    for (unsigned nib = 0; nib < address_t::nibs; ++nib, ++w)
-    {
-        if (rhl == 0)
-        {
-            rhl = address_t::word_size;
-            r++;
-        }
-        rhl -= 4;
-        *w = hex[((*r)>>rhl) & 0x0f];
-    }
-}
 
 static void m_checksum_encode(addr_as_string &s)
 {
@@ -196,13 +138,18 @@ static void m_checksum_encode(addr_as_string &s)
 
 std::ostream& operator<< (std::ostream& stream, const address_t& o)
 {
-    addr_as_string as_str;
+    std::stringstream ss;
+    ss
+            << std::hex
+            << std::noshowbase
+            << std::setfill('0')
+            << std::setw(address_t::nibs)
+            << reinterpret_cast<const address_t::base_type &>(o);
+    addr_as_string st;
+    ss.read(st.buf, sizeof(st.buf));
+    m_checksum_encode(st);
 
-    m_serialize_addr(as_str, o);
-    m_checksum_encode(as_str);
-
-    stream << "0x" << as_str.buf;
-
+    stream << "0x" << st.buf;
     return stream;
 }
 

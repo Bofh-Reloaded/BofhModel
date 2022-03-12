@@ -9,8 +9,7 @@ from bofh.utils.web3 import Web3Connector, JSONRPCConnector, method_id, encode_u
 
 __doc__="""Start model runner.
 
-Usage: bofh.model.download_uniswap_exchange [options] <exchange_name> <router_address>
-
+Usage: bofh.model.download_uniswap_exchange [options] <exchange_name> <router_address> <fees_ppm>
 Options:
   -h  --help
   -d, --dsn=<connection_str>            DB dsn connection string [default: sqlite3://status.db]
@@ -36,6 +35,7 @@ class Args:
     max_workers: int = 0
     exchange_name: str = None
     router_address: str = None
+    fees_ppm: int = 0
 
     @staticmethod
     def default(arg, d, suppress_list=None):
@@ -55,6 +55,7 @@ class Args:
             , max_workers=int(cls.default(args["-j"], 0))
             , exchange_name=args["<exchange_name>"]
             , router_address=args["<router_address>"]
+            , fees_ppm=int(args["<fees_ppm>"])
         )
 
 
@@ -157,7 +158,7 @@ class Runner(TheGraph, ContractCalling, EntitiesPreloader):
         self.graph.set_fetch_token_addr_cb(self.add_unknown_token)
         class PoolFailed(RuntimeError): pass
         with self.db as curs:
-            exchange_id = curs.add_exchange(self.args.router_address, self.args.exchange_name, ignore_duplicates=True)
+            exchange_id = curs.add_exchange(self.args.router_address, self.args.exchange_name, self.args.fees_ppm, ignore_duplicates=True)
             self.log.info("reaching out to router at address %s", self.args.router_address)
             router = self.w3.eth.contract(address=self.args.router_address, abi=get_abi("IGenericRouter"))
 

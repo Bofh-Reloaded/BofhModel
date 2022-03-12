@@ -52,7 +52,7 @@ class Pool:
 
 
 @dataclass
-class InterventionStep:
+class AttackStep:
     pool_id: int
     pool_addr: str
     reserve0: int
@@ -66,7 +66,7 @@ class InterventionStep:
     amountOut: int
 
 @dataclass
-class Intervention:
+class Attack:
     origin: str
     origin_tx: str = ""
     origin_ts: int = 0
@@ -77,7 +77,7 @@ class Intervention:
     calldata: str = None
     blockNr: int = 0
     tag: int = None
-    steps: List[InterventionStep] = []
+    steps: List[AttackStep] = []
 
     @property
     def yieldPercent(self):
@@ -279,10 +279,10 @@ class StatusScopedCursor(BasicScopedCursor):
             self.execute("SELECT id FROM tokens WHERE address = ?", (norm_address(address),))
         return self.get_int()
 
-    def add_exchange(self, router_address, name=None, ignore_duplicates=False):
+    def add_exchange(self, router_address, name=None, fees_ppm=0, ignore_duplicates=False):
         assert self.conn is not None
         try:
-            self.execute("INSERT INTO exchanges (router_address, name) VALUES (?, ?)", (norm_address(router_address), name,))
+            self.execute("INSERT INTO exchanges (router_address, name, fees_ppm) VALUES (?, ?, ?)", (norm_address(router_address), name, fees_ppm))
             self.execute("SELECT last_insert_rowid()")
         except IntegrityError:
             # already existing
@@ -306,7 +306,7 @@ class StatusScopedCursor(BasicScopedCursor):
 
     def list_exchanges(self):
         assert self.conn is not None
-        self.execute("SELECT id,router_address,name FROM exchanges")
+        self.execute("SELECT id,router_address,name,fees_ppm FROM exchanges")
         while True:
             seq = self.curs.fetchmany()
             if not seq:
@@ -315,24 +315,22 @@ class StatusScopedCursor(BasicScopedCursor):
                 yield i
 
     def get_exchange_vals(self, id):
-        return self.execute("SELECT id, router_address, name "
+        return self.execute("SELECT id, router_address, name, fees_ppm "
                             "FROM exchanges WHERE id = ?", (id,)).get()
 
     def get_topic_vals(self, id):
-        return self.execute("SELECT id, address, name, symbol, decimals, is_stabletoken "
-                            "FROM tokens WHERE id = ?", (id,)).get()
+        return self.execute(self.TOKENS_SELECT_TUPLE + "WHERE id = ?", (id,)).get()
 
     def get_topic_vals_by_addr(self, addr):
-        return self.execute("SELECT id, address, name, symbol, decimals, is_stabletoken "
-                            "FROM tokens WHERE address = ?", (str(addr),)).get()
+        return self.execute(self.TOKENS_SELECT_TUPLE + "WHERE address = ?", (norm_address(addr),)).get()
 
     def get_lp_vals(self, id):
-        return self.execute("SELECT id, address, exchange_id, token0_id, token1_id "
+        return self.execute("SELECT id, address, exchange_id, token0_id, token1_id, fees_ppm "
                             "FROM pools WHERE id = ?", (id,)).get()
 
     def get_lp_vals_by_addr(self, addr):
-        return self.execute("SELECT id, address, exchange_id, token0_id, token1_id "
-                            "FROM pools WHERE address = ?", (str(addr),)).get()
+        return self.execute("SELECT id, address, exchange_id, token0_id, token1_id, fees_ppm "
+                            "FROM pools WHERE address = ?", (norm_address(addr),)).get()
 
     def get_lp_reserves_vals(self, id):
         return self.execute("SELECT reserve0, reserve1 "
@@ -340,9 +338,9 @@ class StatusScopedCursor(BasicScopedCursor):
 
     def get_attack_pool_ids(self, path_hash):
         return map(lambda x: x[0],
-                   self.execute("SELECT pool_id FROM intervention_steps "
-                                "WHERE fk_intervention IN ("
-                                "   SELECT MAX(id) FROM interventions WHERE path_id = ?) "
+                   self.execute("SELECT pool_id FROM attack_steps "
+                                "WHERE fk_attack IN ("
+                                "   SELECT MAX(id) FROM attacks WHERE path_id = ?) "
                                 "ORDER BY id", (str(path_hash),)).get_all())
 
     def count_tokens(self):
@@ -353,6 +351,7 @@ class StatusScopedCursor(BasicScopedCursor):
                      ", SUBSTR(COALESCE(name, ''), 0, ?)"
                      ", SUBSTR(COALESCE(symbol, ''), 0, ?)"
                      ", decimals"
+                     ", fees_ppm"
                      ", is_stabletoken FROM tokens ")
 
     def list_tokens(self):
@@ -372,7 +371,7 @@ class StatusScopedCursor(BasicScopedCursor):
 
     def list_pools(self):
         assert self.conn is not None
-        self.execute("SELECT id,address,exchange_id,token0_id,token1_id FROM pools WHERE NOT disabled")
+        self.execute("SELECT id,address,exchange_id,token0_id,token1_id,fees_ppm FROM pools WHERE NOT disabled")
         while True:
             seq = self.curs.fetchmany()
             if not seq:
@@ -429,24 +428,29 @@ class StatusScopedCursor(BasicScopedCursor):
     def update_pool_reserves_batch(self, tuples):
         self.executemany("UPDATE pool_reserves SET reserve0 = ?, reserve1 = ? WHERE id = ?", tuples)
 
-    def intervention_is_in_mute_cache(self, attack_plan, cache_deadline, max_size=0):
+    def attack_is_in_mute_cache(self, attack_plan, cache_deadline, max_size=0):
         ts_of_largest_collection = None
         path_id = str(attack_plan.id())
         if max_size:
-            ts_of_largest_collection_sql = "SELECT origin_ts FROM interventions " \
+            ts_of_largest_collection_sql = "SELECT origin_ts FROM attacks " \
                                            "ORDER BY origin_ts DESC LIMIT 1 OFFSET %u" % max_size
             try:
                 ts_of_largest_collection = self.execute(ts_of_largest_collection_sql).get_int()
             except:
                 pass
-        check_colliding_sql = "SELECT COUNT(1) FROM interventions WHERE path_id = ? AND origin_ts >= ?"
+        check_colliding_sql = "SELECT COUNT(1) FROM attacks WHERE path_id = ? AND origin_ts >= ?"
         if ts_of_largest_collection:
             args = (path_id, ts_of_largest_collection)
         else:
             args = (path_id, int(time() - cache_deadline))
         return self.execute(check_colliding_sql, args).get_int() > 0
 
-    def add_intervention(self, attack_plan, origin=None, blockNr=None, origin_tx=None, contract_address=None):
+    def add_attack(self, attack_plan
+                   , origin=None
+                   , blockNr=None
+                   , origin_tx=None
+                   , contract_address=None
+                   , deflationary=False):
         path_id = str(attack_plan.id())
         if not origin:
             origin = ""
@@ -459,6 +463,8 @@ class StatusScopedCursor(BasicScopedCursor):
             origin_tx = ""
         if not contract_address:
             contract_address = ""
+        else:
+            contract_address = norm_address(contract_address)
         args = (origin
                 , blockNr
                 , origin_tx
@@ -469,8 +475,9 @@ class StatusScopedCursor(BasicScopedCursor):
                 , path_id
                 , attack_plan.path.size()
                 , contract_address
-                , attack_plan.calldata)
-        self.execute("INSERT INTO interventions ("
+                , attack_plan.get_calldata(deflationary)
+                , attack_plan.get_description())
+        self.execute("INSERT INTO attacks ("
                      "origin"
                      ", blockNr"
                      ", origin_tx"
@@ -481,8 +488,9 @@ class StatusScopedCursor(BasicScopedCursor):
                      ", path_id"
                      ", path_size"
                      ", contract"
-                     ", calldata) "
-                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", args)
+                     ", calldata"
+                     ", description) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", args)
         attack_plan.tag = self.execute("SELECT last_insert_rowid()").get_int()
 
         def steps_iter():
@@ -490,19 +498,19 @@ class StatusScopedCursor(BasicScopedCursor):
                 swap = attack_plan.path.get(i)
                 yield (attack_plan.tag
                        , swap.pool.tag
-                       , str(swap.pool.address)
+                       , norm_address(swap.pool.address)
                        , str(attack_plan.pool_reserve(i, 0))
                        , str(attack_plan.pool_reserve(i, 1))
-                       , str(swap.tokenSrc.address)
-                       , str(swap.tokenDest.address)
+                       , norm_address(swap.tokenSrc.address)
+                       , norm_address(swap.tokenDest.address)
                        , swap.tokenSrc.tag
                        , swap.tokenDest.tag
                        , str(attack_plan.balance_before_step(i))
                        , swap.pool.feesPPM()
                        , str(attack_plan.balance_after_step(i))
                        )
-        self.executemany("INSERT INTO intervention_steps ("
-                         "fk_intervention"
+        self.executemany("INSERT INTO attack_steps ("
+                         "fk_attack"
                          ", pool_id"
                          ", pool_addr"
                          ", reserve0"
@@ -527,27 +535,27 @@ class StatusScopedCursor(BasicScopedCursor):
         self.execute("UPDATE unknown_pools SET factory = ? WHERE address = ?", (norm_address(address), pool))
 
     def set_unknown_pool_disabled(self, pool, disabled):
-        self.execute("UPDATE unknown_pools SET disabled = ? WHERE address = ?", (disabled, pool))
+        self.execute("UPDATE unknown_pools SET disabled = ? WHERE address = ?", (disabled,norm_address(pool)))
 
-    def get_intervention(self, id) -> Intervention:
+    def get_attack(self, id):
         id, origin, origin_tx, origin_ts, \
         blockNr, amountIn, amountOut, yieldRatio, \
         path_id, contract, calldata  = \
         self.execute("SELECT id, origin, origin_tx, origin_ts, "
                                 "blockNr, amountIn, amountOut, yieldRatio, "
-                                "path_id, contract, calldata FROM interventions WHERE id = ?", (id,)).get()
+                                "path_id, contract, calldata FROM attacks WHERE id = ?", (id,)).get()
         steps = []
-        i = Intervention(tag=id, origin=origin, origin_tx=origin_tx, origin_ts=origin_ts, blockNr=blockNr
+        i = Attack(tag=id, origin=origin, origin_tx=origin_tx, origin_ts=origin_ts, blockNr=blockNr
                          , amountIn=int(amountIn), amountOut=int(amountOut)
                          , path_id=int(path_id), contract=contract, calldata=calldata, steps=steps)
         for r in self.execute("SELECT pool_id, pool_addr, reserve0, reserve1"
                               ", tokenIn_addr, tokenOut_addr, tokenIn_id, tokenOut_id"
                               ",  amountIn, feePPM, amountOut "
-                              "FROM intervention_steps WHERE fk_intervention = ? ORDER BY id ASC", (id,)).get_all():
+                              "FROM attack_steps WHERE fk_attack = ? ORDER BY id ASC", (id,)).get_all():
             pool_id, pool_addr, reserve0, reserve1, \
             tokenIn_addr, tokenOut_addr, tokenIn_id, tokenOut_id, \
             amountIn, feePPM, amountOut = r
-            steps.append(InterventionStep(pool_id=pool_id
+            steps.append(AttackStep(pool_id=pool_id
                                           , pool_addr=pool_addr
                                           , reserve0=int(reserve0)
                                           , reserve1=int(reserve1)

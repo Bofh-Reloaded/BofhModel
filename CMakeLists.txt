@@ -48,6 +48,8 @@ set(MODEL_SRC
     src/bofh/model/bofh_entity_idx.cpp
     src/bofh/model/bofh_types.cpp
     src/bofh/model/bofh_types.hpp
+    src/bofh/model/bofh_fees.cpp
+    src/bofh/model/bofh_fees.hpp
     src/bofh/model/bofh_model.cpp
     src/bofh/model/bofh_model.hpp
     src/bofh/model/bofh_model_fwd.hpp
@@ -93,7 +95,7 @@ add_library(bofh_model_ext MODULE
     )
 
 add_library(bofh_model STATIC EXCLUDE_FROM_ALL ${MODEL_SRC})
-
+target_compile_definitions(bofh_model PUBLIC -DNOPYTHON=1)
 #target_link_libraries(bofh_model_ext bofh_model)
 target_include_directories(bofh_model_ext PRIVATE ${Python_INCLUDE_DIRS})
 set_target_properties(bofh_model_ext PROPERTIES PREFIX "") # build library without "lib{x}" name

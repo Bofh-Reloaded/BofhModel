@@ -28,7 +28,7 @@ def import_pools_and_tokens_from_json_coso(router_address, filepath, db: ModelDB
     with db as curs:
         for k, v in data.items():
             for ex_name, exchange in v.items():
-                exchange_id = curs.add_exchange(router_address, ex_name)
+                exchange_id = curs.add_exchange(router_address, ex_name, 2500)
                 for pool in exchange["pools"]:
                     token0 = pool["token0"]
                     token1 = pool["token1"]

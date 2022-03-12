@@ -9,9 +9,9 @@ namespace model {
 
 void PathEvalutionConstraints::check_consistency() const
 {
-//    if (c.initial_token_wei_balance <= 0)
+//    if (c.initial_balance <= 0)
 //    {
-//        throw ContraintConsistencyError("initial_token_wei_balance must be > 0")
+//        throw ContraintConsistencyError("initial_balance must be > 0")
 //    }
 //    if (c.max_lp_reserves_stress > 0)
 //    {

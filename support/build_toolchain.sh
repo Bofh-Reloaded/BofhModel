@@ -86,3 +86,6 @@ npm install -g npm@${NPM_VERSION}
 # Install Ganache and RemixD
 npm install -g @remix-project/remixd
 npm install ganache -g
+
+# Install Hardhat
+npm install -g hardhat

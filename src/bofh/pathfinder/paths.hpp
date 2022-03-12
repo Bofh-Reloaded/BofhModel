@@ -57,11 +57,16 @@ struct PathResult {
     // some reference data can be externally attached here:
     model::datatag_t tag;
     std::string calldata;
-    typedef std::vector<model::balance_t> pool_reserves_t;
+    model::balance_t expectedAmount;
+    typedef std::array<model::balance_t, MAX_PATHS*2> pool_reserves_t;
     std::shared_ptr<pool_reserves_t> pool_reserves;
-    const model::balance_t pool_reserve(unsigned idx, unsigned reserve0_or_1) const;
+    model::balance_t pool_reserve(unsigned idx, unsigned reserve0_or_1) const;
     void set_pool_reserve(unsigned idx, unsigned reserve0_or_1, const model::balance_t &val);
+    model::balance_t pool_token_reserve(unsigned idx, const model::Token *t) const;
+    std::string get_calldata(bool deflationary=false) const;
+    std::string get_description() const;
 };
+
 typedef std::vector<PathResult> PathResultList;
 
 std::ostream& operator<< (std::ostream& stream, const Path& o);
@@ -139,6 +144,8 @@ struct Path: std::array<const OperableSwap *, MAX_PATHS>
     bool check_consistency(bool no_except=false) const;
 
     PathResult evaluate(const PathEvalutionConstraints &
+                        , bool observe_predicted_state=false) const;
+    PathResult evaluate2(const PathEvalutionConstraints &
                         , bool observe_predicted_state=false) const;
 };
 

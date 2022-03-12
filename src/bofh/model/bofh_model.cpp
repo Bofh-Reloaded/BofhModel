@@ -4,10 +4,12 @@
 #include "../pathfinder/swaps_idx.hpp"
 #include "../pathfinder/paths.hpp"
 #include "../pathfinder/finder_3way.hpp"
+#if !defined(NOPYTHON) || !NOPYTHON
 #include <boost/python/extract.hpp>
 #include <boost/python/str.hpp>
 #include <boost/python/import.hpp>
 #include <boost/stacktrace.hpp>
+#endif
 #include <sstream>
 #include <exception>
 #include <assert.h>
@@ -19,6 +21,7 @@ namespace model {
 using namespace idx;
 using namespace pathfinder::idx;
 
+#if !defined(NOPYTHON) || !NOPYTHON
 static std::string m_parse_python_exception()
 {
     namespace py = boost::python;
@@ -85,6 +88,7 @@ static ResType m_call_cb(const boost::python::object &cb, const T &arg)
     }
     return nullptr;
 }
+#endif
 
 
 struct bad_argument: public std::runtime_error
@@ -98,14 +102,71 @@ int OperableSwap::feesPPM() const
     return pool->feesPPM();
 }
 
+bool OperableSwap::hasFees() const
+{
+    return pool->hasFees();
+}
+
+Token::Token(datatag_t tag_
+      , const address_t &address_
+      , TheGraph *parent_
+      , const string &name_
+      , const std::string &symbol_
+      , unsigned int decimals_
+      , bool is_stable_
+      , int feesPPM)
+    : Entity(TYPE_TOKEN, tag_, address_, parent_)
+    , name(name_)
+    , is_stable(is_stable_)
+    , symbol(symbol_)
+    , decimals(decimals_)
+    , m_feesPPM(feesPPM)
+{ }
+
+double Token::fromWei(const balance_t &b) const
+{
+    return b.convert_to<double>() / std::pow(10, decimals);
+}
+
+balance_t Token::toWei(double amount) const
+{
+    return balance_t(amount * std::pow(10, decimals));
+}
+
+int Token::feesPPM() const
+{
+    return m_feesPPM;
+}
+
+bool Token::hasFees() const
+{
+    return m_feesPPM != 0;
+}
+
+void Token::set_feesPPM(int val)
+{
+    m_feesPPM = val;
+}
+
+balance_t Token::transferResult(const balance_t &amount) const
+{
+    if (m_feesPPM == 0)
+    {
+        return amount;
+    }
+    return (amount * (1000000-m_feesPPM))/1000000;
+}
+
+
 
 Exchange::Exchange(datatag_t tag_
                    , const address_t &address_
                    , TheGraph *parent_
-                   , const string &name_)
+                   , const string &name_, int feesPPM_)
     : Entity(TYPE_EXCHANGE, tag_, address_, parent_)
     , name(name_)
     , estimator(new amm::EstimatorWithProportionalFees)
+    , m_feesPPM(feesPPM_)
 {}
 
 const balance_t LiquidityPool::getReserve(const Token *token) const noexcept
@@ -119,6 +180,7 @@ LiquidityPool::reserves_ref LiquidityPool::getReserves() const noexcept
 {
     if (!reserves_set)
     {
+#if !defined(NOPYTHON) || !NOPYTHON
         auto &cb = parent->m_fetch_lp_reserves_tag_cb;
         if (cb) try
         {
@@ -127,6 +189,7 @@ LiquidityPool::reserves_ref LiquidityPool::getReserves() const noexcept
         catch(boost::python::error_already_set const &){
             std::cout << "Error in Python: " << m_parse_python_exception() << std::endl;
         }
+#endif
     }
 
     return reserves_ref{reserves_set, reserve0, reserve1};
@@ -160,20 +223,23 @@ balance_t LiquidityPool::SwapExactTokensForTokens(const Token *tokenSent, const 
     return exchange->estimator->SwapExactTokensForTokens(this, tokenSent, sentAmount);
 }
 
-/**
- * @brief accrued fees (parts per million). <0 means rebate
- */
 int LiquidityPool::feesPPM() const
 {
-    assert(exchange != NULL);
-    if (exchange->estimator != nullptr) try
+    if (m_feesPPM != 0)
     {
-        amm::EstimatorWithProportionalFees &eppf = dynamic_cast<amm::EstimatorWithProportionalFees&>(*exchange->estimator);
-        return eppf.feesPPM();
-    } catch (std::bad_cast) {
-        // carry on
+        return m_feesPPM;
     }
-    return 0;
+    return exchange->feesPPM();
+}
+
+bool LiquidityPool::hasFees() const
+{
+    return exchange->hasFees() || (m_feesPPM != 0);
+}
+
+void LiquidityPool::set_feesPPM(int val)
+{
+    m_feesPPM = val;
 }
 
 
@@ -258,10 +324,10 @@ auto already_exists = [](const auto &i) { return !i.second; };
 const Exchange *TheGraph::add_exchange(datatag_t tag
                                        , const char *address
                                        , const string &name
-                                       )
+                                       , int feesPPM)
 {
     lock_guard_t lock_guard(m_update_mutex);
-    auto ptr = std::make_unique<Exchange>(tag, address, this, name);
+    auto ptr = std::make_unique<Exchange>(tag, address, this, name, feesPPM);
     auto item = entity_index->emplace(ptr.get());
     if (already_exists(item))
     {
@@ -283,6 +349,7 @@ const Exchange *TheGraph::lookup_exchange(datatag_t tag, bool fetch_if_missing)
 
     if (fetch_if_missing)
     {
+#if !defined(NOPYTHON) || !NOPYTHON
         auto &cb = m_fetch_exchange_tag_cb;
 
         if (res == nullptr && cb)
@@ -302,6 +369,7 @@ const Exchange *TheGraph::lookup_exchange(datatag_t tag, bool fetch_if_missing)
                             "Please post a callback with set_fetch_exchange_tag_cb()");
             }
         }
+#endif
     }
 
     return res;
@@ -344,7 +412,8 @@ const Token *TheGraph::add_token(datatag_t tag
                                  , const char *name
                                  , const char *symbol
                                  , unsigned int decimals
-                                 , bool is_stablecoin)
+                                 , bool is_stablecoin
+                                 , int feesPPM)
 {
     lock_guard_t lock_guard(m_update_mutex);
     auto ptr = std::make_unique<Token>(tag
@@ -353,7 +422,8 @@ const Token *TheGraph::add_token(datatag_t tag
                                        , name
                                        , symbol
                                        , decimals
-                                       , is_stablecoin);
+                                       , is_stablecoin
+                                       , feesPPM);
     auto item = entity_index->emplace(ptr.get());
     if (already_exists(item))
     {
@@ -362,7 +432,6 @@ const Token *TheGraph::add_token(datatag_t tag
     tokens_ctr++;
     return reinterpret_cast<Token*>(ptr.release());
 }
-
 
 const Token *TheGraph::lookup_token(const char *address)
 {
@@ -375,6 +444,7 @@ const Token *TheGraph::lookup_token(const char *address, bool fetch_if_missing)
 
     if (fetch_if_missing)
     {
+#if !defined(NOPYTHON) || !NOPYTHON
         auto &cb = m_fetch_token_addr_cb;
 
         if (res == nullptr && cb)
@@ -394,6 +464,7 @@ const Token *TheGraph::lookup_token(const char *address, bool fetch_if_missing)
                             "Please post a callback with set_fetch_token_addr_cb()");
             }
         }
+#endif
     }
 
     return res;
@@ -411,6 +482,7 @@ const Token *TheGraph::lookup_token(datatag_t tag, bool fetch_if_missing)
 
     if (fetch_if_missing)
     {
+#if !defined(NOPYTHON) || !NOPYTHON
         auto &cb = m_fetch_token_tag_cb;
 
         if (res == nullptr && cb)
@@ -430,6 +502,7 @@ const Token *TheGraph::lookup_token(datatag_t tag, bool fetch_if_missing)
                             "Please post a callback with set_fetch_token_tag_cb()");
             }
         }
+#endif
     }
 
     return res;
@@ -437,10 +510,11 @@ const Token *TheGraph::lookup_token(datatag_t tag, bool fetch_if_missing)
 
 
 const LiquidityPool *TheGraph::add_lp_ll(datatag_t tag
-                                      , const char *address
-                                      , const Exchange* exchange
-                                      , Token* token0
-                                      , Token* token1)
+                                         , const char *address
+                                         , const Exchange* exchange
+                                         , Token* token0
+                                         , Token* token1
+                                         , int feesPPM)
 {
     check_not_null_arg(exchange);
     check_not_null_arg(token0);
@@ -451,6 +525,7 @@ const LiquidityPool *TheGraph::add_lp_ll(datatag_t tag
                                                , exchange
                                                , token0
                                                , token1);
+    ptr->set_feesPPM(feesPPM);
     lock_guard_t lock_guard(m_update_mutex);
 
     auto item = entity_index->emplace(ptr.get());
@@ -475,7 +550,8 @@ const LiquidityPool *TheGraph::add_lp(datatag_t tag
                                       , const char *address
                                       , datatag_t exchange_
                                       , datatag_t token0_
-                                      , datatag_t token1_)
+                                      , datatag_t token1_
+                                      , int feesPPM)
 {
     auto exchange = lookup_exchange(exchange_);
     auto token0 = const_cast<Token*>(lookup_token(token0_));
@@ -484,7 +560,7 @@ const LiquidityPool *TheGraph::add_lp(datatag_t tag
     {
         return nullptr;
     }
-    return add_lp_ll(tag, address, exchange, token0, token1);
+    return add_lp_ll(tag, address, exchange, token0, token1, feesPPM);
 }
 
 
@@ -509,6 +585,7 @@ const LiquidityPool *TheGraph::lookup_lp(const address_t &address, bool fetch_if
 
     if (fetch_if_missing)
     {
+#if !defined(NOPYTHON) || !NOPYTHON
         auto &cb = m_fetch_lp_addr_cb;
 
         if (res == nullptr && cb)
@@ -528,6 +605,7 @@ const LiquidityPool *TheGraph::lookup_lp(const address_t &address, bool fetch_if
                             "Please post a callback with set_fetch_lp_addr_cb()");
             }
         }
+#endif
     }
 
     return res;
@@ -580,6 +658,7 @@ const LiquidityPool *TheGraph::lookup_lp(datatag_t tag, bool fetch_if_missing)
 
     if (fetch_if_missing)
     {
+#if !defined(NOPYTHON) || !NOPYTHON
         auto &cb = m_fetch_lp_tag_cb;
 
         if (res == nullptr && cb)
@@ -599,6 +678,7 @@ const LiquidityPool *TheGraph::lookup_lp(datatag_t tag, bool fetch_if_missing)
                             "Please post a callback with set_fetch_lp_tag_cb()");
             }
         }
+#endif
     }
 
     return res;
@@ -663,15 +743,15 @@ static void check_constrants_consistency(TheGraph *g, const PathEvalutionConstra
     }
     log_debug("evaluate_known_paths() seach of swap opportunities starting");
     log_debug(" \\__ start_token is %1% (%2%)", g->start_token->symbol, g->start_token->address);
-    if (c.initial_token_wei_balance > 0)
+    if (c.initial_balance > 0)
     {
-        log_debug(" \\__ initial_token_wei_balance is %1% (%2% Weis)"
-                  , g->start_token->fromWei(c.initial_token_wei_balance)
-                  , c.initial_token_wei_balance);
+        log_debug(" \\__ initial_balance is %1% (%2% Weis)"
+                  , g->start_token->fromWei(c.initial_balance)
+                  , c.initial_balance);
     }
     else {
         log_debug(" \\__ no balance provided. Please set "
-                  "initial_token_wei_balance to a meaningful Wei amount of start_token (%1%)"
+                  "initial_balance to a meaningful Wei amount of start_token (%1%)"
                   , g->start_token->symbol);
         return;
     }
@@ -760,13 +840,39 @@ TheGraph::PathResultList TheGraph::debug_evaluate_known_paths(const PathEvalutio
     {
         // @note: loop body is a try block
 
-        auto r = evaluate_path(c, i.second, false);
-        if (r.failed) continue;
-        assert(r.final_token() != nullptr);
+        auto attack_plan = evaluate_path(c, i.second, false);
+        if (attack_plan.failed) continue;
+        assert(attack_plan.final_token() != nullptr);
+
+        if (c.convenience_min_threshold >= 0 &&
+            attack_plan.yield_ratio() < c.convenience_min_threshold)
+        {
+            throw ConstraintViolation();
+        }
+
+        if (c.convenience_max_threshold >= 0 &&
+            attack_plan.yield_ratio() > c.convenience_max_threshold)
+        {
+            throw ConstraintViolation();
+        }
+
+        if (c.min_profit_target_amount > 0)
+        {
+            if (attack_plan.final_balance() <= attack_plan.initial_balance())
+            {
+                throw ConstraintViolation();
+            }
+            auto gain = attack_plan.final_balance() - attack_plan.initial_balance();
+            if (gain < c.min_profit_target_amount)
+            {
+                throw ConstraintViolation();
+            }
+        }
+
 
         matches++;
-        print_swap_candidate(this, c, i.second, r);
-        res.emplace_back(r);
+        //print_swap_candidate(this, c, i.second, attack_plan);
+        res.emplace_back(attack_plan);
 
         if (c.match_limit > 0 && matches >= c.match_limit)
         {
@@ -803,7 +909,7 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
                                              , bool observe_predicted_state) const
 {
     assert(path != nullptr);
-    auto result = path->evaluate(c);
+    auto result = path->evaluate2(c);
 
     if (!result.failed)
     {
@@ -869,11 +975,35 @@ TheGraph::PathResultList TheGraph::evaluate_paths_of_interest(const PathEvalutio
         {
             try {
                 const pathfinder::Path *path = i->second;
-                auto r = evaluate_path(c, path, observe_predicted_state);
-                if (r.failed) continue;
-                assert(r.final_token() != nullptr);
-                print_swap_candidate(this, c, path, r);
-                res.emplace_back(r);
+                auto attack_plan = evaluate_path(c, path, observe_predicted_state);
+                if (attack_plan.failed) continue;
+                assert(attack_plan.final_token() != nullptr);
+
+                if (c.convenience_min_threshold >= 0 &&
+                    attack_plan.yield_ratio() < c.convenience_min_threshold)
+                {
+                    throw ConstraintViolation();
+                }
+
+                if (c.convenience_max_threshold >= 0 &&
+                    attack_plan.yield_ratio() > c.convenience_max_threshold)
+                {
+                    throw ConstraintViolation();
+                }
+                if (c.min_profit_target_amount > 0)
+                {
+                    if (attack_plan.final_balance() <= attack_plan.initial_balance())
+                    {
+                        throw ConstraintViolation();
+                    }
+                    auto gain = attack_plan.final_balance() - attack_plan.initial_balance();
+                    if (gain < c.min_profit_target_amount)
+                    {
+                        throw ConstraintViolation();
+                    }
+                }
+                //print_swap_candidate(this, c, path, attack_plan);
+                res.emplace_back(attack_plan);
             } catch (ConstraintViolation&) { continue; }
 
         }
@@ -900,9 +1030,8 @@ const TheGraph::Path *TheGraph::lookup_path(std::size_t id, bool fetch_if_missin
 
     if (fetch_if_missing)
     {
+#if !defined(NOPYTHON) || !NOPYTHON
         auto &cb = m_fetch_path_tag_cb;
-
-
 
         if (cb)
         {
@@ -928,6 +1057,7 @@ const TheGraph::Path *TheGraph::lookup_path(std::size_t id, bool fetch_if_missin
                             "Please post a callback with set_fetch_path_tag_cb()");
             }
         }
+#endif
     }
 
     return res;
@@ -1026,6 +1156,7 @@ const TheGraph::Path *TheGraph::add_path(datatag_t p0
                     );
 }
 
+#if !defined(NOPYTHON) || !NOPYTHON
 void TheGraph::set_fetch_exchange_tag_cb(boost::python::object cb)    { m_fetch_exchange_tag_cb = cb; }
 void TheGraph::set_fetch_token_tag_cb(boost::python::object cb)       { m_fetch_token_tag_cb = cb; }
 void TheGraph::set_fetch_lp_tag_cb(boost::python::object cb)          { m_fetch_lp_tag_cb = cb; }
@@ -1033,6 +1164,7 @@ void TheGraph::set_fetch_lp_reserves_tag_cb(boost::python::object cb) { m_fetch_
 void TheGraph::set_fetch_path_tag_cb(boost::python::object cb)        { m_fetch_path_tag_cb = cb; }
 void TheGraph::set_fetch_token_addr_cb(boost::python::object cb)      { m_fetch_token_addr_cb = cb; }
 void TheGraph::set_fetch_lp_addr_cb(boost::python::object cb)         { m_fetch_lp_addr_cb = cb; }
+#endif
 
 std::size_t TheGraph::exchanges_count() const
 {

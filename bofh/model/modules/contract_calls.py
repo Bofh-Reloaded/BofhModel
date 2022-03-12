@@ -1,3 +1,4 @@
+from asyncio import get_event_loop
 from functools import lru_cache
 from os.path import join, dirname, realpath
 
@@ -11,6 +12,7 @@ from web3.exceptions import ContractLogicError
 
 from bofh.utils.solidity import get_abi, find_contract, add_solidity_search_path
 from bofh.utils.web3 import Web3Connector
+from jsonrpc_websocket import Server
 
 log = Loggers.contract_activation
 
@@ -20,6 +22,7 @@ add_solidity_search_path(join(dirname(dirname(dirname(dirname(realpath(__file__)
 class ContractCalling:
     def __init__(self, args):
         self.__args = args
+        self.__io_loop = get_event_loop()
 
     @property
     def w3(self):
@@ -28,6 +31,15 @@ class ContractCalling:
         except AttributeError:
             self.__w3 = Web3Connector.get_connection(self.__args.web3_rpc_url)
         return self.__w3
+
+    @property
+    def jsonrpc_conn(self):
+        try:
+            res = self.__jsonrpc_conn
+        except AttributeError:
+            self.__jsonrpc_conn = res = Server(self.__args.web3_rpc_url)
+        self.__io_loop.run_until_complete(res.ws_connect())
+        return res
 
     @lru_cache
     def get_contract(self, address=None, abi=None):
@@ -43,7 +55,7 @@ class ContractCalling:
     def getTokenBalance(self, address, token):
         if hasattr(token, "address"):
             token = token.address
-        token = to_checksum_address(token)
+        token = to_checksum_address(str(token))
         address = to_checksum_address(address)
         return self.call(function_name="balanceOf"
                          , from_address=None
@@ -57,9 +69,9 @@ class ContractCalling:
         self.w3.geth.personal.unlock_account(address, password, timeout)
 
     def transact(self, function_name, from_address, to_address, abi=None, call_args=None, gas=None) -> HexBytes:
-        to_address = to_checksum_address(to_address)
+        to_address = to_checksum_address(str(to_address))
         if from_address:
-            from_address = to_checksum_address(from_address)
+            from_address = to_checksum_address(str(from_address))
             d_from = {"from": from_address}
         else:
             d_from = {}
@@ -72,9 +84,9 @@ class ContractCalling:
         return callable(*call_args).transact(d_from)
 
     def estimate_gas(self, function_name, from_address, to_address, abi=None, call_args=None) -> int:
-        to_address = to_checksum_address(to_address)
+        to_address = to_checksum_address(str(to_address))
         if from_address:
-            from_address = to_checksum_address(from_address)
+            from_address = to_checksum_address(str(from_address))
             d_from = {"from": from_address}
         else:
             d_from = {}
@@ -96,9 +108,9 @@ class ContractCalling:
         return contract_instance.encodeABI(function_name, call_args)
 
     def call(self, function_name, from_address, to_address, abi=None, call_args=None):
-        to_address = to_checksum_address(to_address)
+        to_address = to_checksum_address(str(to_address))
         if from_address:
-            from_address = to_checksum_address(from_address)
+            from_address = to_checksum_address(str(from_address))
             d_from = {"from": from_address}
         else:
             d_from = {}
@@ -107,6 +119,12 @@ class ContractCalling:
         contract_instance = self.get_contract(address=to_address, abi=abi)
         callable = getattr(contract_instance.functions, function_name)
         return callable(*call_args).call(d_from)
+
+    def call_ll(self, from_address, to_address, calldata):
+        conn = self.jsonrpc_conn
+        f = conn.eth_estimateGas({"from":from_address, "to":to_address, "data":calldata}, "latest")
+        return self.__io_loop.run_until_complete(f)
+
 
     def _call(self, name, *args, address=None, abi=None):
         contract_instance = self.get_contract(address=address, abi=abi)

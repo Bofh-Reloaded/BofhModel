@@ -26,7 +26,7 @@ namespace amm {
 static balance_t getAmountOut(const balance_t &amountIn
                               , const balance_t &reserveIn
                               , const balance_t &reserveOut
-                              , unsigned int feePPM = 0)
+                              , int feePPM = 0)
 {
     if (amountIn <= 0)
     {
@@ -49,7 +49,7 @@ static balance_t getAmountOut(const balance_t &amountIn
 static balance_t getAmountIn(const balance_t &amountOut
                               , const balance_t &reserveIn
                               , const balance_t &reserveOut
-                              , unsigned int feePPM = 0)
+                              , int feePPM = 0)
 {
     if (amountOut <= 0)
     {
@@ -95,7 +95,7 @@ balance_t EstimatorWithProportionalFees::SwapTokensForExactTokens(const Liquidit
     return getAmountIn(boughtAmount
                        , boughtToken == pool->token0 ? reserve1 : reserve0
                        , boughtToken == pool->token0 ? reserve0 : reserve1
-                       , feesPPM());
+                       , pool->feesPPM());
 }
 
 balance_t EstimatorWithProportionalFees::SwapExactTokensForTokens(const LiquidityPool *pool, const Token *soldToken, const balance_t &soldAmount) const
@@ -113,7 +113,7 @@ balance_t EstimatorWithProportionalFees::SwapExactTokensForTokens(const Liquidit
     return getAmountOut(soldAmount
                         , soldToken == pool->token0 ? reserve0 : reserve1
                         , soldToken == pool->token0 ? reserve1 : reserve0
-                        , feesPPM());
+                        , pool->feesPPM());
 }
 
 

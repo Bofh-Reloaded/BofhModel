@@ -1,35 +1,27 @@
-from threading import Lock
-from time import strftime, gmtime
-
 from eth_utils import to_checksum_address
 from tabulate import tabulate
-from web3.types import TxReceipt
-
-from bofh.model.modules.cached_entities import CachedEntities
-from bofh.model.modules.constants import ENV_SWAP_CONTRACT_ADDRESS, ENV_BOFH_WALLET_ADDRESS, \
-    ENV_BOFH_WALLET_PASSWD, START_TOKEN
+from bofh.model.modules.graph import TheGraph
 from bofh.model.modules.contract_calls import ContractCalling
-from bofh.model.modules.loggers import Loggers
-from bofh.utils.web3 import Web3Connector, JSONRPCConnector
-
 from dataclasses import dataclass, fields, MISSING
 from logging import basicConfig, Filter, getLogger
 
-from bofh.model.database import ModelDB, StatusScopedCursor, Intervention
+from bofh.model.database import ModelDB, StatusScopedCursor
+from bofh.utils.config_data import BOFH_STATUS_DB_DSN, BOFH_WEB3_RPC_URL, BOFH_CONTRACT_ADDRESS, BOFH_WALLET_ADDRESS, \
+    BOFH_WALLET_PASSWD, BOFH_START_TOKEN_ADDRESS
 
 
 @dataclass
 class Args:
-    status_db_dsn: str = "sqlite3://status.db"
+    status_db_dsn: str = BOFH_STATUS_DB_DSN
     verbose: bool = False
-    web3_rpc_url: str = None
-    contract_address: str = ENV_SWAP_CONTRACT_ADDRESS
-    wallet_address: str = ENV_BOFH_WALLET_ADDRESS
-    wallet_password: str = ENV_BOFH_WALLET_PASSWD
+    web3_rpc_url: str = BOFH_WEB3_RPC_URL
+    contract_address: str = BOFH_CONTRACT_ADDRESS
+    wallet_address: str = BOFH_WALLET_ADDRESS
+    wallet_password: str = BOFH_WALLET_PASSWD
     logfile: str = None
     loglevel_database: str = "INFO"
     loglevel_contract_activation: str = "INFO"
-    token: str = START_TOKEN
+    token: str = BOFH_START_TOKEN_ADDRESS
     status: bool = True
     increase_funding: int = None
     reclaim: bool = True
@@ -37,14 +29,6 @@ class Args:
     dry_run: bool = False
     weis: bool = False
     yes: bool = False
-
-    DB_CACHED_PARAMETERS = {
-        # List of parameters which are also stored in DB in a stateful manner
-        "web3_rpc_url",
-        "contract_address",
-        "wallet_address",
-        "wallet_password",
-    }
 
     @staticmethod
     def default(arg, d, suppress_list=None):
@@ -69,34 +53,6 @@ class Args:
                 arg = field.type(arg)
             kw[field.name] = arg
         return cls(**kw)
-
-    def sync_db(self, db):
-        self.db = db
-        with self.db as curs:
-            for fn in self.DB_CACHED_PARAMETERS:
-                field = self.__dataclass_fields__[fn]
-                curval = super(Args, self).__getattribute__(fn)
-                if curval is None:
-                    dbval = curs.get_meta(fn, field.default, cast=field.type)
-                    super(Args, self).__setattr__(fn, dbval)
-                else:
-                    curs.set_meta(fn, curval, cast=field.type)
-
-    def __setattr__(self, key, value):
-        if key.startswith("loglevel_"):
-            ln = key[9:]
-            logger = getattr(Loggers, ln, None)
-            if logger:
-                value = str(value).upper()
-                logger.setLevel(value)
-        super(Args, self).__setattr__(key, value)
-        if key not in self.DB_CACHED_PARAMETERS:
-            return
-        db = getattr(self, "db", None)
-        if not db:
-            return
-        with db as curs:
-            curs.set_meta(key, value)
 
 
 __doc__ = f"""Manage on-contract token funding.
@@ -147,13 +103,13 @@ def prompt(args: Args, msg):
         raise ManagedAbort("Bailing out due to user choice")
 
 
-class Funding(ContractCalling, CachedEntities):
+class Funding(ContractCalling, TheGraph):
     def __init__(self, args: Args):
         self.args = args
         self.db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=self.args.status_db_dsn)
         self.db.open_and_priming()
-        self.args.sync_db(self.db)
-        CachedEntities.__init__(self, self.db)
+        ContractCalling.__init__(self, self.args)
+        TheGraph.__init__(self, self.db)
 
     def __call__(self, *args, **kwargs):
         try:
@@ -172,38 +128,39 @@ class Funding(ContractCalling, CachedEntities):
 
     def increase_funding(self, amount):
         assert amount > 0
-        token = self.get_token(self.args.token)
+        token = self.graph.lookup_token(self.args.token)
         c_address = to_checksum_address(self.args.contract_address)
         w_address = to_checksum_address(self.args.wallet_address)
         c_balance = self.getTokenBalance(c_address, token)
         w_balance = self.getTokenBalance(w_address, token)
         hc = self.amount_hr(c_balance, token)
         hw = self.amount_hr(w_balance, token)
-        log.info(f"wallet   {w_address} has {hw} {token.get_symbol()}")
-        log.info(f"contract {c_address} has {hc} {token.get_symbol()}")
+        log.info(f"wallet   {w_address} has {hw} {token.symbol}")
+        log.info(f"contract {c_address} has {hc} {token.symbol}")
         hr = self.amount_hr(amount, token)
         if w_balance < amount:
-            log.error(f"wallet balance of {hw} {token.get_symbol()} ({w_balance}) "
-                      f"is not enough to cover trasfer of {hr} ({amount}) {token.get_symbol()}")
+            log.error(f"wallet balance of {hw} {token.symbol} ({w_balance}) "
+                      f"is not enough to cover trasfer of {hr} ({amount}) {token.symbol}")
             raise ManagedAbort("not enough wallet funds")
         log.debug("performing preflight check of transfer transaction...")
+        log.info("unlocking wallet...")
+        self.unlock_wallet(w_address, self.args.wallet_password)
         calls = [
             dict(function_name="approve"
                   , from_address=w_address
                   , to_address=token.address
                   , abi="IGenericFungibleToken"
                   , call_args=(c_address, amount))
-            ,
-            dict(function_name="adoptAllowance"
+            , dict(function_name="adoptAllowance"
                   , from_address=w_address
                   , to_address=c_address)
         ]
         for c in calls:
-            self.call(**c)
+            print(self.call(**c))
         log.debug("preflight check passed")
 
-        log.info("this transfer would move %0.4f%% of current wallet %s balance to the contract", (amount/w_balance)*100, token.get_symbol())
-        prompt(self.args, f"Move {hr} ({amount}) {token.get_symbol()} from wallet to contract address at {c_address}?")
+        log.info("this transfer would move %0.4f%% of current wallet %s balance to the contract", (amount/w_balance)*100, token.symbol)
+        prompt(self.args, f"Move {hr} ({amount}) {token.symbol} from wallet to contract address at {c_address}?")
         log.info("unlocking wallet...")
         self.unlock_wallet(w_address, self.args.wallet_password)
         log.info(f"calling {token.address}.approve({c_address}, {amount}) ...")
@@ -215,7 +172,7 @@ class Funding(ContractCalling, CachedEntities):
         log.info("transfer completed successfully :-)")
 
     def reclaim(self):
-        token = self.get_token(self.args.token)
+        token = self.graph.lookup_token(self.args.token)
         c_address = to_checksum_address(self.args.contract_address)
         token_balance = self.getTokenBalance(c_address, token)
         ht_tok = self.amount_hr(token_balance, token)
@@ -223,8 +180,8 @@ class Funding(ContractCalling, CachedEntities):
         weis = ""
         if self.args.weis:
             weis = f" ({token_balance} weis)"
-        log.info(f"contract {c_address} is currently storing {ht_tok} {token.get_symbol()}{weis}")
-        prompt(self.args, f"Reclaim {ht_tok} {token.get_symbol()}{weis}? "
+        log.info(f"contract {c_address} is currently storing {ht_tok} {token.symbol}{weis}")
+        prompt(self.args, f"Reclaim {ht_tok} {token.symbol}{weis}? "
                           f"(Funds will be transferred to the contract's admin address)")
         self.unlock_wallet(w_address, self.args.wallet_password)
         receipt = self.transact_and_wait(function_name="withdrawFunds"
@@ -233,7 +190,8 @@ class Funding(ContractCalling, CachedEntities):
         log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"].hex())
 
     def status(self):
-        token = self.get_token(self.args.token)
+        token = self.graph.lookup_token(self.args.token)
+        print(self.args.token, token)
         address = self.args.contract_address
         coin_balance = self.getCoinBalance(address)
         token_balance = self.getTokenBalance(address, token)
@@ -248,7 +206,7 @@ class Funding(ContractCalling, CachedEntities):
         if self.args.weis:
             line.append(coin_balance)
         data.append(line)
-        line = ["contract", address, ht_tok, token.get_symbol()]
+        line = ["contract", address, ht_tok, token.symbol]
         if self.args.weis:
             line.append(token_balance)
         data.append(line)
@@ -263,7 +221,7 @@ class Funding(ContractCalling, CachedEntities):
         if self.args.weis:
             line.append(coin_balance)
         data.append(line)
-        line = ["wallet", address, ht_tok, token.get_symbol()]
+        line = ["wallet", address, ht_tok, token.symbol]
         if self.args.weis:
             line.append(token_balance)
         data.append(line)
@@ -271,7 +229,7 @@ class Funding(ContractCalling, CachedEntities):
         print(tabulate(data, headers=headers))
 
     def selfdestruct(self):
-        token = self.get_token(self.args.token)
+        token = self.graph.lookup_token(self.args.token)
         c_address = to_checksum_address(self.args.contract_address)
         token_balance = self.getTokenBalance(c_address, token)
         ht_tok = self.amount_hr(token_balance, token)
@@ -279,7 +237,7 @@ class Funding(ContractCalling, CachedEntities):
         weis = ""
         if self.args.weis:
             weis = f" ({token_balance} weis)"
-        log.info(f"contract {c_address} is currently storing {ht_tok} {token.get_symbol()}{weis}")
+        log.info(f"contract {c_address} is currently storing {ht_tok} {token.symbol}{weis}")
         prompt(self.args, f"Call selfdestruct on contract {c_address}? "
                           f"(Funds will be transferred to the contract's admin address)")
         self.unlock_wallet(w_address, self.args.wallet_password)
@@ -288,11 +246,15 @@ class Funding(ContractCalling, CachedEntities):
                                          , to_address=c_address)
         log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"].hex())
 
-
     def amount_hr(self, amount, token=None):
         if token is None:
             return "%0.4f" % (amount / (10**18))
         return "%0.4f" % token.fromWei(amount)
+
+    @property
+    def coin_name(self):
+        return "BNB"
+
 
 
 def main():

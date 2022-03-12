@@ -26,7 +26,7 @@ def import_pools_and_tokens_from_json_coso(exchange_name, router_address, filepa
         data = json.load(fd)
     known_tokens = dict()  # address -> int(id)
     with db as curs:
-        exchange_id = curs.add_exchange(router_address, exchange_name, ignore_duplicates=True)
+        exchange_id = curs.add_exchange(router_address, exchange_name, 2500, ignore_duplicates=True)
         for pool in data:
             token0 = pool["Token0"]
             token1 = pool["Token1"]

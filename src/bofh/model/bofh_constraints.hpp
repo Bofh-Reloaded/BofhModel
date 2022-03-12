@@ -20,7 +20,7 @@ struct ContraintConsistencyError: std::runtime_error
  */
 struct PathEvalutionConstraints {
     /**
-     * @brief initial_token_wei_balance
+     * @brief initial_balance
      *
      * specifies the balance amount of start_token
      * weis that whole path MUST be able to handle
@@ -29,7 +29,32 @@ struct PathEvalutionConstraints {
      *
      * @default 0 (no constraint)
      */
-    balance_t initial_token_wei_balance = 0;
+    balance_t initial_balance = 0;
+
+    /**
+     * @brief initial_balance_min
+     *
+     * Initial balance amount, used to define a [min, max] range
+     * of study to determine the optimal swap amount.
+     *
+     * @default 0 (no constraint)
+     */
+    balance_t initial_balance_min = 0;
+
+    /**
+     * @brief initial_balance_min
+     *
+     * Initial balance amount, used to define a [min, max] range
+     * of study to determine the optimal swap amount.
+     *
+     * @default 0 (no constraint)
+     */
+    balance_t initial_balance_max = 0;
+
+    /**
+     * @brief optimal_amount_search_sections
+     */
+    unsigned int optimal_amount_search_sections = 1000;
 
     /**
      * @brief max_lp_reserves_stress
@@ -56,7 +81,7 @@ struct PathEvalutionConstraints {
      *
      * @default 1.0 (break-even or gain only)
      */
-    double convenience_min_threshold=1.0f;
+    double convenience_min_threshold=-1;
 
     /**
      * @brief convenience_max_threshold
@@ -72,7 +97,18 @@ struct PathEvalutionConstraints {
      *
      * @default: 2.0 (or 200% gain, which is way over the top)
      */
-    double convenience_max_threshold=2.0f;
+    double convenience_max_threshold=-1;
+
+    /**
+     * @brief min_profit_target_amount
+     *
+     * min profit target (gain) to achieve. Absolute value on top
+     * of break-event.
+     *
+     * @default 0 (no constraint)
+     */
+    balance_t min_profit_target_amount = 0;
+
 
     /**
      * @brief match limit

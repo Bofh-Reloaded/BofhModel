@@ -61,10 +61,10 @@ class ConstantPrediction:
         checkpoint = checkpointer(log.info, "constant_prediction checkpoint #{count}"
                                             ", uptime {elapsed_hr}"
                                             ", {events} events processed"
-                                            ", {interventions} potential attacks routes spotted")
+                                            ", {attacks} potential attacks routes spotted")
 
         events = 0
-        interventions = 0
+        attacks = 0
         blockNumber = 0
 
         try:
@@ -75,7 +75,7 @@ class ConstantPrediction:
                                                               , 0
                                                               , PREDICTION_LOG_TOPIC0_SYNC
                                                               , PREDICTION_LOG_TOPIC0_SWAP)
-                    checkpoint(events=events, interventions=interventions)
+                    checkpoint(events=events, attacks=attacks)
                     if result["blockNumber"] <= blockNumber:
                         continue
                     blockNumber = result["blockNumber"]
@@ -100,11 +100,11 @@ class ConstantPrediction:
 
                                 if constraint.match_limit and i >= constraint.match_limit:
                                     return
-                                new_entry = self.post_intervention_to_db(attack_plan=attack_plan
+                                new_entry = self.post_attack_to_db(attack_plan=attack_plan
                                                                          , contract=contract
                                                                          , origin="pred")
                                 if new_entry:
-                                    interventions += 1
+                                    attacks += 1
                                     self.execute_attack(attack_plan.tag)
                                 else:
                                     log.debug("match having path id %r is already in mute_cache. "
@@ -123,9 +123,9 @@ class ConstantPrediction:
             log.info("prediction polling loop terminated")
             await server.close()
 
-    def post_intervention_to_db(self, attack_plan, contract, origin):
+    def post_attack_to_db(self, attack_plan, contract, origin):
         with self.attacks_db as curs:
-            if curs.intervention_is_in_mute_cache(
+            if curs.attack_is_in_mute_cache(
                     attack_plan=attack_plan
                     , cache_deadline=self.args.attacks_mute_cache_deadline
                     , max_size=self.args.attacks_mute_cache_size):
@@ -137,9 +137,7 @@ class ConstantPrediction:
                 if x:
                     tx, txindex, blockNumber = x
                     break
-            payload = self.pack_payload_from_attack_plan(attack_plan)
-            attack_plan.calldata = str(contract.encodeABI("multiswap", payload))
-            curs.add_intervention(attack_plan
+            curs.add_attack(attack_plan
                                   , origin=origin
                                   , blockNr=blockNumber
                                   , origin_tx=tx

@@ -16,11 +16,14 @@
 #include "bofh_common.hpp"
 #include "bofh_model_fwd.hpp"
 #include "bofh_types.hpp"
+//#include "bofh_fees.hpp"
 #include "bofh_entity_idx_fwd.hpp"
 #include "bofh_constraints.hpp"
 #include "bofh_amm_estimation.hpp"
 #include <boost/noncopyable.hpp>
+#if !defined(NOPYTHON) || !NOPYTHON
 #include <boost/python/object.hpp>
+#endif
 #include <set>
 #include <memory>
 #include <mutex>
@@ -114,6 +117,7 @@ struct OperableSwap: boost::noncopyable, Ref<OperableSwap>
      * @brief accrued fees (parts per million). <0 means rebate
      */
     int feesPPM() const;
+    bool hasFees() const;
 };
 
 
@@ -139,22 +143,20 @@ struct Token: Entity, Ref<Token>
           , const string &name_
           , const std::string &symbol_
           , unsigned int decimals_
-          , bool is_stable_)
-        : Entity(TYPE_TOKEN, tag_, address_, parent_)
-        , name(name_)
-        , is_stable(is_stable_)
-        , symbol(symbol_)
-        , decimals(decimals_)
-    { }
+          , bool is_stable_
+          , int feesPPM);
 
-    double fromWei(const balance_t &b) const
-    {
-        return b.convert_to<double>() / std::pow(10, decimals);
-    }
+    double fromWei(const balance_t &b) const;
 
-    balance_t toWei(double amount) const {
-        return balance_t(amount * std::pow(10, decimals));
-    }
+    balance_t toWei(double amount) const;
+
+    int feesPPM() const;
+    bool hasFees() const;
+    void set_feesPPM(int val);
+
+    balance_t transferResult(const balance_t &amount) const;
+private:
+    int m_feesPPM = 0;
 };
 
 
@@ -171,9 +173,15 @@ struct Exchange: Entity, Ref<Exchange> {
     Exchange(datatag_t tag_
              , const address_t &address_
              , TheGraph *parent_
-             , const string &name_);
+             , const string &name_
+             , int feesPPM);
     Exchange(const Exchange &) = delete;
 
+    int feesPPM() const { return m_feesPPM; }
+    bool hasFees() const { return m_feesPPM != 0; }
+    void set_feesPPM(int val) { m_feesPPM = val; }
+private:
+    int m_feesPPM = 0;
 };
 
 
@@ -242,12 +250,12 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
      */
     balance_t SwapExactTokensForTokens(const Token *tokenSent, const balance_t &sentAmount) const;
 
-    /**
-     * @brief accrued fees (parts per million). <0 means rebate
-     */
     int feesPPM() const;
-
-
+    bool hasFees() const;
+    void set_feesPPM(int val);
+private:
+    int m_feesPPM = 0;
+public:
 
     struct LPPredictedState {
         std::unique_ptr<LiquidityPool> pool;
@@ -300,6 +308,7 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
     const Exchange *add_exchange(datatag_t tag
                                  , const char *address
                                  , const string &name
+                                 , int feesPPM
                                  );
 
     /**
@@ -325,7 +334,8 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
                            , const char *name
                            , const char *symbol
                            , unsigned int decimals
-                           , bool is_stablecoin);
+                           , bool is_stablecoin
+                           , int feesPPM);
 
     /**
      * @brief Introduce a new LP edge into the graph, if not existing. (low level)
@@ -338,10 +348,11 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
      * @return reference to the LP, or NULL in case of error
      */
     const LiquidityPool *add_lp_ll(datatag_t tag
-                                , const char *address
-                                , const Exchange* exchange
-                                , Token* token0
-                                , Token* token1);
+                                   , const char *address
+                                   , const Exchange* exchange
+                                   , Token* token0
+                                   , Token* token1
+                                   , int feesPPM);
     /**
      * @brief Introduce a new LP edge into the graph, if not existing.
      *
@@ -357,7 +368,8 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
                                 , const char *address
                                 , datatag_t exchange
                                 , datatag_t token0
-                                , datatag_t token1);
+                                , datatag_t token1
+                                , int feesPPM);
 
 
     /**
@@ -447,6 +459,7 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
                          , datatag_t p3);
 
 
+#if !defined(NOPYTHON) || !NOPYTHON
     void set_fetch_exchange_tag_cb(boost::python::object cb);
     void set_fetch_token_tag_cb(boost::python::object cb);
     void set_fetch_lp_tag_cb(boost::python::object cb);
@@ -462,6 +475,7 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
     boost::python::object m_fetch_path_tag_cb;
     boost::python::object m_fetch_token_addr_cb;
     boost::python::object m_fetch_lp_addr_cb;
+#endif
 
     std::size_t exchanges_ctr = 0;
     std::size_t tokens_ctr = 0;

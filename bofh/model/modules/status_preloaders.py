@@ -14,7 +14,9 @@ class EntitiesPreloader:
         self.pool_addresses = set()
         self.preload_exchanges()
         self.preload_tokens()
+        log.info("CIAOOO")
         start_token = self.graph.lookup_token(self.args.start_token_address)
+        log.info("CIAOOO")
         if not start_token:
             msg = "start_token not found: address %s is unknown or not of a token" % self.args.start_token_address
             log.error(msg)
@@ -65,7 +67,7 @@ class EntitiesPreloader:
                                               , on_same_line=True)
             with print_progress:
                 bad_pools = list()
-                for id, address, exchange_id, token0_id, token1_id in curs.list_pools():
+                for id, address, exchange_id, token0_id, token1_id, fees_ppm in curs.list_pools():
                     print_progress()
                     # t0 = self.graph.lookup_token(token0_id)
                     # t1 = self.graph.lookup_token(token1_id)
@@ -77,7 +79,8 @@ class EntitiesPreloader:
                     # exchange = self.graph.lookup_exchange(exchange_id)
                     # assert exchange is not None
                     # pool = self.graph.add_lp(id, address, exchange, t0, t1)
-                    pool = self.graph.add_lp(id, address, exchange_id, token0_id, token1_id)
+                    continue
+                    pool = self.graph.add_lp(id, address, exchange_id, token0_id, token1_id, fees_ppm)
                     if pool is None:
                         log.debug("integrity error: unable to load: id=%r, %r", id, address)
                         bad_pools.append([id])

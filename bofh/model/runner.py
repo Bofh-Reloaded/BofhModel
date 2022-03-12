@@ -9,8 +9,6 @@ from web3.exceptions import ContractLogicError
 
 from bofh.model.modules.graph import TheGraph
 from bofh.model.modules.constant_prediction import ConstantPrediction
-from bofh.model.modules.constants import START_TOKEN, ENV_SWAP_CONTRACT_ADDRESS, ENV_BOFH_WALLET_ADDRESS, \
-    ENV_BOFH_WALLET_PASSWD
 from bofh.model.modules.delayed_execution import DelayedExecutor
 from bofh.model.modules.event_listener import SyncEventRealtimeTracker
 from bofh.model.modules.loggers import Loggers
@@ -24,37 +22,41 @@ from bofh.utils.web3 import JSONRPCConnector
 from dataclasses import dataclass, fields, MISSING
 from logging import basicConfig, Filter, getLogger
 
-from bofh.model.database import ModelDB, StatusScopedCursor, Intervention
+from bofh.model.database import ModelDB, StatusScopedCursor, Attack
 from bofh_model_ext import log_level, log_register_sink, log_set_level, PathEvalutionConstraints
 
 # add bofh.contract/contracts to get_abi() seach path:
+from bofh.utils.config_data import BOFH_START_TOKEN_ADDRESS, BOFH_CONTRACT_ADDRESS, BOFH_WALLET_ADDRESS, \
+    BOFH_WALLET_PASSWD, BOFH_STATUS_DB_DSN, BOFH_REPORTS_DB_DSN, BOFH_ATTACKS_DB_DSN, BOFH_WEB3_RPC_URL, \
+    BOFH_MAX_WORKERS, BOFH_ATTACK_INITIAL_AMOUNT_MIN, BOFH_ATTACK_INITIAL_AMOUNT_MAX, BOFH_ATTACK_MIN_PROFIT_PPM, \
+    BOFH_ATTACK_MAX_PROFIT_PPM, BOFH_ATTACK_MIN_PROFIT_AMOUNT
 
 add_solidity_search_path(join(dirname(dirname(dirname(realpath(__file__)))), "bofh.contract", "contracts"))
 
 
 @dataclass
 class Args:
-    status_db_dsn: str = "sqlite3://status.db"
-    reports_db_dsn: str = "sqlite3://reports.db"
-    attacks_db_dsn: str = "sqlite3://attacks.db"
+    status_db_dsn: str = BOFH_STATUS_DB_DSN
+    reports_db_dsn: str = BOFH_REPORTS_DB_DSN
+    attacks_db_dsn: str = BOFH_ATTACKS_DB_DSN
     verbose: bool = False
-    web3_rpc_url: str = JSONRPCConnector.connection_uri()
-    max_workers: int = optimal_cpu_threads()
+    web3_rpc_url: str = BOFH_WEB3_RPC_URL
+    max_workers: int = BOFH_MAX_WORKERS
     chunk_size: int = 100
     pred_polling_interval: int = 1000
-    start_token_address: str = START_TOKEN
+    start_token_address: str = BOFH_START_TOKEN_ADDRESS
     max_reserves_snapshot_age_secs: int = 7200
     force_reuse_reserves_snapshot: bool = False
     do_not_update_reserves_from_chain: bool = False
-    contract_address: str = ENV_SWAP_CONTRACT_ADDRESS
-    wallet_address: str = ENV_BOFH_WALLET_ADDRESS
-    wallet_password: str = ENV_BOFH_WALLET_PASSWD
-    initial_amount_min: int = 0
-    initial_amount_max: int = 10**16
+    contract_address: str = BOFH_CONTRACT_ADDRESS
+    wallet_address: str = BOFH_WALLET_ADDRESS
+    wallet_password: str = BOFH_WALLET_PASSWD
+    initial_amount_min: int = BOFH_ATTACK_INITIAL_AMOUNT_MIN
+    initial_amount_max: int = BOFH_ATTACK_INITIAL_AMOUNT_MAX
     path_estimation_amount: int = 10**16
-    min_profit_target_ppm: int = 10000
-    max_profit_target_ppm: int = None
-    min_profit_target_amount: int = 0
+    min_profit_target_ppm: int = BOFH_ATTACK_MIN_PROFIT_PPM
+    max_profit_target_ppm: int = BOFH_ATTACK_MAX_PROFIT_PPM
+    min_profit_target_amount: int = BOFH_ATTACK_MIN_PROFIT_AMOUNT
     attacks_mute_cache_size: int = 0
     attacks_mute_cache_deadline: int = 3600
     dry_run: bool = False
@@ -69,26 +71,6 @@ class Args:
     loglevel_realtime_sync_events: str = "INFO"
     loglevel_constant_prediction: str = "INFO"
     loglevel_path_evaluation: str = "INFO"
-
-    DB_CACHED_PARAMETERS = {
-        # List of parameters which are also stored in DB in a stateful manner
-        "web3_rpc_url",
-        "start_token_address",
-        "pred_polling_interval",
-        "max_reserves_snapshot_age_secs",
-        "contract_address",
-        "wallet_address",
-        "wallet_password",
-        "initial_amount_min",
-        "initial_amount_max",
-        "path_estimation_amount",
-        "min_profit_target_ppm",
-        "max_profit_target_ppm",
-        "min_profit_target_amount",
-        "attacks_mute_cache_size",
-        "attacks_mute_cache_deadline",
-        "dry_run_delay",
-    }
 
     @staticmethod
     def default(arg, d, suppress_list=None):
@@ -105,7 +87,7 @@ class Args:
         for field in fields(cls):
             k = "--%s" % field.name
             arg = args.get(k)
-            if arg is None or arg:
+            if arg is None:
                 arg = field.default
                 if arg is MISSING:
                     raise RuntimeError("missing command line parameter: %s" % k)
@@ -113,34 +95,6 @@ class Args:
                 arg = field.type(arg)
             kw[field.name] = arg
         return cls(**kw)
-
-    def sync_db(self, db):
-        self.db = db
-        with self.db as curs:
-            for fn in self.DB_CACHED_PARAMETERS:
-                field = self.__dataclass_fields__[fn]
-                curval = super(Args, self).__getattribute__(fn)
-                if curval is None or curval == field.default:
-                    dbval = curs.get_meta(fn, field.default, cast=field.type)
-                    super(Args, self).__setattr__(fn, dbval)
-                else:
-                    curs.set_meta(fn, curval, cast=field.type)
-
-    def __setattr__(self, key, value):
-        if key.startswith("loglevel_"):
-            ln = key[9:]
-            logger = getattr(Loggers, ln, None)
-            if logger:
-                value = str(value).upper()
-                logger.setLevel(value)
-        super(Args, self).__setattr__(key, value)
-        if key not in self.DB_CACHED_PARAMETERS:
-            return
-        db = getattr(self, "db", None)
-        if not db:
-            return
-        with db as curs:
-            curs.set_meta(key, value)
 
 
 __doc__=f"""Start model runner.
@@ -161,15 +115,15 @@ Options:
   --max_reserves_snapshot_age_secs=<s>      max age of usable LP reserves DB snapshot (refuses to preload from DB if older). Default is {Args.max_reserves_snapshot_age_secs}
   --force_reuse_reserves_snapshot           disregard --max_reserves_snapshot_age_secs (use for debug purposes, avoids download of reserves)       
   --do_not_update_reserves_from_chain       do not attempt to forward an existing reserves DB snapshot to the latest known block
-  --contract_address=<address>              set contract counterpart address. Default from BOFH_CONTRACT_ADDRESS envvar
-  --wallet_address=<address>                funding wallet address. Default from BOFH_WALLET_ADDRESS envvar
-  --wallet_password=<pass>                  funding wallet address. Default from BOFH_WALLET_PASSWD envvar
+  --contract_address=<address>              set contract counterpart address. Default is {Args.contract_address}
+  --wallet_address=<address>                funding wallet address. Default is {Args.wallet_address}
+  --wallet_password=<pass>                  funding wallet address. Default is  {Args.wallet_password}
   --initial_amount_min=<wei>                min initial amount of start_token considered for swap operation. Default is {Args.initial_amount_min}
   --initial_amount_max=<wei>                max initial amount of start_token considered for swap operation. Default is {Args.initial_amount_max}
   --path_estimation_amount=<wei>            amount used for initial exploratory search of profitable paths. Default is {Args.path_estimation_amount}
   --min_profit_target_ppm=<ppM>             minimum viable profit target in parts per million (relative). Default is {Args.min_profit_target_ppm}
   --max_profit_target_ppm=<ppM>             minimum viable profit target in parts per million (relative). Default is {Args.max_profit_target_ppm}
-  --min_profit_target_amount=<wei>          minimum viable profit target in wei (absolute). Default is unset
+  --min_profit_target_amount=<wei>          minimum viable profit target in wei (absolute). Default is {Args.min_profit_target_amount}
   --attacks_mute_cache_size=<n>             size of the known attacks mute cache. Default is {Args.attacks_mute_cache_size}
   --attacks_mute_cache_deadline=<secs>      expunge time deadline of the known attacks mute cache. Default is {Args.attacks_mute_cache_deadline} 
                                             Spotted attacks are put in the mute cache unless successfully exploited, 
@@ -209,7 +163,6 @@ class Runner(TheGraph
         ContractCalling.__init__(self, args=self.args)
         TheGraph.__init__(self, self.db, attacks_db=self.attacks_db)
         self.ioloop = get_event_loop()
-        self.args.sync_db(self.db)
         self.consistency_checks()
         self.status_lock = Lock()
         self.reserves_update_batch = list()  # reserve0, reserve1, tag
@@ -245,7 +198,7 @@ class Runner(TheGraph
         for i, attack_plan in enumerate(matches):
             if constraint.match_limit and i >= constraint.match_limit:
                 return
-            new_entry = self.post_intervention_to_db(attack_plan=attack_plan
+            new_entry = self.post_attack_to_db(attack_plan=attack_plan
                                                      , contract=contract
                                                      , origin="sweep")
             if not new_entry:
@@ -269,7 +222,7 @@ class Runner(TheGraph
             txt = txt.strip()
             return False, txt
 
-    # def preflight_check(self, i: Intervention):
+    # def preflight_check(self, i: Attack):
     #     try:
     #         c_address = to_checksum_address(self.args.contract_address)
     #         w_address = to_checksum_address(self.args.wallet_address)
@@ -286,7 +239,7 @@ class Runner(TheGraph
     #         txt = txt.strip()
     #         return False, txt
 
-    def path_attack_payload(self, i: Intervention, initialAmount=None, expectedAmount=None):
+    def path_attack_payload(self, i: Attack, initialAmount=None, expectedAmount=None):
         pools = []
         fees = []
         if initialAmount is None:
@@ -301,11 +254,11 @@ class Runner(TheGraph
                                       , initialAmount=initialAmount
                                       , expectedAmount=expectedAmount)
 
-    def execute_attack(self, id):
+    def execute_attack(self, attack_plan):
         return
         try:
             with self.attacks_db as curs:
-                i = curs.get_intervention(id)
+                i = curs.get_attack(id)
                 if i.path_id in self.attack_attempts: return
                 if self.attack_last_ts > time() - 3600: return
                 log.info("performing preflight check on attack %r...", id)
@@ -338,12 +291,14 @@ class Runner(TheGraph
 
     def get_constraints(self):
         constraint = PathEvalutionConstraints()
-        constraint.initial_token_wei_balance = self.args.path_estimation_amount
-        constraint.convenience_min_threshold = (self.args.min_profit_target_ppm+1000000) / 1000000
-        if not self.args.max_profit_target_ppm:
-            constraint.convenience_max_threshold = 10000
-        else:
-            constraint.convenience_max_threshold = (self.args.max_profit_target_ppm+1000000) / 1000000
+        constraint.initial_balance_min = self.args.initial_amount_min
+        constraint.initial_balance_max = self.args.initial_amount_max
+        if self.args.min_profit_target_ppm:
+            constraint.convenience_min_threshold = (1000000+self.args.min_profit_target_ppm)/1000000
+        if self.args.max_profit_target_ppm:
+            constraint.convenience_max_threshold = (1000000+self.args.max_profit_target_ppm)/1000000
+        if self.args.min_profit_target_amount:
+            constraint.min_profit_target_amount = self.args.min_profit_target_amount
         return constraint
 
     def on_profitable_path_execution(self, match):
