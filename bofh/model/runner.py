@@ -15,9 +15,7 @@ from bofh.model.modules.loggers import Loggers
 from bofh.model.modules.status_preloaders import EntitiesPreloader
 from bofh.model.modules.contract_calls import ContractCalling
 
-from bofh.utils.misc import optimal_cpu_threads
 from bofh.utils.solidity import add_solidity_search_path
-from bofh.utils.web3 import JSONRPCConnector
 
 from dataclasses import dataclass, fields, MISSING
 from logging import basicConfig, Filter, getLogger
@@ -153,6 +151,7 @@ class Runner(TheGraph
              ):
 
     def __init__(self, args: Args):
+        EntitiesPreloader.__init__(self)
         self.args = args
         self.db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=self.args.status_db_dsn)
         self.db.open_and_priming()

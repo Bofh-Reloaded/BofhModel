@@ -12,7 +12,6 @@ Spyder Editor
 #the_graph = load_graph_from_json_coso()
 import sys
 from load_from_status_db import load_graph_from_db_directory, get_start_node_id, get_stable_nodes_id
-from load_from_status_db import load_predicted_swap_events
 
 the_graph = load_graph_from_db_directory("./dbswap/dbswap")
 

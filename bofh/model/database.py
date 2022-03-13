@@ -269,14 +269,15 @@ class StatusScopedCursor(BasicScopedCursor):
 
     def add_token(self, address, name=None, ignore_duplicates=False):
         assert self.conn is not None
+        address = norm_address(address)
         try:
-            self.execute("INSERT INTO tokens (address, name) VALUES (?, ?)", (norm_address(address), name))
+            self.execute("INSERT INTO tokens (address, name) VALUES (?, ?)", (address, name))
             self.execute("SELECT last_insert_rowid()")
         except IntegrityError:
             # already existing
             if not ignore_duplicates:
                 raise
-            self.execute("SELECT id FROM tokens WHERE address = ?", (norm_address(address),))
+            self.execute("SELECT id FROM tokens WHERE address = ?", (address,))
         return self.get_int()
 
     def add_exchange(self, router_address, name=None, fees_ppm=0, ignore_duplicates=False):
@@ -319,10 +320,10 @@ class StatusScopedCursor(BasicScopedCursor):
                             "FROM exchanges WHERE id = ?", (id,)).get()
 
     def get_topic_vals(self, id):
-        return self.execute(self.TOKENS_SELECT_TUPLE + "WHERE id = ?", (id,)).get()
+        return self.execute(self.TOKENS_SELECT_TUPLE + "WHERE id = ?", (self.MAX_TOKEN_NAME_LEN, self.MAX_TOKEN_SYMBOL_LEN, id,)).get()
 
     def get_topic_vals_by_addr(self, addr):
-        return self.execute(self.TOKENS_SELECT_TUPLE + "WHERE address = ?", (norm_address(addr),)).get()
+        return self.execute(self.TOKENS_SELECT_TUPLE + "WHERE address = ?", (self.MAX_TOKEN_NAME_LEN, self.MAX_TOKEN_SYMBOL_LEN, norm_address(addr),)).get()
 
     def get_lp_vals(self, id):
         return self.execute("SELECT id, address, exchange_id, token0_id, token1_id, fees_ppm "

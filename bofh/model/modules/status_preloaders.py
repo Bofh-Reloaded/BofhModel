@@ -8,15 +8,14 @@ from bofh.utils.web3 import bsc_block_age_secs, Web3PoolExecutor, JSONRPCConnect
 
 
 class EntitiesPreloader:
+    def __init__(self):
+        self.pool_addresses = set()
 
     def load(self):
         log = Loggers.preloader
-        self.pool_addresses = set()
         self.preload_exchanges()
         self.preload_tokens()
-        log.info("CIAOOO")
         start_token = self.graph.lookup_token(self.args.start_token_address)
-        log.info("CIAOOO")
         if not start_token:
             msg = "start_token not found: address %s is unknown or not of a token" % self.args.start_token_address
             log.error(msg)
@@ -79,7 +78,6 @@ class EntitiesPreloader:
                     # exchange = self.graph.lookup_exchange(exchange_id)
                     # assert exchange is not None
                     # pool = self.graph.add_lp(id, address, exchange, t0, t1)
-                    continue
                     pool = self.graph.add_lp(id, address, exchange_id, token0_id, token1_id, fees_ppm)
                     if pool is None:
                         log.debug("integrity error: unable to load: id=%r, %r", id, address)

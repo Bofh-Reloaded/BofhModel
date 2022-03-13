@@ -1,5 +1,6 @@
 from asyncio import get_event_loop
 
+from eth_utils import to_checksum_address
 from jsonrpc_base import ProtocolError
 
 from bofh.utils.misc import progress_printer, optimal_cpu_threads
@@ -9,8 +10,9 @@ from bofh.utils.web3 import Web3Connector, JSONRPCConnector, method_id, encode_u
 
 __doc__="""Start model runner.
 
-Usage: bofh.model.download_uniswap_exchange [options] <exchange_name> <router_address> <fees_ppm>
-Options:
+Usage: bofh.model.download_uniswap_exchange [options] <exchange_name> <factory_address> <fees_ppm>
+
+options:
   -h  --help
   -d, --dsn=<connection_str>            DB dsn connection string [default: sqlite3://status.db]
   -c, --connection_url=<url>            Web3 RPC connection URL [default: %s]
@@ -24,8 +26,6 @@ from logging import getLogger, basicConfig
 from bofh.model.database import ModelDB, StatusScopedCursor
 from bofh.model.modules.graph import TheGraph
 from bofh.model.modules.contract_calls import ContractCalling
-from bofh.model.modules.status_preloaders import EntitiesPreloader
-
 
 @dataclass
 class Args:
@@ -34,7 +34,7 @@ class Args:
     web3_rpc_url: str = None
     max_workers: int = 0
     exchange_name: str = None
-    router_address: str = None
+    factory_address: str = None
     fees_ppm: int = 0
 
     @staticmethod
@@ -54,7 +54,7 @@ class Args:
             , web3_rpc_url=cls.default(args["--connection_url"], 0)
             , max_workers=int(cls.default(args["-j"], 0))
             , exchange_name=args["<exchange_name>"]
-            , router_address=args["<router_address>"]
+            , factory_address=args["<factory_address>"]
             , fees_ppm=int(args["<fees_ppm>"])
         )
 
@@ -112,7 +112,7 @@ def do_work(a):
             pass
 
 
-class Runner(TheGraph, ContractCalling, EntitiesPreloader):
+class Runner(TheGraph, ContractCalling):
     log = getLogger(__name__)
 
     def __init__(self, args: Args):
@@ -121,48 +121,18 @@ class Runner(TheGraph, ContractCalling, EntitiesPreloader):
         self.db.open_and_priming()
         TheGraph.__init__(self, self.db)
         ContractCalling.__init__(self, self.args)
-        EntitiesPreloader.__init__(self)
-        self.pools_cache = set()
-
-    def preload_existing_from_db(self):
-        self.preload_exchanges()
-        self.preload_tokens()
-        self.preload_pools()
-        exc = None
-        with self.db as curs:
-            for a in curs.list_exchanges():
-                router_address = a[1]
-                if router_address == self.args.router_address:
-                    exc = self.graph.add_exchange(*a)
-                    continue
-            if not exc:
-                return
-            self.log.info("preloading existing tokens/pools for this exchange...")
-            sql = curs.TOKENS_SELECT_TUPLE + "WHERE " \
-                  "id IN (SELECT token0_id FROM pools WHERE exchange_id = ?) OR " \
-                  "id IN (SELECT token1_id FROM pools WHERE exchange_id = ?)"
-            for args in curs.execute(sql, (exc.tag, exc.tag)).get_all():
-                self.graph.add_token(*args)
-
-            for addr in curs.execute("SELECT address FROM pools WHERE exchange_id = ?", (exc.tag,)).get_all():
-                self.pools_cache.add(addr)
-            self.log.info("%u tokens preloaded from db", len(self.graph.tokens_count()))
-            self.log.info("%u pools preloaded from db", len(self.pools_cache))
 
     def add_unknown_token(self, addr):
         with self.db as curs:
-            tag = curs.add_token(addr)
-            return self.graph.add_token(tag, addr, "", "", 18, False)
+            tag = curs.add_token(addr, ignore_duplicates=True)
+            return self.graph.add_token(tag, addr, "", "", 18, False, 0)
 
     def __call__(self):
         self.graph.set_fetch_token_addr_cb(self.add_unknown_token)
         class PoolFailed(RuntimeError): pass
         with self.db as curs:
-            exchange_id = curs.add_exchange(self.args.router_address, self.args.exchange_name, self.args.fees_ppm, ignore_duplicates=True)
-            self.log.info("reaching out to router at address %s", self.args.router_address)
-            router = self.w3.eth.contract(address=self.args.router_address, abi=get_abi("IGenericRouter"))
-
-            factory_addr = router.functions.factory().call()
+            exchange_id = curs.add_exchange(self.args.factory_address, self.args.exchange_name, self.args.fees_ppm, ignore_duplicates=True)
+            factory_addr = to_checksum_address(self.args.factory_address)
             self.log.info("reaching out to factory at address %s", factory_addr)
             factory = self.w3.eth.contract(address=factory_addr, abi=get_abi("IGenericFactory"))
             pairs_nr = factory.functions.allPairsLength().call()
@@ -185,9 +155,6 @@ class Runner(TheGraph, ContractCalling, EntitiesPreloader):
                                 # the call failed
                                 continue
                             pool_id, pool_addr, token0, token1, reserve0, reserve1, blocknr = res
-                            if pool_addr in self.pools_cache:
-                                # pool already loaded
-                                continue
                             if token0 == token1:
                                 self.log.warning("pool %s appears to be circular on token %s: skipped", pool_addr,
                                                  token0)
@@ -201,7 +168,8 @@ class Runner(TheGraph, ContractCalling, EntitiesPreloader):
                             curs.add_swap(address=pool_addr
                                                 , exchange_id=exchange_id
                                                 , token0_id=tids[0]
-                                                , token1_id=tids[1])
+                                                , token1_id=tids[1]
+                                                , ignore_duplicates=True)
                         except PoolFailed as err:
                             self.log.error("giving up un pool %s due to error", err)
                             pass
@@ -211,7 +179,7 @@ def main():
     basicConfig(level="INFO")
     args = Args.from_cmdline(__doc__)
     runner = Runner(args)
-    runner.preload_existing_from_db()
+    #runner.preload_existing_from_db()
     runner()
 
 
