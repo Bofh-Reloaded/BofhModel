@@ -19,5 +19,6 @@ bash "$SRC_ROOT/support/launch_cmake.sh" && \
   make install && \
   ldconfig && \
   cd "$SRC_ROOT/bofh.utils" && python3 setup.py develop && \
+  cd "$SRC_ROOT/bofh.contract" && python3 setup.py develop && \
   cd "$SRC_ROOT" && python3 setup.py develop
 

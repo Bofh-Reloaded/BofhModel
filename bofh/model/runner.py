@@ -204,55 +204,6 @@ class Runner(TheGraph
                 log.debug("match having path id %r is already in mute_cache. "
                           "activation inhibited", attack_plan.id())
 
-    def preflight_check(self, path, amountIn, expectedAmountOut):
-        try:
-            c_address = to_checksum_address(self.args.contract_address)
-            w_address = to_checksum_address(self.args.wallet_address)
-            self.call(function_name="multiswap"
-                      , from_address=w_address
-                      , to_address=c_address
-                      , call_args=self.path_attack_payload(path, amountIn, expectedAmountOut))
-            return True, None
-        except ContractLogicError as err:
-            txt = str(err)
-            txt = txt.replace("Pancake: ", "")
-            txt = txt.replace("BOFH:", "")
-            txt = txt.replace("execution reverted:", "")
-            txt = txt.strip()
-            return False, txt
-
-    # def preflight_check(self, i: Attack):
-    #     try:
-    #         c_address = to_checksum_address(self.args.contract_address)
-    #         w_address = to_checksum_address(self.args.wallet_address)
-    #         self.call(function_name="multiswap"
-    #                   , from_address=w_address
-    #                   , to_address=c_address
-    #                   , call_args=self.path_attack_payload(i))
-    #         return True, None
-    #     except ContractLogicError as err:
-    #         txt = str(err)
-    #         txt = txt.replace("Pancake: ", "")
-    #         txt = txt.replace("BOFH:", "")
-    #         txt = txt.replace("execution reverted:", "")
-    #         txt = txt.strip()
-    #         return False, txt
-
-    def path_attack_payload(self, i: Attack, initialAmount=None, expectedAmount=None):
-        pools = []
-        fees = []
-        if initialAmount is None:
-            initialAmount = i.amountIn
-        if expectedAmount is None:
-            expectedAmount = int(initialAmount * 101 / 100)
-        for step in i.steps:
-            pools.append(to_checksum_address(step.pool_addr))
-            fees.append(step.feePPM)
-        return self.pack_args_payload(pools=pools
-                                      , fees=fees
-                                      , initialAmount=initialAmount
-                                      , expectedAmount=expectedAmount)
-
     def execute_attack(self, attack_plan):
         return
         try:

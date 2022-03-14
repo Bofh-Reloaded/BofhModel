@@ -120,6 +120,39 @@ class ContractCalling:
         callable = getattr(contract_instance.functions, function_name)
         return callable(*call_args).call(d_from)
 
+    def path_attack_payload(self, attack_plan, allow_net_losses=False, allow_break_even=False, override_fees=None, stop_after_pool=None):
+        path = attack_plan.path
+        amountIn = int(str(attack_plan.initial_balance()))
+        expectedAmountOut = 0
+        pools = []
+        fees = []
+        initialAmount = amountIn
+        expectedAmount = expectedAmountOut
+        if override_fees:
+            if isinstance(override_fees, list):
+                pass
+            elif isinstance(override_fees, int):
+                override_fees = [override_fees] * path.size()
+            else:
+                override_fees = None
+        if allow_net_losses:
+            expectedAmount = 0
+        if allow_break_even:
+            expectedAmount = min(initialAmount, expectedAmount)
+        for i in range(path.size()):
+            swap = path.get(i)
+            pools.append(str(swap.pool.address))
+            if override_fees:
+                fees.append(override_fees[i])
+            else:
+                fees.append(swap.pool.feesPPM())
+        return self.pack_args_payload(pools=pools
+                                      , fees=fees
+                                      , initialAmount=initialAmount
+                                      , expectedAmount=expectedAmount
+                                      , stop_after_pool=stop_after_pool)
+
+
     def call_ll(self, from_address, to_address, calldata):
         conn = self.jsonrpc_conn
         f = conn.eth_estimateGas({"from":from_address, "to":to_address, "data":calldata}, "latest")

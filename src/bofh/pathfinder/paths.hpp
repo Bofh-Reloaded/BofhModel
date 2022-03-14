@@ -33,8 +33,9 @@ struct PathResult {
     PathResult() = delete;
     PathResult(const PathResult &) = default;
 
-    const Path   *path;
-    std::array<model::balance_t, MAX_PATHS+1> balances;
+    const Path                               *path;
+    std::array<model::balance_t, MAX_PATHS+1> m_balances_issued;
+    std::array<model::balance_t, MAX_PATHS+1> m_balances_measured;
 
     bool operator==(const PathResult &o) const noexcept
     {
@@ -45,8 +46,18 @@ struct PathResult {
     std::string infos() const;
     model::balance_t initial_balance() const;
     model::balance_t final_balance() const;
-    model::balance_t balance_before_step(unsigned idx) const;
-    model::balance_t balance_after_step(unsigned idx) const;
+    void set_initial_balance(const model::balance_t &val);
+    void set_final_balance(const model::balance_t &val);
+
+    model::balance_t issued_balance_before_step(unsigned idx) const;
+    model::balance_t issued_balance_after_step(unsigned idx) const;
+    model::balance_t measured_balance_before_step(unsigned idx) const;
+    model::balance_t measured_balance_after_step(unsigned idx) const;
+    void set_issued_balance_before_step(unsigned idx, const model::balance_t &val);
+    void set_issued_balance_after_step(unsigned idx, const model::balance_t &val);
+    void set_measured_balance_before_step(unsigned idx, const model::balance_t &val);
+    void set_measured_balance_after_step(unsigned idx, const model::balance_t &val);
+
     const model::Token *initial_token() const;
     const model::Token *final_token() const;
     const model::Token *token_before_step(unsigned idx) const;
@@ -57,12 +68,12 @@ struct PathResult {
     // some reference data can be externally attached here:
     model::datatag_t tag;
     std::string calldata;
-    model::balance_t expectedAmount;
     typedef std::array<model::balance_t, MAX_PATHS*2> pool_reserves_t;
     std::shared_ptr<pool_reserves_t> pool_reserves;
     model::balance_t pool_reserve(unsigned idx, unsigned reserve0_or_1) const;
     void set_pool_reserve(unsigned idx, unsigned reserve0_or_1, const model::balance_t &val);
     model::balance_t pool_token_reserve(unsigned idx, const model::Token *t) const;
+    void set_pool_token_reserve(unsigned idx, const model::Token *t, const model::balance_t &val);
     std::string get_calldata(bool deflationary=false) const;
     std::string get_description() const;
 };

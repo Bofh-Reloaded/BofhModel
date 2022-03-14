@@ -4,6 +4,7 @@ from eth_utils import to_checksum_address
 from tabulate import tabulate
 from web3.exceptions import ContractLogicError
 
+from bofh.contract import SwapInspection
 from bofh.model.modules.contract_calls import ContractCalling
 
 from dataclasses import dataclass, fields, MISSING
@@ -352,7 +353,7 @@ class Attack(ContractCalling, TheGraph):
 
     def describe(self, attack_id):
         with self.attacks_db as curs:
-            path_id, origin, blockNr, origin_tx, origin_ts, amountIn = \
+            path_id, origin, blockNr, origin_tx, origin_ts, amountIn_db = \
                     curs.execute("SELECT path_id, origin, blockNr, origin_tx, origin_ts, amountIn "
                                  "FROM attacks WHERE id = ?", (attack_id,)).get()
             path_id = int(path_id)
@@ -361,10 +362,16 @@ class Attack(ContractCalling, TheGraph):
             print("Unable to rebuild swap path from its unique id:", path_id)
             return
         initial_token = path.initial_token()
-        attack_plan = self.evaluate_path(attack_id, path, amountIn=amountIn)
+        attack_plan = self.evaluate_path(attack_id, path, amountIn=amountIn_db)
         if attack_plan.failed:
             print("Internal consistency or logic error during evaluation of path", path_id)
             return
+        good, err = None, None
+        if self.args.check:
+            good, err, st = self.inspect_attack(attack_plan=attack_plan)
+            if good:
+                SwapInspection.update_attack_plan(attack_plan, st)
+
         print( "Description of financial attack %r" % attack_id)
         print( "   \\___ this is a %s %u-way swap" % (path.is_cross_exchange()
                                                         and "cross-exchange"
@@ -390,6 +397,10 @@ class Attack(ContractCalling, TheGraph):
         print(f"   \\___ detail of the path traversal:")
         print(f"       \\___ initial balance is {hr_amountin} of {initial_token.symbol} (token {initial_token.address})")
         last_exc = None
+
+        def fees(amountMeasured, amountIssued):
+            return "%0.04f%%" % ((1 - (amountMeasured / amountIssued)) * 100)
+
         for i in range(path.size()):
             swap = path.get(i)
             pool = swap.pool
@@ -401,10 +412,10 @@ class Attack(ContractCalling, TheGraph):
                 part = f"stays on exchange {exc.name}"
             token_in = attack_plan.token_before_step(i)
             token_out = attack_plan.token_after_step(i)
-            amountIn = int(str(attack_plan.balance_before_step(i)))
-            amountOut = int(str(attack_plan.balance_after_step(i)))
-            hr_amountin = self.amount_hr(amountIn, token_in)
-            hr_amountout = self.amount_hr(amountOut, token_out)
+            amountInIssued = int(str(attack_plan.issued_balance_before_step(i)))
+            amountInMeasured = int(str(attack_plan.measured_balance_before_step(i)))
+            amountOutIssued = int(str(attack_plan.issued_balance_after_step(i)))
+            amountOutMeasured = int(str(attack_plan.measured_balance_after_step(i)))
             rin, rout = int(str(pool.getReserve(token_in))), int(str(pool.getReserve(token_out)))
             hr_rin  = self.amount_hr(rin, token_in)
             hr_rout = self.amount_hr(rout, token_out)
@@ -418,24 +429,25 @@ class Attack(ContractCalling, TheGraph):
                 print(f"       |     |           \\___ or ~= {rout} weis of token {token_out.address} ")
             weis = ""
             if self.args.weis:
-                weis = f" ({amountIn} weis)"
-            print(f"       |     \\___ the swaps sends in {hr_amountin}{weis} of {token_in.symbol}")
+                weis = f" ({amountInIssued} weis)"
+            print(f"       |     \\___ the swaps sends in {self.amount_hr(amountInIssued, token_in)}{weis} of {token_in.symbol}")
+            if amountInIssued != amountInMeasured:
+                if self.args.weis:
+                    weis = f" ({amountInMeasured} weis)"
+                print(f"       |     |       \\___ {fees(amountInMeasured, amountInIssued)} of funds are burned in "
+                      f"transfer. Effective amount is {self.amount_hr(amountInMeasured, token_in)}{weis} of {token_in.symbol}")
             weis = ""
             if self.args.weis:
-                weis = f" ({amountOut} weis)"
-            print(f"       |     \\___ and exchanges to {hr_amountout}{weis} of {token_out.symbol}")
-            print( "       |           \\___ effective rate of change is %0.5f %s" % (amountOut/amountIn, pool.get_name()))
-            print( "       |           \\___ this includes a %0.4f%% swap fee" % ((pool.feesPPM()/1000000)*100))
+                weis = f" ({amountOutIssued} weis)"
+            print(f"       |     \\___ and exchanges to {self.amount_hr(amountOutIssued, token_out)}{weis} of {token_out.symbol}")
+            if amountOutIssued != amountOutMeasured:
+                print(f"       |           |     \\___ {fees(amountOutMeasured, amountOutIssued)} of funds are burned in "
+                      f"transfer. Effective amount is {self.amount_hr(amountOutMeasured, token_out)}{weis} of {token_out.symbol}")
+            print( "       |           \\___ effective rate of change is %0.5f %s" % (amountOutMeasured/amountInIssued, pool.get_name()))
+            print( "       |           \\___ this includes a %0.4f%% pool's swap fee" % ((pool.feesPPM()/1000000)*100))
         print(f"       \\___ final balance is {hr_amountout} of {initial_token.symbol} (token {initial_token.address})")
         gap = int(str(attack_plan.final_balance())) - int(str(attack_plan.initial_balance()))
         yieldPercent = (attack_plan.yield_ratio()-1)*100
-        good, err = None, None
-        if self.args.check:
-            good, err, final_balance = self.preflight_check(attack_plan)
-            if good:
-                gap = final_balance - int(str(attack_plan.initial_balance()))
-                yield_ratio = final_balance / int(str(attack_plan.initial_balance()))
-                yieldPercent = (yield_ratio-1)*100
         if gap > 0:
             hr_g = self.amount_hr(gap, initial_token)
             gain = f"net gain of {hr_g} {initial_token.symbol}"
@@ -482,44 +494,66 @@ class Attack(ContractCalling, TheGraph):
         log.info("performing preflight check...")
         good, err, final_balance = self.preflight_check(attack_plan)
         if not good:
-            if err == "K":
-                self.diagnose_k_error(attack_plan.path, amountIn, amountOut)
             raise ManagedAbort("preflight check failed: %s" % err)
-        c_address = to_checksum_address(self.args.contract_address)
         w_address = to_checksum_address(self.args.wallet_address)
         if self.args.wallet_password:
             log.info("unlocking wallet %s", w_address)
             self.unlock_wallet(w_address, self.args.wallet_password)
-        receipt = self.transact_and_wait(
-            function_name="multiswap"
-            , from_address=w_address
-            , to_address=c_address
-            , call_args=self.path_attack_payload(attack_plan.path, amountIn, amountOut)
-        )
-        log.debug("transaction receipt received. tx hash = %s", receipt["blockHash"].hex())
+        receipt = self.execute_attack(attack_plan)
+        log.debug("transaction receipt received. tx hash = %s", receipt["transactionHash"].hex())
+
+    def execute_attack(self, attack_plan):
+        try:
+            c_address = to_checksum_address(self.args.contract_address)
+            w_address = to_checksum_address(self.args.wallet_address)
+            call_args = self.path_attack_payload(attack_plan=attack_plan
+                                                 , allow_net_losses=self.args.allow_net_losses
+                                                 , allow_break_even=self.args.allow_break_even
+                                                 , override_fees=self.args.fees_ppm)
+            fn_name = self.args.deflationary and "multiswapd" or "multiswap"
+            txRecepit = self.transact_and_wait(function_name=fn_name
+                      , from_address=w_address
+                      , to_address=c_address
+                      , call_args=call_args)
+            return True, txRecepit
+
+        except ContractLogicError as err:
+            txt = str(err)
+            txt = txt.replace("Pancake: ", "")
+            txt = txt.replace("BOFH:", "")
+            txt = txt.replace("execution reverted:", "")
+            txt = txt.strip()
+            return False, txt
+
+    def inspect_attack(self, attack_plan):
+        try:
+            c_address = to_checksum_address(self.args.contract_address)
+            w_address = to_checksum_address(self.args.wallet_address)
+            call_args = self.path_attack_payload(attack_plan=attack_plan
+                                                 , allow_net_losses=self.args.allow_net_losses
+                                                 , allow_break_even=self.args.allow_break_even
+                                                 , override_fees=self.args.fees_ppm)
+            out = self.call(function_name="swapinspect"
+                      , from_address=w_address
+                      , to_address=c_address
+                      , call_args=call_args)
+            return True, None, SwapInspection.from_output(out)
+        except ContractLogicError as err:
+            txt = str(err)
+            txt = txt.replace("Pancake: ", "")
+            txt = txt.replace("BOFH:", "")
+            txt = txt.replace("execution reverted:", "")
+            txt = txt.strip()
+            return False, txt, 0
 
     def preflight_check(self, attack_plan):
         try:
             c_address = to_checksum_address(self.args.contract_address)
             w_address = to_checksum_address(self.args.wallet_address)
-            #payload = self.pack_payload_from_attack_plan(attack_plan)
-            call_args = self.path_attack_payload(attack_plan.path
-                                                 , int(str(attack_plan.initial_balance()))
-                                                 , 0)
-            #log.info("contract_address: %s", c_address)
-            #log.info("call_args: %r", call_args)
-            #contract=self.get_contract()
-            #for i in range(3, 10):
-            #    payload = [[123]*i]
-            #    calldata = str(contract.encodeABI("multiswapd", payload))
-            #    print(i, calldata[0:10])
-            if 0:
-                res = self.call_ll(from_address=w_address
-                             , to_address=c_address
-                             , calldata=attack_plan.get_calldata(self.args.deflationary))
-                print("res", res)
-                aa
-                return True, None
+            call_args = self.path_attack_payload(attack_plan=attack_plan
+                                                 , allow_net_losses=self.args.allow_net_losses
+                                                 , allow_break_even=self.args.allow_break_even
+                                                 , override_fees=self.args.fees_ppm)
             fn_name = self.args.deflationary and "multiswapd" or "multiswap"
             final_amount = self.call(function_name=fn_name
                       , from_address=w_address
@@ -538,18 +572,17 @@ class Attack(ContractCalling, TheGraph):
     def amount_hr(self, amount, token):
         return "%0.4f" % token.fromWei(amount)
 
-    def diagnose_k_error(self, path, amountIn, expectedAmountOut):
+    def diagnose_k_error(self, attack_plan):
         c_address = to_checksum_address(self.args.contract_address)
         w_address = to_checksum_address(self.args.wallet_address)
-        for i in range(path.size()):
+        for i in range(attack_plan.path.size()):
             try:
-                res = self.call(function_name="multiswap"
+                res = self.call(function_name="swapinspect"
                                 , from_address=w_address
                                 , to_address=c_address
-                                , call_args=self.path_attack_payload(path
-                                                                           , amountIn
-                                                                           , expectedAmountOut
-                                                                           , stop_after_pool=i) )
+                                , call_args=self.path_attack_payload(attack_plan
+                                                                     , allow_net_losses=True
+                                                                     , stop_after_pool=i) )
                 print("pool[%u]: OK" % i, res)
             except ContractLogicError as err:
                 txt = str(err)
@@ -558,28 +591,6 @@ class Attack(ContractCalling, TheGraph):
                 txt = txt.replace("execution reverted:", "")
                 txt = txt.strip()
                 print("pool[%u]: %s" % (i, txt))
-
-    def path_attack_payload(self, path, amountIn, expectedAmountOut, stop_after_pool=None):
-        pools = []
-        fees = []
-        initialAmount = amountIn
-        expectedAmount = expectedAmountOut
-        if self.args.allow_net_losses:
-            expectedAmount = 0
-        if self.args.allow_break_even:
-            expectedAmount = min(initialAmount, expectedAmount)
-        for i in range(path.size()):
-            swap = path.get(i)
-            pools.append(str(swap.pool.address))
-            if self.args.fees_ppm:
-                fees.append(self.args.fees_ppm)
-            else:
-                fees.append(swap.pool.feesPPM())
-        return self.pack_args_payload(pools=pools
-                                      , fees=fees
-                                      , initialAmount=initialAmount
-                                      , expectedAmount=expectedAmount
-                                      , stop_after_pool=stop_after_pool)
 
 
 def main():

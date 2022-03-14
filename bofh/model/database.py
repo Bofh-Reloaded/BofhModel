@@ -185,7 +185,7 @@ class ModelDB:
         if current_version == latest:
             self.log.debug("current schema version up to date")
             return
-        self.log.info("a new schema version is available. updading %r to %r ...", current_version, latest)
+        self.log.info("a new schema version is available. updating %r to %r ...", current_version, latest)
         for i in range(current_version+1, latest+1):
             try:
                 mfile = self.migrations[i]
@@ -506,9 +506,9 @@ class StatusScopedCursor(BasicScopedCursor):
                        , norm_address(swap.tokenDest.address)
                        , swap.tokenSrc.tag
                        , swap.tokenDest.tag
-                       , str(attack_plan.balance_before_step(i))
+                       , str(attack_plan.issued_balance_before_step(i))
                        , swap.pool.feesPPM()
-                       , str(attack_plan.balance_after_step(i))
+                       , str(attack_plan.measured_balance_after_step(i))
                        )
         self.executemany("INSERT INTO attack_steps ("
                          "fk_attack"

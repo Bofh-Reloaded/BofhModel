@@ -191,7 +191,6 @@ class Funding(ContractCalling, TheGraph):
 
     def status(self):
         token = self.graph.lookup_token(self.args.token)
-        print(self.args.token, token)
         address = self.args.contract_address
         coin_balance = self.getCoinBalance(address)
         token_balance = self.getTokenBalance(address, token)

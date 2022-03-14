@@ -11,37 +11,90 @@ namespace pathfinder {
 
 using namespace model;
 
-static const uint32_t m_path_len_method_selector(unsigned path_len
-                                                 , bool deflationary)
+typedef enum {
+    contract_call_multiswap,
+    contract_call_multiswap_deflationary,
+    contract_call_multiswap_debug,
+    contract_call_swapinspect,
+} contract_call_t;
+
+static const uint32_t m_path_len_method_selector(contract_call_t contract_call
+                                                 , unsigned path_len)
 {
-    static const uint32_t map_direct[] = {
+    static const uint32_t map_multiswap[] = {
         0, // len=0 unsupported
         0, // len=1 unsupported
         0, // len=2 unsupported
-        0x86a99d4f, // LEN = 3
-        0xdacdc381, // LEN = 4
-        0xea704299, // LEN = 5
-        0xa0a3d9d9, // LEN = 6
-        0x0ef12bbe, // LEN = 7
-        0xb4859ac7, // LEN = 8
-        0x12558fb4, // LEN = 9
+        0x86A99D4F, // multiswap(uint256[3]) --> PATH_LENGTH=2
+        0xDACDC381, // multiswap(uint256[4]) --> PATH_LENGTH=3
+        0xEA704299, // multiswap(uint256[5]) --> PATH_LENGTH=4
+        0xA0A3D9D9, // multiswap(uint256[6]) --> PATH_LENGTH=5
+        0x0EF12BBE, // multiswap(uint256[7]) --> PATH_LENGTH=6
+        0xB4859AC7, // multiswap(uint256[8]) --> PATH_LENGTH=7
+        0x12558FB4, // multiswap(uint256[9]) --> PATH_LENGTH=8
     };
-    static const uint32_t map_deflationary[] = {
+
+    static const uint32_t map_multiswap_deflationary[] = {
         0, // len=0 unsupported
         0, // len=1 unsupported
         0, // len=2 unsupported
-        0x9141a63f, // LEN = 9
-        0x077d03b7, // LEN = 8
-        0x6b4bfa40, // LEN = 7
-        0x96515533, // LEN = 6
-        0xc377e1ee, // LEN = 5
-        0x0885c5c5, // LEN = 4
-        0xe7622831, // LEN = 3
+        0x9141A63F, // multiswapd(uint256[3]) --> PATH_LENGTH=2
+        0x077D03B7, // multiswapd(uint256[4]) --> PATH_LENGTH=3
+        0x6B4BFA40, // multiswapd(uint256[5]) --> PATH_LENGTH=4
+        0x96515533, // multiswapd(uint256[6]) --> PATH_LENGTH=5
+        0xC377E1EE, // multiswapd(uint256[7]) --> PATH_LENGTH=6
+        0x0885C5C5, // multiswapd(uint256[8]) --> PATH_LENGTH=7
+        0xE7622831, // multiswapd(uint256[9]) --> PATH_LENGTH=8
     };
-    const auto map_len = sizeof(map_direct) / sizeof(map_direct[0]);
+
+    static const uint32_t map_multiswap_debug[] = {
+        0, // len=0 unsupported
+        0, // len=1 unsupported
+        0, // len=2 unsupported
+        0xECC7C407, // multiswap_debug(uint256[3]) --> PATH_LENGTH=2
+        0x06C66286, // multiswap_debug(uint256[4]) --> PATH_LENGTH=3
+        0xB7D23A89, // multiswap_debug(uint256[5]) --> PATH_LENGTH=4
+        0x72EFC585, // multiswap_debug(uint256[6]) --> PATH_LENGTH=5
+        0x5790A9E1, // multiswap_debug(uint256[7]) --> PATH_LENGTH=6
+        0x96AE42A1, // multiswap_debug(uint256[8]) --> PATH_LENGTH=7
+        0x61F6DDE2, // multiswap_debug(uint256[9]) --> PATH_LENGTH=8
+    };
+
+    static const uint32_t map_swapinspect[] = {
+        0, // len=0 unsupported
+        0, // len=1 unsupported
+        0, // len=2 unsupported
+        0xADF01A12, // swapinspect(uint256[3]) --> PATH_LENGTH=2
+        0x7F366121, // swapinspect(uint256[4]) --> PATH_LENGTH=3
+        0xD49A80D6, // swapinspect(uint256[5]) --> PATH_LENGTH=4
+        0x468D2E8F, // swapinspect(uint256[6]) --> PATH_LENGTH=5
+        0x4AF2DE3A, // swapinspect(uint256[7]) --> PATH_LENGTH=6
+        0x57805D6B, // swapinspect(uint256[8]) --> PATH_LENGTH=7
+        0x5126BCBA, // swapinspect(uint256[9]) --> PATH_LENGTH=8
+    };
+
+
+    const auto map_len = sizeof(map_multiswap) / sizeof(map_multiswap[0]);
+    const uint32_t *map = nullptr;
     if (path_len < map_len)
     {
-        return (deflationary ? map_deflationary : map_direct)[path_len];
+        switch (contract_call)
+        {
+        case contract_call_multiswap:
+            map = map_multiswap;
+            break;
+        case contract_call_multiswap_deflationary:
+            map = map_multiswap_deflationary;
+            break;
+        case contract_call_multiswap_debug:
+            map = map_multiswap_debug;
+            break;
+        case contract_call_swapinspect:
+            map = map_swapinspect;
+            break;
+
+        }
+        if (map != nullptr) return map[path_len];
     }
     return 0;
 };
@@ -190,14 +243,18 @@ PathResult Path::evaluate(const PathEvalutionConstraints &c
             throw ContraintConsistencyError("initial_balance must be > 0");
         }
 
+        balance_t current_balance = c.initial_balance;
+        unsigned int i = 0;
+        auto swap = get(i);
+        assert(swap != nullptr);
+        result.set_issued_balance_before_step(i, current_balance);
+        current_balance = swap->tokenSrc->transferResult(c.initial_balance);
+        result.set_measured_balance_before_step(i, current_balance);
 
         // walk the swap path:
-        result.balances[0] = initial_token()->transferResult(c.initial_balance);
-        for (unsigned int i = 0; i < size(); ++i)
+        for (; i < size(); ++i)
         {
-            // excuse the following assert soup. They are only intended to
-            // early catch of inconsistencies in debug builds. None is functional.
-            auto swap = get(i);
+            swap = get(i);
             assert(swap != nullptr);
             auto pool = swap->pool;
             if (prediction_snapshot_key)
@@ -211,6 +268,10 @@ PathResult Path::evaluate(const PathEvalutionConstraints &c
             assert(pool != nullptr);
             assert(swap->tokenSrc != nullptr);
 
+            result.set_issued_balance_before_step(i, current_balance);
+            current_balance = swap->tokenSrc->transferResult(c.initial_balance);
+            result.set_measured_balance_before_step(i, current_balance);
+
             auto reserves = pool->getReserves();
             auto has_reserves = std::get<0>(reserves);
             if (!has_reserves)
@@ -223,10 +284,13 @@ PathResult Path::evaluate(const PathEvalutionConstraints &c
             }
             result.set_pool_reserve(i, 0, std::get<1>(reserves));
             result.set_pool_reserve(i, 1, std::get<2>(reserves));
-            const auto output_amount =
+
+            current_balance =
                     pool->SwapExactTokensForTokens(swap->tokenSrc
-                                                   , result.balances[i]);
-            result.balances[i+1] = swap->tokenDest->transferResult(output_amount);
+                                                   , current_balance);
+            result.set_issued_balance_after_step(i, current_balance);
+            current_balance = swap->tokenDest->transferResult(current_balance);
+            result.set_measured_balance_after_step(i, current_balance);
         }
     }
     catch (...)
@@ -235,46 +299,6 @@ PathResult Path::evaluate(const PathEvalutionConstraints &c
     }
     return result;
 }
-
-//static model::balance_t yield_with(const Path &path
-//                                   , const PathEvalutionConstraints &c
-//                                   , const auto &initial_amount
-//                                   , bool observe_predicted_state)
-//{
-//    c.initial_balance = initial_amount;
-//    auto res = path.evaluate(c, observe_predicted_state);
-//    return res.final_balance().convert_to<double>()
-//         - res.initial_balance().convert_to<double>();
-//};
-
-
-//model::balance_t bisect_search(const Path &path
-//                               , const model::balance_t &min
-//                               , const model::balance_t &max
-//                               , const model::balance_t &gap_min)
-//{
-//    const auto mid = (min+max)/2;
-//    const auto gap = max - min;
-//    if (gap <= gap_min)
-//    {
-//        return mid;
-//    }
-//    const auto y0 = yield_with(min);
-//    const auto y1 = yield_with(mid);
-//    const auto y2 = yield_with(max);
-//    const auto k = max_of_3(y0, y1, y2);
-//    switch (k)
-//    {
-//    case 0: // max is at yield_with(min)
-//        return cb(y0, y1, cb);
-//    case 2: // max is at yield_with(max)
-//        return cb(y1, y2, cb);
-//    default:
-//        const auto nmin = cb(y0, y1, cb);
-//        const auto nmax = cb(y1, y2, cb);
-//        return cb(nmin, nmax, cb);
-//    }
-//};
 
 
 PathResult Path::evaluate_max_yield(const PathEvalutionConstraints &c
@@ -384,10 +408,77 @@ std::string PathResult::infos() const
     return ss.str();
 }
 
-balance_t PathResult::initial_balance() const { return balances[0]; }
-balance_t PathResult::final_balance() const { return balances[path->size()]; }
-balance_t PathResult::balance_before_step(unsigned idx) const { return balances[idx]; }
-balance_t PathResult::balance_after_step(unsigned idx) const { return balances[idx+1]; }
+
+
+model::balance_t PathResult::initial_balance() const
+{
+    return issued_balance_before_step(0);
+}
+
+model::balance_t PathResult::final_balance() const
+{
+    return measured_balance_after_step(path->size()-1);
+}
+
+void PathResult::set_initial_balance(const model::balance_t &val)
+{
+    set_issued_balance_before_step(0, val);
+}
+
+void PathResult::set_final_balance(const model::balance_t &val)
+{
+    set_measured_balance_after_step(path->size()-1, val);
+}
+
+model::balance_t PathResult::issued_balance_before_step(unsigned idx) const
+{
+    assert(idx < MAX_PATHS);
+    return m_balances_issued[idx];
+}
+
+model::balance_t PathResult::issued_balance_after_step(unsigned idx) const
+{
+    assert(idx < MAX_PATHS);
+    return m_balances_issued[idx+1];
+}
+
+model::balance_t PathResult::measured_balance_before_step(unsigned idx) const
+{
+    assert(idx < MAX_PATHS);
+    return m_balances_measured[idx];
+}
+
+model::balance_t PathResult::measured_balance_after_step(unsigned idx) const
+{
+    assert(idx < MAX_PATHS);
+    return m_balances_measured[idx+1];
+}
+
+void PathResult::set_issued_balance_before_step(unsigned idx, const model::balance_t &val)
+{
+    assert(idx < MAX_PATHS);
+    m_balances_issued[idx] = val;
+}
+
+void PathResult::set_issued_balance_after_step(unsigned idx, const model::balance_t &val)
+{
+    assert(idx < MAX_PATHS);
+    m_balances_issued[idx+1] = val;
+}
+
+void PathResult::set_measured_balance_before_step(unsigned idx, const model::balance_t &val)
+{
+    assert(idx < MAX_PATHS);
+    m_balances_measured[idx] = val;
+}
+
+void PathResult::set_measured_balance_after_step(unsigned idx, const model::balance_t &val)
+{
+    assert(idx < MAX_PATHS);
+    m_balances_measured[idx+1] = val;
+}
+
+
 const Token *PathResult::initial_token() const { return path->initial_token(); }
 const Token *PathResult::final_token() const { return path->final_token(); }
 const Token *PathResult::token_before_step(unsigned idx) const { return path->token_before_step(idx); }
@@ -442,6 +533,25 @@ model::balance_t PathResult::pool_token_reserve(unsigned idx, const model::Token
     return pool_reserve(idx, 1);
 }
 
+void PathResult::set_pool_token_reserve(unsigned idx, const model::Token *t, const model::balance_t &val)
+{
+    if (pool_reserves == nullptr)
+    {
+        pool_reserves.reset(new pool_reserves_t);
+    }
+
+    assert(idx < path->size());
+    auto swap = path->get(idx);
+
+    assert(t == swap->pool->token0 || t == swap->pool->token1);
+
+    if (t == swap->pool->token0)
+    {
+        set_pool_reserve(idx, 0, val);
+    }
+    set_pool_reserve(idx, 1, val);
+}
+
 std::string PathResult::get_calldata(bool deflationary) const
 {
     enum { word_size = 256 };
@@ -453,7 +563,10 @@ std::string PathResult::get_calldata(bool deflationary) const
             << std::uppercase
             << std::setfill('0');
 
-    auto selector = m_path_len_method_selector(path->size()+1, deflationary);
+    auto selector = m_path_len_method_selector(deflationary
+                                               ? contract_call_multiswap_deflationary
+                                               : contract_call_multiswap
+                                               , path->size()+1);
     if (!selector)
     {
         throw std::runtime_error(strfmt("unsupported path length: %1%", path->size()));
@@ -477,7 +590,7 @@ std::string PathResult::get_calldata(bool deflationary) const
     }
     // add expectedAmount, initialAmount
     ss << std::setw(word_size/8);
-    ss << expectedAmount;
+    ss << final_balance();
     ss << std::setw(word_size/8);
     ss << initial_balance();
 
@@ -497,6 +610,19 @@ std::string PathResult::get_description() const
     {
         return strfmt("%0.4f", token->fromWei(weis));
     };
+
+    auto fees = [](const auto &measured, const auto &issued)
+    {
+        if (issued == 0)
+        {
+            return strfmt("unknown");
+        }
+        const auto a = measured.template convert_to<double>();
+        const auto b = issued.  template convert_to<double>();
+        const auto fee = (1-(a/b))*100;
+        return strfmt("%0.04f%%", fee);
+    };
+
     ss << "Description of financial attack having path hash " << id() << std::endl;
     if (failed)
     {
@@ -525,8 +651,8 @@ std::string PathResult::get_description() const
         exc = pool->exchange;
         auto token_in = token_before_step(i);
         auto token_out = token_after_step(i);
-        auto amount_in = balance_before_step(i);
-        auto amount_out = balance_after_step(i);
+        auto amount_in = issued_balance_before_step(i);
+        auto amount_out = issued_balance_after_step(i);
         auto reserve_in = pool_token_reserve(i, token_in);
         auto reserve_out = pool_token_reserve(i, token_out);
 
@@ -550,9 +676,23 @@ std::string PathResult::get_description() const
         ss << "       |     \\___ the swaps sends in "
                     << amount_hr(amount_in, token_in) << " ("<<amount_in<<" weis)"
                     << " of " << token_in->symbol << std::endl;
+        auto meas_in = measured_balance_before_step(i);
+        if (meas_in != amount_in)
+        {
+            ss << "       |     \\       \\___ " << fees(meas_in, amount_in)
+               << " of funds are burned in transfer. Effective amount is "
+               << amount_hr(meas_in, token_in) << " ("<<meas_in<<" weis)";
+        }
         ss << "       |     \\___ and exchanges to "
                     << amount_hr(amount_out, token_out) << " ("<<amount_out<<" weis)"
                     << " of " << token_out->symbol << std::endl;
+        auto meas_out = measured_balance_before_step(i);
+        if (meas_out != amount_out)
+        {
+            ss << "       |     \\       \\___ " << fees(meas_out, amount_out)
+               << " of funds are burned in transfer. Effective amount is "
+               << amount_hr(meas_out, token_out) << " ("<<meas_out<<" weis)";
+        }
         auto exchange_rate = amount_out.convert_to<double>() / amount_in.convert_to<double>();
         ss << strfmt("       |           \\___ effective rate of change is %0.5f %s"
                                             , exchange_rate
