@@ -352,8 +352,8 @@ class StatusScopedCursor(BasicScopedCursor):
                      ", SUBSTR(COALESCE(name, ''), 0, ?)"
                      ", SUBSTR(COALESCE(symbol, ''), 0, ?)"
                      ", decimals"
-                     ", fees_ppm"
-                     ", is_stabletoken FROM tokens ")
+                     ", is_stabletoken"
+                     ", fees_ppm FROM tokens ")
 
     def list_tokens(self):
         assert self.conn is not None
