@@ -225,7 +225,6 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def_readwrite("reserve1" , &LiquidityPool::reserve1)
             .def("SwapTokensForExactTokens" , &LiquidityPool::SwapTokensForExactTokens)
             .def("SwapExactTokensForTokens" , &LiquidityPool::SwapExactTokensForTokens)
-            .def("enter_predicted_state"    , &LiquidityPool::enter_predicted_state, dont_manage_returned_pointer())
             .def("leave_predicted_state"    , &LiquidityPool::leave_predicted_state)
             .def("get_predicted_state"      , &LiquidityPool::get_predicted_state, dont_manage_returned_pointer())
             .def("set_predicted_reserves"   , &LiquidityPool::set_predicted_reserves)
@@ -236,7 +235,6 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def("set_feesPPM"              , &LiquidityPool::feesPPM)
             .def("hasFees"                  , &LiquidityPool::hasFees)
             ;
-
     register_ptr_to_python<const LiquidityPool*>();
     register_ptr_to_python<LiquidityPool*>();
 
@@ -333,8 +331,8 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def("calculate_paths"             , &TheGraph::calculate_paths             )
             .def("debug_evaluate_known_paths"  , &TheGraph::debug_evaluate_known_paths  )
             .def("evaluate_paths_of_interest"  , &TheGraph::evaluate_paths_of_interest  )
-            .def("add_lp_of_interest"          , &TheGraph::add_lp_of_interest          )
-            .def("clear_lp_of_interest"        , &TheGraph::clear_lp_of_interest        )
+            .def("start_predicted_snapshot"    , &TheGraph::start_predicted_snapshot    )
+            .def("terminate_predicted_snapshot", &TheGraph::terminate_predicted_snapshot)
             .def("set_fetch_exchange_tag_cb"   , &TheGraph::set_fetch_exchange_tag_cb   )
             .def("set_fetch_token_tag_cb"      , &TheGraph::set_fetch_token_tag_cb      )
             .def("set_fetch_lp_tag_cb"         , &TheGraph::set_fetch_lp_tag_cb         )

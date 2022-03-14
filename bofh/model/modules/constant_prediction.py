@@ -87,15 +87,16 @@ class ConstantPrediction:
                     log.exception("Error during eth_consPredictLogs() RPC execution")
                     continue
                 with self.status_lock:
+                    contract = self.get_contract()
+                    prediction_key = self.graph.start_predicted_snapshot()
                     try:
                         try:
-                            contract = self.get_contract()
-                            res = self.digest_prediction_payload(result, blockNumber)
+                            res = self.digest_prediction_payload(result, blockNumber, prediction_key)
                             if res: events += res
                         except:
                             log.exception("Error during parsing of eth_consPredictLogs() results")
                         try:
-                            matches = self.graph.evaluate_paths_of_interest(constraint, True)
+                            matches = self.graph.evaluate_paths_of_interest(constraint, prediction_key)
                             for i, attack_plan in enumerate(matches):
 
                                 if constraint.match_limit and i >= constraint.match_limit:
@@ -114,7 +115,7 @@ class ConstantPrediction:
                     finally:
                         # forget about predicted states. go back to normal
                         self.pools_vs_txhashes.clear()
-                        self.graph.clear_lp_of_interest()
+                        self.graph.terminate_predicted_snapshot(prediction_key)
 
                 await sleep(self.args.pred_polling_interval * 0.001)
         except:
@@ -144,7 +145,7 @@ class ConstantPrediction:
                                   , contract_address=contract.address)
             return True
 
-    def digest_prediction_payload(self, payload, blockNumber):
+    def digest_prediction_payload(self, payload, blockNumber, prediction_key):
         events = 0
         logger = Loggers.constant_prediction
         assert isinstance(payload, dict)
@@ -165,11 +166,9 @@ class ConstantPrediction:
             topic0 = log["topic0"]
             if topic0 == PREDICTION_LOG_TOPIC0_SYNC:
                 events += 1
-                pool.enter_predicted_state()
                 try:
                     r0, r1 = parse_data_parameters(log["data"])
-                    pool.set_predicted_reserves(r0, r1)
-                    self.graph.add_lp_of_interest(pool)
+                    pool.set_predicted_reserves(prediction_key, r0, r1)
                 except:
                     continue
                 continue

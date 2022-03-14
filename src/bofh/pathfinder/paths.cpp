@@ -165,7 +165,7 @@ bool Path::check_consistency(bool no_except) const
 
 
 PathResult Path::evaluate(const PathEvalutionConstraints &c
-                          , bool observe_predicted_state) const
+                          , unsigned prediction_snapshot_key) const
 {
     TheGraph::PathResult result(this);
     try
@@ -187,9 +187,9 @@ PathResult Path::evaluate(const PathEvalutionConstraints &c
             auto swap = get(i);
             assert(swap != nullptr);
             auto pool = swap->pool;
-            if (observe_predicted_state)
+            if (prediction_snapshot_key)
             {
-                auto ppool = pool->get_predicted_state();
+                auto ppool = pool->get_predicted_state(prediction_snapshot_key);
                 if (ppool)
                 {
                     pool = ppool;
@@ -265,7 +265,7 @@ PathResult Path::evaluate(const PathEvalutionConstraints &c
 
 
 PathResult Path::evaluate_max_yield(const PathEvalutionConstraints &c
-                    , bool observe_predicted_state) const
+                    , unsigned prediction_snapshot_key) const
 {
     auto amount_min = c.initial_balance_min;
     auto amount_max = c.initial_balance_max;
@@ -294,7 +294,7 @@ PathResult Path::evaluate_max_yield(const PathEvalutionConstraints &c
     // evaluate the path with a specific initial_amount. return a yield_result
     auto yield_with = [&](const auto &initial_amount) {
         c0.initial_balance = initial_amount;
-        const auto plan = evaluate(c0, observe_predicted_state);
+        const auto plan = evaluate(c0, prediction_snapshot_key);
         if (plan.final_balance() > plan.initial_balance())
         {
             return yield_result{false, plan.final_balance() - plan.initial_balance()};
@@ -355,7 +355,7 @@ PathResult Path::evaluate_max_yield(const PathEvalutionConstraints &c
 
     auto ideal = bisect_search(amount_min, amount_max, bisect_search);
     c0.initial_balance = ideal;
-    return evaluate(c0, observe_predicted_state);
+    return evaluate(c0, prediction_snapshot_key);
 
 }
 

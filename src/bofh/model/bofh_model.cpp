@@ -243,62 +243,42 @@ void LiquidityPool::set_feesPPM(int val)
 }
 
 
-LiquidityPool::LPPredictedState::LPPredictedState(const LiquidityPool &o):
-    pool(new LiquidityPool(o.tag, o.address, o.parent, o.exchange, o.token0, o.token1))
+const LiquidityPool *LiquidityPool::get_predicted_state(unsigned key) const
 {
-    pool->setReserves(o.reserve0, o.reserve1);
+    auto i = m_predicted_state.find(key);
+    if (i == m_predicted_state.end())
+    {
+        return this;
+    }
+    return &i->second;
 }
 
-const LiquidityPool *LiquidityPool::enter_predicted_state()
+void LiquidityPool::set_predicted_reserves(unsigned key
+                            , const balance_t &reserve0
+                            , const balance_t &reserve1)
 {
-    if (predicted_state == nullptr)
+    auto i = m_predicted_state.find(key);
+    if (i == m_predicted_state.end())
     {
-        predicted_state = std::make_unique<LPPredictedState>(*this);
+        auto n = m_predicted_state.emplace(std::piecewise_construct
+                                           , std::forward_as_tuple(key)
+                                           , std::forward_as_tuple(tag
+                                                                   , address
+                                                                   , parent
+                                                                   , exchange
+                                                                   , token0
+                                                                   , token1));
+        i = n.first;
+        parent->predicted_snapshot_idx.emplace(key, this);
     }
-    predicted_state->ctr++;
-    return &*predicted_state->pool;
+    i->second.reserve0 = reserve0;
+    i->second.reserve1 = reserve1;
 }
 
-void LiquidityPool::set_predicted_reserves(const balance_t &_reserve0, const balance_t &_reserve1)
+void LiquidityPool::leave_predicted_state(unsigned key)
 {
-    LiquidityPool *pool;
-    if (predicted_state == nullptr)
-    {
-        pool = const_cast<LiquidityPool *>(enter_predicted_state());
-    }
-    else
-    {
-        pool = const_cast<LiquidityPool *>(&*predicted_state->pool);
-    }
-    assert(pool != nullptr);
-    pool->reserve0 = _reserve0;
-    pool->reserve1 = _reserve1;
+    m_predicted_state.erase(key);
 }
-
-void LiquidityPool::leave_predicted_state(bool force)
-{
-    if (predicted_state == nullptr)
-    {
-        return;
-    }
-    predicted_state->ctr--;
-    if (predicted_state->ctr <= 0 || force)
-    {
-        predicted_state.reset();
-    }
-}
-
-const LiquidityPool *LiquidityPool::get_predicted_state() const
-{
-    if (predicted_state == nullptr)
-    {
-        return nullptr;
-    }
-
-    return &*predicted_state->pool;
-}
-
-
 
 TheGraph::TheGraph()
     : entity_index(new EntityIndex)
@@ -888,28 +868,33 @@ TheGraph::PathResultList TheGraph::debug_evaluate_known_paths(const PathEvalutio
     return res;
 }
 
-void TheGraph::add_lp_of_interest(const LiquidityPool *pool)
+unsigned TheGraph::start_predicted_snapshot()
 {
     lock_guard_t lock_guard(m_update_mutex);
-    lp_of_interest.emplace(const_cast<LiquidityPool*>(pool));
+    do {
+        predicted_snapshot_key++;
+    } while (predicted_snapshot_key == 0);
+    return predicted_snapshot_key;
 }
 
-void TheGraph::clear_lp_of_interest()
+void TheGraph::terminate_predicted_snapshot(unsigned key)
 {
     lock_guard_t lock_guard(m_update_mutex);
-    for (auto pool: lp_of_interest)
+    auto range = predicted_snapshot_idx.equal_range(key);
+    for (auto i = range.first; i != range.second; ++i)
     {
-        pool->leave_predicted_state(true);
+        i->second->leave_predicted_state(key);
     }
-    lp_of_interest.clear();
+    predicted_snapshot_idx.erase(range.first, range.second);
 }
+
 
 TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
                                              , const pathfinder::Path *path
-                                             , bool observe_predicted_state) const
+                                             , unsigned prediction_snapshot_key) const
 {
     assert(path != nullptr);
-    auto result = path->evaluate_max_yield(c);
+    auto result = path->evaluate_max_yield(c, prediction_snapshot_key);
 
     if (!result.failed)
     {
@@ -962,20 +947,23 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
 }
 
 TheGraph::PathResultList TheGraph::evaluate_paths_of_interest(const PathEvalutionConstraints &c
-                                                              , bool observe_predicted_state)
+                                                              , unsigned prediction_snapshot_key)
 {
     lock_guard_t lock_guard(m_update_mutex);
     check_constrants_consistency(this, c);
     TheGraph::PathResultList res;
 
-    for (auto pool: lp_of_interest)
+
+    auto range = predicted_snapshot_idx.equal_range(prediction_snapshot_key);
+    for (auto iter = range.first; iter != range.second; ++iter)
     {
+        auto pool = iter->second;
         auto r = paths_index->path_by_lp_idx.equal_range(pool);
         for (auto i = r.first; i != r.second; i++)
         {
             try {
                 const pathfinder::Path *path = i->second;
-                auto attack_plan = evaluate_path(c, path, observe_predicted_state);
+                auto attack_plan = evaluate_path(c, path, prediction_snapshot_key);
                 if (attack_plan.failed) continue;
                 assert(attack_plan.final_token() != nullptr);
 

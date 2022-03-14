@@ -25,6 +25,7 @@
 #include <boost/python/object.hpp>
 #endif
 #include <set>
+#include <map>
 #include <memory>
 #include <mutex>
 #include "../pathfinder/swaps_idx_fwd.hpp"
@@ -257,17 +258,15 @@ private:
     int m_feesPPM = 0;
 public:
 
-    struct LPPredictedState {
-        std::unique_ptr<LiquidityPool> pool;
-        int ctr = 0;
-        LPPredictedState(const LiquidityPool &);
-    };
-    std::unique_ptr<LPPredictedState> predicted_state;
 
-    const LiquidityPool *enter_predicted_state();
-    const LiquidityPool *get_predicted_state() const;
-    void set_predicted_reserves(const balance_t &reserve0, const balance_t &reserve1);
-    void leave_predicted_state(bool force=false);
+    const LiquidityPool *get_predicted_state(unsigned key) const;
+    void set_predicted_reserves(unsigned key
+                                , const balance_t &reserve0
+                                , const balance_t &reserve1);
+    void leave_predicted_state(unsigned key);
+
+private:
+    std::map<unsigned, LiquidityPool> m_predicted_state;
 };
 
 
@@ -431,15 +430,19 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
     PathResultList debug_evaluate_known_paths(const PathEvalutionConstraints &constraints);
 
 
-    void add_lp_of_interest(const LiquidityPool *pool);
-    void clear_lp_of_interest();
+    unsigned start_predicted_snapshot();
+    void terminate_predicted_snapshot(unsigned key);
+
     PathResultList evaluate_paths_of_interest(const PathEvalutionConstraints &constraints
-                                              , bool observe_predicted_state);
+                                              , unsigned prediction_snapshot_key);
     PathResult evaluate_path(const PathEvalutionConstraints &constraints
                              , const pathfinder::Path *path
-                             , bool observe_predicted_state) const;
+                             , unsigned prediction_snapshot_key) const;
     PathResult evaluate_path(const PathEvalutionConstraints &constraints, std::size_t path_hash) const;
-    std::set<LiquidityPool*> lp_of_interest;
+
+    unsigned predicted_snapshot_key = 0;
+    std::multimap<unsigned, LiquidityPool*> predicted_snapshot_idx;
+
 
     const Path *lookup_path(std::size_t id) const;
     const Path *lookup_path(std::size_t id, bool fetch_if_missing) const;
@@ -477,13 +480,14 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
     boost::python::object m_fetch_lp_addr_cb;
 #endif
 
-    std::size_t exchanges_ctr = 0;
-    std::size_t tokens_ctr = 0;
-    std::size_t pools_ctr = 0;
     std::size_t exchanges_count() const;
     std::size_t tokens_count() const;
     std::size_t pools_count() const;
     std::size_t paths_count() const;
+
+    std::size_t exchanges_ctr = 0;
+    std::size_t tokens_ctr = 0;
+    std::size_t pools_ctr = 0;
 };
 
 
