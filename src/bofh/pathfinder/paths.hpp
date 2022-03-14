@@ -142,6 +142,7 @@ struct Path: std::array<const OperableSwap *, MAX_PATHS>
     const model::Token *token_after_step(unsigned idx) const;
 
     bool check_consistency(bool no_except=false) const;
+    bool is_cross_exchange() const;
 
     PathResult evaluate(const PathEvalutionConstraints &
                         , unsigned prediction_snapshot_key) const;

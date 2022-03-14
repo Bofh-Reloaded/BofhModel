@@ -58,6 +58,11 @@ inline bool operator==(const address_t &a, const address_t &b)
     return reinterpret_cast<const address_t::base_type &>(a) ==
             reinterpret_cast<const address_t::base_type &>(b);
 }
+inline bool operator!=(const address_t &a, const address_t &b)
+{
+    return reinterpret_cast<const address_t::base_type &>(a) !=
+            reinterpret_cast<const address_t::base_type &>(b);
+}
 
 std::ostream& operator<< (std::ostream& stream, const address_t& o);
 

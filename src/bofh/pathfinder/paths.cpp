@@ -162,6 +162,19 @@ bool Path::check_consistency(bool no_except) const
 }
 
 
+bool Path::is_cross_exchange() const
+{
+    auto addr0 = get(0)->pool->exchange->address;
+    for (unsigned i = 1; i < size(); ++i)
+    {
+        if (addr0 != get(i)->pool->exchange->address)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 
 
 PathResult Path::evaluate(const PathEvalutionConstraints &c

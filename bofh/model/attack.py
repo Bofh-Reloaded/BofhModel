@@ -274,7 +274,7 @@ class Attack(ContractCalling, TheGraph):
         sql = f"SELECT id, path_id, blockNr, origin_tx, yieldRatio, amountIn " \
               f"FROM attacks {where} {order_by} {direction} {limit}"
         with self.attacks_db as curs:
-            headers = ["id", "path", "len", "in", "yield%"]
+            headers = ["id", "path", "xex?", "len", "in", "yield%"]
             if self.args.origin_tx:
                 headers.append("tx")
             if self.args.check:
@@ -288,6 +288,7 @@ class Attack(ContractCalling, TheGraph):
                 attack_plan = self.evaluate_path(id, path, amountIn=amountIn)
                 row = [id
                        , path.get_symbols()
+                       , path.is_cross_exchange() and "YES" or ""
                        , path.size()
                        , self.amount_hr(attack_plan.initial_balance(), attack_plan.initial_token())
                        ]
@@ -365,7 +366,10 @@ class Attack(ContractCalling, TheGraph):
             print("Internal consistency or logic error during evaluation of path", path_id)
             return
         print( "Description of financial attack %r" % attack_id)
-        print( "   \\___ this is a %u-way swap" % path.size())
+        print( "   \\___ this is a %s %u-way swap" % (path.is_cross_exchange()
+                                                        and "cross-exchange"
+                                                        or "single-exchange"
+                                                      , path.size()))
         print(f"   \\___ detection origin is {origin} at block {blockNr}, tx {origin_tx}")
         ots = strftime("%c UTC", gmtime(int(origin_ts)))
         print(f"   \\___ origin timestamp is {ots} (unix_time={origin_ts})")
