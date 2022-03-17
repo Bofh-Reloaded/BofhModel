@@ -315,6 +315,9 @@ class StatusScopedCursor(BasicScopedCursor):
             for i in seq:
                 yield i
 
+    def get_exchange_pools_count(self, exchange_id):
+        return self.execute("SELECT COUNT(1) FROM pools WHERE exchange_id = ?", (exchange_id,)).get_int()
+
     def get_exchange_vals(self, id):
         return self.execute("SELECT id, router_address, name, fees_ppm "
                             "FROM exchanges WHERE id = ?", (id,)).get()
@@ -325,12 +328,14 @@ class StatusScopedCursor(BasicScopedCursor):
     def get_topic_vals_by_addr(self, addr):
         return self.execute(self.TOKENS_SELECT_TUPLE + "WHERE address = ?", (self.MAX_TOKEN_NAME_LEN, self.MAX_TOKEN_SYMBOL_LEN, norm_address(addr),)).get()
 
-    def get_lp_vals(self, id):
-        return self.execute("SELECT id, address, exchange_id, token0_id, token1_id, fees_ppm "
+    def get_lp_vals_by_addr(self, id):
+        return self.execute("SELECT id, address, exchange_id, token0_id, token1_id"
+                            ", fees_ppm IS NOT NULL, COALESCE(fees_ppm, 0) "
                             "FROM pools WHERE id = ?", (id,)).get()
 
     def get_lp_vals_by_addr(self, addr):
-        return self.execute("SELECT id, address, exchange_id, token0_id, token1_id, fees_ppm "
+        return self.execute("SELECT id, address, exchange_id, token0_id, token1_id"
+                            ", fees_ppm IS NOT NULL, COALESCE(fees_ppm, 0) "
                             "FROM pools WHERE address = ?", (norm_address(addr),)).get()
 
     def get_lp_reserves_vals(self, id):
@@ -348,12 +353,13 @@ class StatusScopedCursor(BasicScopedCursor):
         return self.execute("SELECT COUNT(1) FROM tokens WHERE NOT disabled").get_int()
 
     TOKENS_SELECT_TUPLE = ("SELECT id"
-                     ", address"
-                     ", SUBSTR(COALESCE(name, ''), 0, ?)"
-                     ", SUBSTR(COALESCE(symbol, ''), 0, ?)"
-                     ", decimals"
-                     ", is_stabletoken"
-                     ", fees_ppm FROM tokens ")
+                           ", address"
+                           ", SUBSTR(COALESCE(name, ''), 0, ?)"
+                           ", SUBSTR(COALESCE(symbol, ''), 0, ?)"
+                           ", decimals"
+                           ", is_stabletoken"
+                           ", fees_ppm IS NOT NULL, COALESCE(fees_ppm, 0) "
+                           "FROM tokens ")
 
     def list_tokens(self):
         assert self.conn is not None
@@ -372,7 +378,9 @@ class StatusScopedCursor(BasicScopedCursor):
 
     def list_pools(self):
         assert self.conn is not None
-        self.execute("SELECT id,address,exchange_id,token0_id,token1_id,fees_ppm FROM pools WHERE NOT disabled")
+        self.execute("SELECT id,address,exchange_id,token0_id,token1_id,"
+                     "fees_ppm IS NOT NULL, COALESCE(fees_ppm, 0) "
+                     "FROM pools WHERE NOT disabled")
         while True:
             seq = self.curs.fetchmany()
             if not seq:

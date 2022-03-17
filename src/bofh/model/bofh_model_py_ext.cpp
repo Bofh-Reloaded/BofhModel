@@ -297,6 +297,8 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
     register_ptr_to_python<const PathResult*>();
     register_ptr_to_python<PathResult*>();
 
+    class_<PathList>("PathList")
+            .def(vector_indexing_suite<PathList>());
     class_<PathResultList>("PathResultList")
             .def(vector_indexing_suite<PathResultList>());
 
@@ -338,6 +340,7 @@ BOOST_PYTHON_MODULE(bofh_model_ext)
             .def("add_path"                    , static_cast<const Path          *(TheGraph::*)(const LiquidityPool *, const LiquidityPool *, const LiquidityPool *, const LiquidityPool *)>(&TheGraph::add_path), dont_manage_returned_pointer())
             .def("add_path"                    , static_cast<const Path          *(TheGraph::*)(datatag_t, datatag_t, datatag_t)>(&TheGraph::add_path)                                                           , dont_manage_returned_pointer())
             .def("add_path"                    , static_cast<const Path          *(TheGraph::*)(datatag_t, datatag_t, datatag_t, datatag_t)>(&TheGraph::add_path)                                                , dont_manage_returned_pointer())
+            .def("find_paths_to_token"         , &TheGraph::find_paths_to_token         )
             .def("calculate_paths"             , &TheGraph::calculate_paths             )
             .def("debug_evaluate_known_paths"  , &TheGraph::debug_evaluate_known_paths  )
             .def("evaluate_paths_of_interest"  , &TheGraph::evaluate_paths_of_interest  )

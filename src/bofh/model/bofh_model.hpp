@@ -144,8 +144,7 @@ struct Token: Entity, Ref<Token>
           , const string &name_
           , const std::string &symbol_
           , unsigned int decimals_
-          , bool is_stable_
-          , int feesPPM);
+          , bool is_stable_);
 
     double fromWei(const balance_t &b) const;
 
@@ -157,6 +156,7 @@ struct Token: Entity, Ref<Token>
 
     balance_t transferResult(const balance_t &amount) const;
 private:
+    bool m_hasFees = false;
     int m_feesPPM = 0;
 };
 
@@ -255,6 +255,7 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
     bool hasFees() const;
     void set_feesPPM(int val);
 private:
+    bool m_hasFees = false;
     int m_feesPPM = 0;
 public:
 
@@ -334,6 +335,7 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
                            , const char *symbol
                            , unsigned int decimals
                            , bool is_stablecoin
+                           , bool hasFees
                            , int feesPPM);
 
     /**
@@ -351,6 +353,7 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
                                    , const Exchange* exchange
                                    , Token* token0
                                    , Token* token1
+                                   , bool hasFees
                                    , int feesPPM);
     /**
      * @brief Introduce a new LP edge into the graph, if not existing.
@@ -368,6 +371,7 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
                                 , datatag_t exchange
                                 , datatag_t token0
                                 , datatag_t token1
+                                , bool hasFees
                                 , int feesPPM);
 
 
@@ -417,8 +421,10 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
 
 
     using Path = pathfinder::Path;
+    using PathList = pathfinder::PathList;
     using PathResult = pathfinder::PathResult;
     using PathResultList = pathfinder::PathResultList;
+    PathList find_paths_to_token(const Token *token) const;
 
 
 

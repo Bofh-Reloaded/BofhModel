@@ -24,11 +24,12 @@ ENTRY_POINTS={'console_scripts':[
     'bofh.model.attack = bofh.model.attack:main',
     'bofh.model.funding = bofh.model.funding:main',
     'bofh.model.download_exchange = bofh.model.download_exchange:main',
-    'bofh.model.verify_swap_tx = bofh.model.verify_swap_tx:main',
     'bofh.model.read_token_data = bofh.model.read_token_data:main',
     'bofh.model.import_bsc_pools = bofh.model.import_bsc_pools:main',
     'bofh.model.import_ctpgo_pools = bofh.model.import_ctpgo_pools:main',
     'bofh.model.manage_stabletokens = bofh.model.manage_stabletokens:main',
+    'bofh.model.manage_exchanges = bofh.model.manage_exchanges:main',
+    'bofh.model.update_pool_reserves = bofh.model.update_pool_reserves:main',
 ] }
 
 from setuptools import setup, find_packages

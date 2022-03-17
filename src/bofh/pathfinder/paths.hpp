@@ -79,6 +79,7 @@ struct PathResult {
 };
 
 typedef std::vector<PathResult> PathResultList;
+typedef std::vector<const Path *> PathList;
 
 std::ostream& operator<< (std::ostream& stream, const Path& o);
 std::ostream& operator<< (std::ostream& stream, const PathResult& o);

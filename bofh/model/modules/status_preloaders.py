@@ -66,19 +66,9 @@ class EntitiesPreloader:
                                               , on_same_line=True)
             with print_progress:
                 bad_pools = list()
-                for id, address, exchange_id, token0_id, token1_id, fees_ppm in curs.list_pools():
+                for id, address, *args in curs.list_pools():
                     print_progress()
-                    # t0 = self.graph.lookup_token(token0_id)
-                    # t1 = self.graph.lookup_token(token1_id)
-                    # if not t0 or not t1:
-                    #    if self.args.verbose:
-                    #        log.warning("disabling pool %s due to missing or disabled affering token "
-                    #                         "(token0=%r, token1=%r)", address, token0_id, token1_id)
-                    #    continue
-                    # exchange = self.graph.lookup_exchange(exchange_id)
-                    # assert exchange is not None
-                    # pool = self.graph.add_lp(id, address, exchange, t0, t1)
-                    pool = self.graph.add_lp(id, address, exchange_id, token0_id, token1_id, fees_ppm)
+                    pool = self.graph.add_lp(id, address, *args)
                     if pool is None:
                         log.debug("integrity error: unable to load: id=%r, %r", id, address)
                         bad_pools.append([id])

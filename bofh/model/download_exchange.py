@@ -10,7 +10,7 @@ from bofh.utils.web3 import Web3Connector, JSONRPCConnector, method_id, encode_u
 
 __doc__="""Start model runner.
 
-Usage: bofh.model.download_uniswap_exchange [options] <exchange_name> <factory_address> <fees_ppm>
+Usage: bofh.model.download_exchange [options] <exchange_name> <factory_address> <fees_ppm>
 
 options:
   -h  --help
@@ -137,15 +137,21 @@ class Runner(TheGraph, ContractCalling):
             factory = self.w3.eth.contract(address=factory_addr, abi=get_abi("IGenericFactory"))
             pairs_nr = factory.functions.allPairsLength().call()
             self.log.info("according to factory, %r pairs exist", pairs_nr)
+            start_nr = curs.get_exchange_pools_count(exchange_id)
+            self.log.info("%r pairs are already in our knowledge graph", start_nr)
+            dl_count = pairs_nr - start_nr
+            if dl_count == 0:
+                self.log.info("no new pools to download")
+                return
 
-            with progress_printer(pairs_nr, "downloading pairs {percent}% ({count} of {tot}"
+            with progress_printer(dl_count, "downloading pairs {percent}% ({count} of {tot}"
                                             " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
                                             , on_same_line=True) as progress:
                 with Web3PoolExecutor(
                         connection_uri=self.args.web3_rpc_url
                         , max_workers=self.args.max_workers) as executor:
                     def sequence():
-                        for i in range(pairs_nr):
+                        for i in range(start_nr, pairs_nr):
                             yield factory_addr, i, False
                     for res in executor.map(do_work, sequence(), chunksize=100):
                         try:

@@ -114,13 +114,12 @@ Token::Token(datatag_t tag_
       , const std::string &symbol_
       , unsigned int decimals_
       , bool is_stable_
-      , int feesPPM)
+      )
     : Entity(TYPE_TOKEN, tag_, address_, parent_)
     , name(name_)
     , is_stable(is_stable_)
     , symbol(symbol_)
     , decimals(decimals_)
-    , m_feesPPM(feesPPM)
 { }
 
 double Token::fromWei(const balance_t &b) const
@@ -140,12 +139,13 @@ int Token::feesPPM() const
 
 bool Token::hasFees() const
 {
-    return m_feesPPM != 0;
+    return m_hasFees;
 }
 
 void Token::set_feesPPM(int val)
 {
     m_feesPPM = val;
+    m_hasFees = true;
 }
 
 balance_t Token::transferResult(const balance_t &amount) const
@@ -225,21 +225,20 @@ balance_t LiquidityPool::SwapExactTokensForTokens(const Token *tokenSent, const 
 
 int LiquidityPool::feesPPM() const
 {
-    if (m_feesPPM != 0)
-    {
-        return m_feesPPM;
-    }
-    return exchange->feesPPM();
+    return m_hasFees
+            ? m_feesPPM
+            : exchange->feesPPM();
 }
 
 bool LiquidityPool::hasFees() const
 {
-    return exchange->hasFees() || (m_feesPPM != 0);
+    return m_hasFees || exchange->hasFees();
 }
 
 void LiquidityPool::set_feesPPM(int val)
 {
     m_feesPPM = val;
+    m_hasFees = true;
 }
 
 
@@ -393,6 +392,7 @@ const Token *TheGraph::add_token(datatag_t tag
                                  , const char *symbol
                                  , unsigned int decimals
                                  , bool is_stablecoin
+                                 , bool hasFees
                                  , int feesPPM)
 {
     lock_guard_t lock_guard(m_update_mutex);
@@ -402,8 +402,8 @@ const Token *TheGraph::add_token(datatag_t tag
                                        , name
                                        , symbol
                                        , decimals
-                                       , is_stablecoin
-                                       , feesPPM);
+                                       , is_stablecoin);
+    if (hasFees) ptr->set_feesPPM(feesPPM);
     auto item = entity_index->emplace(ptr.get());
     if (already_exists(item))
     {
@@ -494,6 +494,7 @@ const LiquidityPool *TheGraph::add_lp_ll(datatag_t tag
                                          , const Exchange* exchange
                                          , Token* token0
                                          , Token* token1
+                                         , bool hasFees
                                          , int feesPPM)
 {
     check_not_null_arg(exchange);
@@ -505,7 +506,7 @@ const LiquidityPool *TheGraph::add_lp_ll(datatag_t tag
                                                , exchange
                                                , token0
                                                , token1);
-    ptr->set_feesPPM(feesPPM);
+    if (hasFees) ptr->set_feesPPM(feesPPM);
     lock_guard_t lock_guard(m_update_mutex);
 
     auto item = entity_index->emplace(ptr.get());
@@ -531,6 +532,7 @@ const LiquidityPool *TheGraph::add_lp(datatag_t tag
                                       , datatag_t exchange_
                                       , datatag_t token0_
                                       , datatag_t token1_
+                                      , bool hasFees
                                       , int feesPPM)
 {
     auto exchange = lookup_exchange(exchange_);
@@ -540,7 +542,7 @@ const LiquidityPool *TheGraph::add_lp(datatag_t tag
     {
         return nullptr;
     }
-    return add_lp_ll(tag, address, exchange, token0, token1, feesPPM);
+    return add_lp_ll(tag, address, exchange, token0, token1, hasFees, feesPPM);
 }
 
 
@@ -712,6 +714,36 @@ void TheGraph::calculate_paths()
     log_info("computed: %u paths, %u entries in hot swaps index"
              , paths_index->path_idx.size()
              , paths_index->path_by_lp_idx.size());
+}
+
+TheGraph::PathList TheGraph::find_paths_to_token(const Token *token) const
+{
+    PathList result;
+    auto swaps = swap_index
+            ->get<idx::by_dest_token>()
+            .equal_range(token);
+    for (auto i = swaps.first; i != swaps.second; ++i)
+    {
+        const LiquidityPool *pool = (*i)->pool;
+        assert(pool != nullptr);
+        auto paths = paths_index->path_by_lp_idx.equal_range(pool);
+        for (auto j = paths.first; j != paths.second; ++j)
+        {
+            const pathfinder::Path *path = j->second;
+            assert(path != nullptr);
+            for (unsigned k = 0; k < path->size(); ++k)
+            {
+                const OperableSwap *swap = (*path)[k];
+                assert(swap != nullptr);
+                if (swap->tokenDest == token)
+                {
+                    result.emplace_back(path);
+                    break;
+                }
+            }
+        }
+    }
+    return result;
 }
 
 static void check_constrants_consistency(TheGraph *g, const PathEvalutionConstraints &c)
