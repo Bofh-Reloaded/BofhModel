@@ -21,14 +21,14 @@ class IdealPool:
         self.token0 = token0
         self.token1 = token1
         self.reserve0 = reserve0
-        self.reserve1 = reserve1   
+        self.reserve1 = reserve1
         self.swapFeePct = swapFeePct
         self.address = address
-    
+
     def flip(self) :
         return self.__class__(self.token1, self.token0, self.reserve1, self.reserve0, self.address)
-    
-    def malvagio(self, a, b) :    
+
+    def malvagio(self, a, b) :
         return self.__class__(self.token0, self.token1, int(self.reserve0*a/b), int(self.reserve1*a/b), self.address+"malvagio")
 
     def swap(self, requestedToken, requestedAmountOut, update_reserves=False) -> int:
@@ -124,12 +124,12 @@ def load_graph_from_db_directory(dp_dump_directory=None):
             G.add_edge(token0, token1, pool=pool)
             G.add_edge(token1, token0, pool=pool.flip())
             #Test code for multi exchange
-            if idx%2 == 0:
-                G.add_edge(token0, token1, pool=pool.malvagio(2, 1))
-                G.add_edge(token1, token0, pool=pool.malvagio(2, 1).flip())
-            else:
-                G.add_edge(token0, token1, pool=pool.malvagio(1, 2))
-                G.add_edge(token1, token0, pool=pool.malvagio(1, 2).flip())
+            #if idx%2 == 0:
+            #    G.add_edge(token0, token1, pool=pool.malvagio(2, 1))
+            #    G.add_edge(token1, token0, pool=pool.malvagio(2, 1).flip())
+            #else:
+            #    G.add_edge(token0, token1, pool=pool.malvagio(1, 2))
+            #    G.add_edge(token1, token0, pool=pool.malvagio(1, 2).flip())
             #end test code
         edge_ctr += 2
         idx += 1

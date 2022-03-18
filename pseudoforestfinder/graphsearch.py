@@ -37,6 +37,7 @@ def find_all_paths_4way_var(graph, start_node, stable_list):
     print("number of successors: ", len(successorslist)) #green arrows - forward path
     print("number of predecessors: ", len(predecessorslist)) #blue arrows - reverese path
     usable_nodes = (set(stable_list) & (predecessorslist)) #filter blue arrows on stable nodes
+    print("usable_nodes: ", list(usable_nodes))
     for stable_node in usable_nodes:
         for second_node in successorslist:
             if stable_node != second_node: #avoid cycling on two nodes iteratively
@@ -70,6 +71,7 @@ def find_all_paths_2way_var(graph, start_node, stable_list):
     print("number of successors: ", len(successorslist)) #green arrows - forward path
     print("number of predecessors: ", len(predecessorslist)) #blue arrows - reverese path
     usable_nodes = (set(stable_list) & (predecessorslist)) #filter blue arrows on stable nodes
+    print("usable_nodes: ", list(usable_nodes))
     for stable_node in usable_nodes:
             path = [start_node, stable_node, start_node]
             path_list.append(path)
@@ -171,7 +173,7 @@ def read_paths_from_file (file):
     buffer = open(file, "r")
     content = buffer.read()
     content_list = content.split("\n")
-    print(len(content_list))
+    # print(len(content_list))
     buffer.close()
     return content_list
 
@@ -213,6 +215,18 @@ G = the_graph
 print("number of nodes: ", G.number_of_nodes())
 print("number of edges: ", G.number_of_edges())
 
+pools_per_node = dict()
+for node in G.nodes():
+    edges = G.edges(node)
+    l = len(edges)
+    if l > 2:
+        for edge in edges:
+            l = len(G[node][edge[1]])
+            if l > 1:
+                pools_per_node[(node, edge[1])] = l
+
+print(f"{len(pools_per_node)} pools with more than 1 exchange {max(pools_per_node)} {min(pools_per_node)}")
+
 #stable_nodes = [i for i in range(1, 626199)]
 
 try:
@@ -242,12 +256,12 @@ possible_paths_2 = find_all_paths_2way_var(G, start_node, stable_nodes)
 possible_paths_3 = find_all_paths_3way_var(G, start_node, stable_nodes)
 #possible_paths_4 = find_all_paths_4way_var(G, start_node, stable_nodes)
 print("The number of possible 2-way exchanges starting from node", start_node, " is: ", len(possible_paths_2))
-print("Printing the list of possible paths and their cost:")
-for analyzed_path in possible_paths_2:
+#print("Printing the list of possible paths and their cost:")
+#for analyzed_path in possible_paths_2:
     #print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
-    print(analyzed_path)
+#    print(analyzed_path)
 print("The number of possible 3-way exchanges starting from node", start_node, " is: ", len(possible_paths_3))
-print("Printing the list of possible paths and their cost:")
+#print("Printing the list of possible paths and their cost:")
 arbitrage_opportunity = []
 with open('3waystest.txt','w') as file:
     for analyzed_path in possible_paths_3:
@@ -259,7 +273,7 @@ with open('3waystest.txt','w') as file:
         #print(f"{weight} {pools}")
         #print(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:} -> {amount:}, {pools}", file=file)
         if weight >= 1:
-            print(f"{weight:.3} {pools}")
+            #print(f"{weight:.3} {pools}")
             print(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:.3} -> {amount:.3}, {pools}", file=file)
             arbitrage_opportunity.append(analyzed_path)
 #print ('The difference is: ',extract_differences('3waystest.txt','3waystestmod.txt' ))
@@ -268,8 +282,4 @@ with open('3waystest.txt','w') as file:
 #for analyzed_path in possible_paths_4:
     #print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
     #print(analyzed_path)
-
-
-
-
 
