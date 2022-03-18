@@ -95,25 +95,26 @@ def get_edge_pool(graph,start,end,key):
     if len(pools) == 0:
         raise Exception ('Found empty reserve in liquidity pool')
         
-    if len(pools) > 1:
-        print("Found multi-exchange pool on " + str(len(pools)) + " exchanges" )
+    #if len(pools) > 1:
+     #   print("Found multi-exchange pool on " + str(len(pools)) + " exchanges" )
 
     return pools
 
 def find_all_paths_multi_exchange(graph,paths):
     path_list = []
     for path in paths:
-        temp_path = []
         for start_pool in get_edge_pool(graph, path[0], path[1], 'pool'):
-            temp_path.append(path[0])
-            temp_path.append(path[1])
+            #temp_path = []
+            #temp_path.append(path[0])
+            #temp_path.append(path[1])
             for second_pool in get_edge_pool(graph, path[1], path[2], 'pool'):
-                temp_path.append(path[2])
-                for third_pool in get_edge_pool(graph, path[2], path[3], 'pool'):
-                    temp_path.append(path[3])
-                    for final_pool in get_edge_pool(graph, path[3], path[1], 'pool'):
-                        temp_path.append(path[1])
-        path_list.append(temp_path)
+                #temp_path.append(path[2])
+                #temp_path.append(path[0])                
+                for third_pool in get_edge_pool(graph, path[2], path[0], 'pool'):
+                    path_list.append(path)
+                    #for final_pool in get_edge_pool(graph, path[3], path[1], 'pool'):
+                     #   temp_path.append(path[1])
+                            
     return path_list
     
 
