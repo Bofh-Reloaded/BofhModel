@@ -103,18 +103,12 @@ def get_edge_pool(graph,start,end,key):
 def find_all_paths_multi_exchange(graph,paths):
     path_list = []
     for path in paths:
-        for start_pool in get_edge_pool(graph, path[0], path[1], 'pool'):
-            #temp_path = []
-            #temp_path.append(path[0])
-            #temp_path.append(path[1])
-            for second_pool in get_edge_pool(graph, path[1], path[2], 'pool'):
-                #temp_path.append(path[2])
-                #temp_path.append(path[0])                
-                for third_pool in get_edge_pool(graph, path[2], path[0], 'pool'):
-                    path_list.append(path)
-                    #for final_pool in get_edge_pool(graph, path[3], path[1], 'pool'):
-                     #   temp_path.append(path[1])
-                            
+        try:
+            for start_pool in get_edge_pool(graph, path[0], path[1], 'pool'):
+                for second_pool in get_edge_pool(graph, path[1], path[2], 'pool'):
+                    for third_pool in get_edge_pool(graph, path[2], path[0], 'pool'):
+                        path_list.append(path)
+        except: path_list.append([0,0,0,0])                                                  
     return path_list
     
 
@@ -301,7 +295,7 @@ with open('3waystest.txt','w') as file:
 full_path_list = find_all_paths_multi_exchange(G, possible_paths_3)
 with open('fullpathlist.txt','w') as file:
     for path in full_path_list:
-        print(f"{path}")
+        print(f"{path}",file=file)
 #print ('The difference is: ',extract_differences('3waystest.txt','3waystestmod.txt' ))
 #print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths_4))
 #print("Printing the list of possible paths and their cost:")
