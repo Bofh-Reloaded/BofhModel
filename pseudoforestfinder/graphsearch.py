@@ -91,13 +91,31 @@ def get_edge_pool(graph,start,end,key):
     #print(mypool.address)
         if mypool.reserve1 == 0:
             continue
-
         pools.append(mypool)
-
     if len(pools) == 0:
         raise Exception ('Found empty reserve in liquidity pool')
+        
+    if len(pools) > 1:
+        print("Found multi-exchange pool on " + str(len(pools)) + " exchanges" )
 
     return pools
+
+def find_all_paths_multi_exchange(graph,paths):
+    path_list = []
+    for path in paths:
+        temp_path = []
+        for start_pool in get_edge_pool(graph, path[0], path[1], 'pool'):
+            temp_path.append(path[0])
+            temp_path.append(path[1])
+            for second_pool in get_edge_pool(graph, path[1], path[2], 'pool'):
+                temp_path.append(path[2])
+                for third_pool in get_edge_pool(graph, path[2], path[3], 'pool'):
+                    temp_path.append(path[3])
+                    for final_pool in get_edge_pool(graph, path[3], path[1], 'pool'):
+                        temp_path.append(path[1])
+        path_list.append(temp_path)
+    return path_list
+    
 
 #Computes the revenue for a triangular exchange
 def compute_weights_in_path(path,graph,fee):
@@ -111,7 +129,7 @@ def compute_weights_in_path(path,graph,fee):
             if max_amount < start_amount:
                 max_amount = start_amount
                 max_pool = start_pool
-
+            
         start_amount = max_amount
         pools.append(max_pool.address)
 
@@ -127,7 +145,7 @@ def compute_weights_in_path(path,graph,fee):
                 if max_amount < amount:
                     max_amount = amount
                     max_pool = pool
-
+                
             amount = max_amount
             pools.append(max_pool.address)
 
@@ -263,6 +281,7 @@ print("The number of possible 2-way exchanges starting from node", start_node, "
 print("The number of possible 3-way exchanges starting from node", start_node, " is: ", len(possible_paths_3))
 #print("Printing the list of possible paths and their cost:")
 arbitrage_opportunity = []
+
 with open('3waystest.txt','w') as file:
     for analyzed_path in possible_paths_3:
         weight,amount,start_amount,pools = compute_weights_in_path(analyzed_path, G,0.003)
@@ -276,6 +295,12 @@ with open('3waystest.txt','w') as file:
             #print(f"{weight:.3} {pools}")
             print(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:.3} -> {amount:.3}, {pools}", file=file)
             arbitrage_opportunity.append(analyzed_path)
+        else:
+            print(f" {analyzed_path} total unbalance: {weight:} : {start_amount:} -> {amount:}, {pools}", file=file)
+full_path_list = find_all_paths_multi_exchange(G, possible_paths_3)
+with open('fullpathlist.txt','w') as file:
+    for path in full_path_list:
+        print(f"{path}")
 #print ('The difference is: ',extract_differences('3waystest.txt','3waystestmod.txt' ))
 #print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths_4))
 #print("Printing the list of possible paths and their cost:")
