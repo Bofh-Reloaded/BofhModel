@@ -4,7 +4,7 @@ Spyder Editor
 
 """
 
-#import networkx as nx
+import networkx as nx
 
 ##uncomment if using loaded matrix
 #from load_bsc_pools_graph import load_graph_from_json_coso
@@ -37,7 +37,7 @@ def find_all_paths_4way_var(graph, start_node, stable_list):
     print("number of successors: ", len(successorslist)) #green arrows - forward path
     print("number of predecessors: ", len(predecessorslist)) #blue arrows - reverese path
     usable_nodes = (set(stable_list) & (predecessorslist)) #filter blue arrows on stable nodes
-    print("usable_nodes: ", list(usable_nodes))
+    #print("usable_nodes: ", list(usable_nodes))
     for stable_node in usable_nodes:
         for second_node in successorslist:
             if stable_node != second_node: #avoid cycling on two nodes iteratively
@@ -55,10 +55,12 @@ def find_all_paths_3way_var(graph, start_node, stable_list):
     predecessorslist = set(graph.predecessors(start_node))
     print("number of successors: ", len(successorslist)) #green arrows - forward path
     print("number of predecessors: ", len(predecessorslist)) #blue arrows - reverese path
-    usable_nodes = (set(stable_list) & (predecessorslist)) #filter blue arrows on stable nodes
-    print("usable_nodes: ", list(usable_nodes))
+    #usable_nodes = (set(stable_list) & (predecessorslist)) #filter blue arrows on stable nodes
+    usable_nodes = ((predecessorslist)) #filter blue arrows on stable nodes
+    #print("usable_nodes: ", list(usable_nodes))
     for stable_node in usable_nodes:
-        tc_nodes = set(graph.predecessors(stable_node)) & set(successorslist)
+        #tc_nodes = set(graph.predecessors(stable_node)) & set(successorslist)
+        tc_nodes = set(successorslist)
         for tc_node in tc_nodes:
             path = [start_node, tc_node, stable_node, start_node]
             path_list.append(path)
@@ -70,12 +72,50 @@ def find_all_paths_2way_var(graph, start_node, stable_list):
     predecessorslist = set(graph.predecessors(start_node))
     print("number of successors: ", len(successorslist)) #green arrows - forward path
     print("number of predecessors: ", len(predecessorslist)) #blue arrows - reverese path
-    usable_nodes = (set(stable_list) & (predecessorslist)) #filter blue arrows on stable nodes
-    print("usable_nodes: ", list(usable_nodes))
+    #usable_nodes = (set(stable_list) & (predecessorslist)) #filter blue arrows on stable nodes
+    usable_nodes = set(predecessorslist) #filter blue arrows on stable nodes
+    #print("usable_nodes: ", list(usable_nodes))
     for stable_node in usable_nodes:
             path = [start_node, stable_node, start_node]
             path_list.append(path)
     return path_list
+
+
+def reach_pool_from_node_right(graph, token_b, token_start):
+    if token_start in graph.successors(token_b):
+        return [token_b,token_start]
+    else:
+        temp_list = []
+        for token in graph.successors(token_b):
+            temp_list = reach_pool_from_node_right(graph, token, token_start)
+            if temp_list:
+                temp_list.insert(0, token_b)
+                break
+        return temp_list
+                
+def reach_pool_from_node_left(graph, token_a, token_start):
+    pred_list = graph.predecessors(token_a)
+    if token_start in pred_list:
+        return [token_start, token_a]
+    else:
+        temp_list = []
+        for token in pred_list:
+            temp_list = reach_pool_from_node_left(graph, token, token_start)
+            if temp_list:
+                temp_list.append(token_a)
+                break
+        return temp_list          
+
+def reach_pool_from_node(graph, token_a, token_b, token_start, level=0):
+    temp_list_right =  reach_pool_from_node_right(graph,token_b, token_start)
+    if not temp_list_right:
+        return []            
+    
+    temp_list_left=reach_pool_from_node_left(graph, token_a, token_start)
+    if not temp_list_left:
+        return temp_list_left
+    
+    return temp_list_left + temp_list_right
 
 #Utility functions
 def get_edge_weight(graph,start,end,key):
@@ -199,34 +239,37 @@ def extract_differences (file1, file2) :
     return set(list2) - set(list1)
 
 #Generating the graph of example on draw.io
-#G = nx.MultiDiGraph()
+G = nx.MultiDiGraph()
 
-#G.add_nodes_from([1,2,3,4,5,6])
+G.add_nodes_from([1,2,3,4,5,6])
 
 
 
-#edges = G.add_edge(1,2,weight=1)
-#edges = G.add_edge(1,4,weight=1)
-#edges = G.add_edge(2,4,weight=1)
-#edges = G.add_edge(3,1,weight=1)
-#edges = G.add_edge(3,5,weight=1)
-#edges = G.add_edge(3,6,weight=1)
-#edges = G.add_edge(4,1,weight=1)
-#edges = G.add_edge(4,2,weight=1)
-#edges = G.add_edge(4,3,weight=1)
-#edges = G.add_edge(4,5,weight=1)
-#edges = G.add_edge(4,6,weight=1)
-#edges = G.add_edge(5,3,weight=1)
-#edges = G.add_edge(5,6,weight=1)
-#edges = G.add_edge(6,1,weight=1)
+edges = G.add_edge(1,2,weight=1)
+edges = G.add_edge(1,4,weight=1)
+edges = G.add_edge(2,4,weight=1)
+edges = G.add_edge(3,1,weight=1)
+edges = G.add_edge(3,5,weight=1)
+edges = G.add_edge(3,6,weight=1)
+edges = G.add_edge(4,1,weight=1)
+edges = G.add_edge(4,2,weight=1)
+edges = G.add_edge(4,3,weight=1)
+edges = G.add_edge(4,5,weight=1)
+edges = G.add_edge(4,6,weight=1)
+edges = G.add_edge(5,3,weight=1)
+edges = G.add_edge(5,6,weight=1)
+edges = G.add_edge(6,1,weight=1)
 
 ##Uncomment if using the loaded matrix
-G = the_graph
+#G = the_graph
 #print("G.has_edge(2, 4)", G.has_edge(2, 4))
 #print("G.has_edge(4, 2)", G.has_edge(4, 2))
 
 print("number of nodes: ", G.number_of_nodes())
 print("number of edges: ", G.number_of_edges())
+
+print(reach_pool_from_node(G, 5, 3, 1))
+
 
 pools_per_node = dict()
 for node in G.nodes():
@@ -253,6 +296,9 @@ except:
     start_node = 2
     print("using hardwired start_node", start_node)
     print("using hardwired stable_nodes", stable_nodes)
+    
+    
+    
 #print("List of predecessors is", set(G.predecessors(1)))
 #print(nx.is_directed(G))
 #nx.draw(the_graph, pos=nx.circular_layout(the_graph), node_color='r', edge_color='b') #draw graph
@@ -265,37 +311,37 @@ except:
 #nx.draw(G.subgraph(path), pos=nx.circular_layout(G.subgraph(path)), node_color='r', edge_color='b')
 
 #print(get_edge_pool(G, 13, 4, "pool").reserve0)
-possible_paths_2 = find_all_paths_2way_var(G, start_node, stable_nodes)
-possible_paths_3 = find_all_paths_3way_var(G, start_node, stable_nodes)
+#possible_paths_2 = find_all_paths_2way_var(G, start_node, stable_nodes)
+#possible_paths_3 = find_all_paths_3way_var(G, start_node, stable_nodes)
 #possible_paths_4 = find_all_paths_4way_var(G, start_node, stable_nodes)
-print("The number of possible 2-way exchanges starting from node", start_node, " is: ", len(possible_paths_2))
+#print("The number of possible 2-way exchanges starting from node", start_node, " is: ", len(possible_paths_2))
 #print("Printing the list of possible paths and their cost:")
 #for analyzed_path in possible_paths_2:
     #print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
 #    print(analyzed_path)
-print("The number of possible 3-way exchanges starting from node", start_node, " is: ", len(possible_paths_3))
+#print("The number of possible 3-way exchanges starting from node", start_node, " is: ", len(possible_paths_3))
 #print("Printing the list of possible paths and their cost:")
 arbitrage_opportunity = []
 
-with open('3waystest.txt','w') as file:
-    for analyzed_path in possible_paths_3:
-        weight,amount,start_amount,pools = compute_weights_in_path(analyzed_path, G,0.003)
+#with open('3waystest.txt','w') as file:
+#    for analyzed_path in possible_paths_3:
+#        weight,amount,start_amount,pools = compute_weights_in_path(analyzed_path, G,0.003)
         #print(analyzed_path, "cost is:", compute_weights_in_path(analyzed_path, G))
         #print(analyzed_path)
         #file.write(repr(analyzed_path) + " total unbalance: " + repr(compute_weights_in_path(analyzed_path, G)) + '\n')
         #file.write(repr(analyzed_path) + " total unbalance: " + repr(compute_weights_in_path(analyzed_path, G,0.003)) + '\n')
         #print(f"{weight} {pools}")
         #print(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:} -> {amount:}, {pools}", file=file)
-        if weight >= 1:
+ #       if weight >= 1:
             #print(f"{weight:.3} {pools}")
-            print(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:.3} -> {amount:.3}, {pools}", file=file)
-            arbitrage_opportunity.append(analyzed_path)
-        else:
-            print(f" {analyzed_path} total unbalance: {weight:} : {start_amount:} -> {amount:}, {pools}", file=file)
-full_path_list = find_all_paths_multi_exchange(G, possible_paths_3)
-with open('fullpathlist.txt','w') as file:
-    for path in full_path_list:
-        print(f"{path}",file=file)
+ #           print(f" {analyzed_path} total unbalance: {weight:.3} : {start_amount:.3} -> {amount:.3}, {pools}", file=file)
+ #           arbitrage_opportunity.append(analyzed_path)
+  #      else:
+  #          print(f" {analyzed_path} total unbalance: {weight:} : {start_amount:} -> {amount:}, {pools}", file=file)
+#full_path_list = find_all_paths_multi_exchange(G, possible_paths_3)
+#with open('fullpathlist.txt','w') as file:
+#    for path in full_path_list:
+#        print(f"{path}",file=file)
 #print ('The difference is: ',extract_differences('3waystest.txt','3waystestmod.txt' ))
 #print("The number of possible 4-way exchanges starting from node", start_node, " is: ", len(possible_paths_4))
 #print("Printing the list of possible paths and their cost:")
