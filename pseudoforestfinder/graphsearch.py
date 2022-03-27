@@ -97,6 +97,26 @@ def reach_pool_from_node_right(graph, token_b, token_start):
                 break
         print(f"found {temp_list}")
         return temp_list
+ 
+#returns the full right fan 
+def reach_pool_from_node_right_all(graph, token_b, token_start):
+    paths_right = []
+    succ_list = list(graph.successors(token_b))
+    print(f"successors of {token_b}: {succ_list}")
+    if token_start in succ_list:
+        return [token_b,token_start]
+    else:
+        temp_list = []
+        print(f"looking in {succ_list}");
+        for token in succ_list:
+            print(f"trying {token} for {token_b}")
+            temp_list = reach_pool_from_node_right(graph, token, token_start)
+            if temp_list:
+                temp_list.insert(0, token_b)
+                paths_right.append(temp_list)
+        print(f"found {temp_list}")
+        return paths_right   
+    
 
 def reach_pool_from_node_left(graph, token_a, token_start):
     pred_list = list(graph.predecessors(token_a))
@@ -114,23 +134,72 @@ def reach_pool_from_node_left(graph, token_a, token_start):
                 break
         print(f"found {temp_list}")
         return temp_list
+ 
+#retunrs the full left fan    
+def reach_pool_from_node_left_all(graph, token_a, token_start):
+    paths_left = []
+    pred_list = list(graph.predecessors(token_a))
+    print(f"predecessors of {token_a}: {pred_list}")
+    if token_start in pred_list:
+        return [token_start, token_a]
+    else:
+        temp_list = []
+        print(f"looking in {pred_list}");
+        for token in pred_list:
+            print(f"trying {token} for {token_a}")
+            temp_list = reach_pool_from_node_left(graph, token, token_start)
+            if temp_list:
+                temp_list.append(token_a)
+                paths_left.append(temp_list)
+        print(f"found {temp_list}")
+        return paths_left    
+    
 
 def reach_pool_from_node(graph, token_a, token_b, token_start, level=0):
     print(f"find {token_start} to {token_a},{token_b}")
-    temp_list_right =  reach_pool_from_node_right(graph,token_b, token_start)
+    temp_list_right =  reach_pool_from_node_right(graph, token_b, token_start)
     if not temp_list_right:
         return []
-
     temp_list_left=reach_pool_from_node_left(graph, token_a, token_start)
     if not temp_list_left:
         return temp_list_left
-
     return temp_list_left + temp_list_right
 
 #Utility functions
 def get_edge_weight(graph,start,end,key):
     dict = graph[start][end]
     return dict[0][key]
+
+def find_all_paths_through_pool(graph, token_a, token_b, token_start):
+    path_list = []
+    left_paths = []
+    right_paths = []
+    pred_list = graph.predecessors(token_a)
+    succ_list = graph.successors(token_b)
+    #find all left paths
+    for pred_token in pred_list:
+        if pred_token == token_start:
+            left_paths.append([token_start,token_a])
+        else:
+            temp_paths = reach_pool_from_node_left_all(graph, pred_token, token_start)
+            for temp_path in temp_paths:
+                if temp_path:
+                    left_paths.append([temp_path,token_a])
+    #find all right paths
+    for succ_token in succ_list:
+        if succ_token == token_start:
+            right_paths.append([token_b,token_start])
+        else:
+            temp_paths = reach_pool_from_node_right_all(graph, succ_token, token_start)
+            for temp_path in temp_paths:
+                if temp_path:
+                    right_paths.append([token_b,temp_path])
+    #mix all paths as all possible paths            
+    for path_left in left_paths:
+        for path_right in right_paths:
+            path_list.append(path_left+path_right)
+    return path_list
+    
 
 #lists the pools connecting two tokens (generally from different exchanges)
 def get_edge_pool(graph,start,end,key):
@@ -278,7 +347,8 @@ edges = G.add_edge(6,1,weight=1)
 print("number of nodes: ", G.number_of_nodes())
 print("number of edges: ", G.number_of_edges())
 
-print(reach_pool_from_node(G, 4, 5, 1))
+#print(reach_pool_from_node(G, 5, 3, 1))
+print(find_all_paths_through_pool(G, 3, 6, 1))
 
 
 pools_per_node = dict()
