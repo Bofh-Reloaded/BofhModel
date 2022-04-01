@@ -16,6 +16,10 @@ src/bofh/model/bofh_model_fwd.hpp
 src/bofh/model/bofh_model_py_ext.cpp
 src/bofh/model/bofh_amm_estimation.hpp
 src/bofh/model/bofh_amm_estimation.cpp
+src/bofh/model/bofh_graph_distance.hpp
+src/bofh/model/bofh_graph_distance.cpp
+src/bofh/model/bofh_graph_paths.hpp
+src/bofh/model/bofh_graph_paths.cpp
 src/bofh/pathfinder/finder_3way.hpp
 src/bofh/pathfinder/finder_3way.cpp
 src/bofh/pathfinder/swaps_idx.hpp
@@ -25,6 +29,8 @@ src/bofh/commons/bofh_log.hpp
 src/bofh/commons/bofh_log.cpp
 src/bofh/pathfinder/paths.hpp
 src/bofh/pathfinder/paths.cpp
+src/bofh/pathfinder/finder_all_crossing.hpp
+src/bofh/pathfinder/finder_all_crossing.cpp
 src/3rd-party/hash-library/crc32.cpp
 src/3rd-party/hash-library/crc32.h
 src/3rd-party/hash-library/digest.cpp

@@ -11,21 +11,25 @@ class EntitiesPreloader:
     def __init__(self):
         self.pool_addresses = set()
 
-    def load(self):
+    def load(self, load_start_token=True, load_pools=True, calculate_paths=True, load_reserves=True):
         log = Loggers.preloader
         self.preload_exchanges()
         self.preload_tokens()
-        start_token = self.graph.lookup_token(self.args.start_token_address)
-        if not start_token:
-            msg = "start_token not found: address %s is unknown or not of a token" % self.args.start_token_address
-            log.error(msg)
-            raise RuntimeError(msg)
-        else:
-            log.info("start_token is %s (%s)", start_token.symbol, start_token.address)
-            self.graph.start_token = start_token
-        self.preload_pools()
-        self.graph.calculate_paths()
-        self.preload_balances()
+        if load_pools:
+            self.preload_pools()
+            if load_reserves:
+                self.preload_balances()
+        if load_start_token:
+            start_token = self.graph.lookup_token(self.args.start_token_address)
+            if not start_token:
+                msg = "start_token not found: address %s is unknown or not of a token" % self.args.start_token_address
+                log.error(msg)
+                raise RuntimeError(msg)
+            else:
+                log.info("start_token is %s (%s)", start_token.symbol, start_token.address)
+                self.graph.set_start_token(start_token)
+        if calculate_paths:
+            self.graph.calculate_paths()
         log.info("  ********************************************")
         log.info("  ***  KNOWLEDGE GRAPH LOAD COMPLETED :-)  ***")
         log.info("  ********************************************")

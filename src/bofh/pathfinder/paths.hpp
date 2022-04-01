@@ -21,9 +21,11 @@ struct PathConsistencyError: std::runtime_error
 
 
 typedef enum {
+    PATH_2WAY = 2,
     PATH_3WAY = 3,
     PATH_4WAY = 4,
 } PathLength;
+constexpr auto MIN_PATHS = PATH_2WAY;
 constexpr auto MAX_PATHS = PATH_4WAY;
 
 struct Path;
@@ -98,14 +100,19 @@ struct Path: std::array<const OperableSwap *, MAX_PATHS>
 {
     typedef std::array<const OperableSwap *, MAX_PATHS> base_t;
     typedef const OperableSwap * value_type;
+    typedef const model::LiquidityPool * alt_value_type;
 
     PathLength type;
     std::size_t m_hash; // cached id
 
     Path() = delete;
 
+    Path(value_type v0, value_type v1);
     Path(value_type v0, value_type v1, value_type v2);
     Path(value_type v0, value_type v1, value_type v2, value_type v3);
+    Path(const model::Token *start_token, const model::LiquidityPool *pools[], std::size_t size);
+
+    static const Path *reversed(const Path *p);
 
     /**
      * @brief returns number of swaps in the chain
@@ -127,7 +134,7 @@ struct Path: std::array<const OperableSwap *, MAX_PATHS>
      *
      * This saves on memory and time.
      */
-    typedef std::function<void(const Path *)> listener_t;
+    typedef std::function<bool(const Path *)> listener_t;
 
     std::string print_addr() const;
     std::string get_symbols() const;

@@ -150,11 +150,21 @@ struct Token: Entity, Ref<Token>
 
     balance_t toWei(double amount) const;
 
+    bool isConnected() const;
+    unsigned distance() const;
+    void set_distance(unsigned val);
+    void unset_distance();
+private:
+    unsigned m_distance = 0;
+public:
+
+
     int feesPPM() const;
     bool hasFees() const;
     void set_feesPPM(int val);
 
     balance_t transferResult(const balance_t &amount) const;
+    std::vector<const LiquidityPool *> m_pools;
 private:
     bool m_hasFees = false;
     int m_feesPPM = 0;
@@ -228,12 +238,7 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
                   , TheGraph *parent_
                   , const Exchange* exchange_
                   , Token* token0_
-                  , Token* token1_)
-      : Entity(TYPE_LP, tag_, address_, parent_),
-        exchange(exchange_),
-        token0(token0_),
-        token1(token1_)
-    { }
+                  , Token* token1_);
 
     void setReserves(const balance_t &reserve0, const balance_t &reserve1);
     const balance_t getReserve(const Token *token) const noexcept;
@@ -258,6 +263,15 @@ private:
     bool m_hasFees = false;
     int m_feesPPM = 0;
 public:
+
+
+//    bool isConnected() const;
+//    unsigned distance() const;
+//    void set_distance(unsigned val);
+//    void unset_distance();
+//private:
+//    unsigned m_distance = 0;
+//public:
 
 
     const LiquidityPool *get_predicted_state(unsigned key) const;
@@ -295,7 +309,6 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
                                     // by more custom code if things develop more.
     std::unique_ptr<idx::SwapIndex>   swap_index;
     std::unique_ptr<pathfinder::idx::SwapPathsIndex> paths_index;
-    Token *start_token = nullptr;
     std::mutex m_update_mutex;
     typedef std::lock_guard<std::mutex> lock_guard_t;
 
@@ -418,6 +431,7 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
      * and add them to an hot index
      */
     void calculate_paths();
+    void clear_paths();
 
 
     using Path = pathfinder::Path;
@@ -425,6 +439,7 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
     using PathResult = pathfinder::PathResult;
     using PathResultList = pathfinder::PathResultList;
     PathList find_paths_to_token(const Token *token) const;
+    PathList find_paths_crossing_lp(const LiquidityPool *lp, unsigned max_length, unsigned max_count) const;
 
 
 
@@ -494,6 +509,12 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
     std::size_t exchanges_ctr = 0;
     std::size_t tokens_ctr = 0;
     std::size_t pools_ctr = 0;
+
+
+    Token *m_start_token = nullptr;
+    Token *get_start_token() const;
+    void set_start_token(Token *token);
+
 };
 
 

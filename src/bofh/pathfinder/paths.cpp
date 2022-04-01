@@ -18,6 +18,7 @@ typedef enum {
     contract_call_swapinspect,
 } contract_call_t;
 
+
 static const uint32_t m_path_len_method_selector(contract_call_t contract_call
                                                  , unsigned path_len)
 {
@@ -99,6 +100,19 @@ static const uint32_t m_path_len_method_selector(contract_call_t contract_call
     return 0;
 };
 
+
+static bool m_raise_maybe(bool no_except, const std::string &msg)
+{
+    log_error("path consistency error: %1%", msg);
+    if (no_except)
+    {
+        return false;
+    }
+    throw PathConsistencyError(msg);
+}
+
+
+
 static std::size_t m_calcPathHash(const Path &p)
 {
     std::size_t h = 0U;
@@ -118,6 +132,13 @@ Path::Path(value_type v0
 { }
 
 Path::Path(value_type v0
+     , value_type v1)
+    : base_t{v0, v1}
+    , type(PATH_2WAY)
+    , m_hash(m_calcPathHash(*this))
+{ }
+
+Path::Path(value_type v0
      , value_type v1
      , value_type v2
      , value_type v3)
@@ -126,6 +147,62 @@ Path::Path(value_type v0
     , m_hash(m_calcPathHash(*this))
 { }
 
+static PathLength m_connect_swaps_from_lp_sequence(Path::base_t &out
+                                                   , const model::Token *start_token
+                                                   , const model::LiquidityPool *pools[]
+                                                   , std::size_t size)
+{
+    assert(pools != nullptr);
+    if (size < MIN_PATHS || size > MAX_PATHS)
+    {
+        m_raise_maybe(false, "bad path length");
+    }
+    const model::LiquidityPool *prev, *next;
+    const model::Token *token = start_token;
+    unsigned i;
+
+    for (i=0; i<size; ++i)
+    {
+        auto lp = pools[i];
+        if (lp->token0 == token)
+        {
+            token = lp->token1;
+            out[i] = lp->swaps[0];
+        }
+        else if (lp->token1 == token)
+        {
+            token = lp->token0;
+            out[i] = lp->swaps[1];
+        }
+        else {
+            m_raise_maybe(false, "unconnected path");
+        }
+    }
+
+    if (token != start_token)
+    {
+        m_raise_maybe(false, "non-circular");
+    }
+
+    return static_cast<PathLength>(size);
+}
+
+Path::Path(const model::Token *start_token, const model::LiquidityPool *pools[], std::size_t size)
+{
+    type = m_connect_swaps_from_lp_sequence(*this, start_token, pools, size);
+    m_hash = m_calcPathHash(*this);
+}
+
+const Path *Path::reversed(const Path *p)
+{
+    const model::LiquidityPool *data[MAX_PATHS];
+    unsigned size = p->size();
+    for (unsigned i=0; i<size; ++i)
+    {
+        data[i] = (*p)[size-1-i]->pool;
+    }
+    return new Path(p->get(0)->tokenSrc, data, size);
+}
 
 std::string Path::print_addr() const
 {
@@ -153,15 +230,6 @@ std::string Path::get_symbols() const
     return ss.str();
 }
 
-static bool m_raise_maybe(bool no_except, const std::string &msg)
-{
-    log_error("path consistency error: %1%", msg);
-    if (no_except)
-    {
-        return false;
-    }
-    throw PathConsistencyError(msg);
-}
 
 bool Path::check_consistency(bool no_except) const
 {

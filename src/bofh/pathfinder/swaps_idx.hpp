@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "finder_3way.hpp"
+#include "paths.hpp"
 #include <boost/functional/hash.hpp>
 #include <map>
 
@@ -15,9 +15,20 @@ namespace idx {
 
 
 struct SwapPathsIndex {
+    typedef struct {
+        bool added;
+        const Path *path;
+    } add_path_rt;
 
-    const Path *add_path(const Path *p);
+    add_path_rt add_path(const Path *p);
+    bool has_paths_for(const model::LiquidityPool *lp);
+    void connect_path_to_lp(const Path *p, const model::LiquidityPool *lp);
+    void clear();
+    std::size_t paths_count();
+    std::size_t matrix_count();
+    void get_paths_for_lp(PathList &out, const model::LiquidityPool *lp);
 
+//private:
     // effective owenr of Path object pointers (stored here so that later they can be deleted)
     // TODO: use unique_ptr and correct RAII
     std::unordered_map<std::size_t, const Path*> path_idx;

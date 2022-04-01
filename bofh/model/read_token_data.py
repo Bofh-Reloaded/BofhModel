@@ -1,57 +1,75 @@
 from asyncio import get_event_loop
 from functools import lru_cache
+
+from bofh.utils.config_data import BOFH_START_TOKEN_ADDRESS, BOFH_CONTRACT_ADDRESS, BOFH_WALLET_ADDRESS, \
+    BOFH_STATUS_DB_DSN, BOFH_WEB3_RPC_URL, BOFH_MAX_WORKERS
 from bofh.utils.misc import progress_printer
-from bofh.utils.web3 import Web3Connector, Web3PoolExecutor, JSONRPCConnector, method_id, parse_data_parameters, \
+from bofh.utils.web3 import Web3PoolExecutor, JSONRPCConnector, method_id, parse_data_parameters, \
     parse_string_return
 
-__doc__="""Read token metadata like name, symbol decimals, etc, from Web3 RPC. Then update status db.
+from dataclasses import dataclass, fields, MISSING
+from logging import getLogger, basicConfig, Filter
 
-Usage: bofh.model.read_token_data [options]
+from bofh.model.database import ModelDB, StatusScopedCursor
+from bofh.model.modules.graph import TheGraph
+from bofh.model.modules.contract_calls import ContractCalling
+from bofh.model.modules.status_preloaders import EntitiesPreloader
+from bofh.model.modules.loggers import Loggers
+from bofh_model_ext import log_level, log_register_sink, log_set_level
 
-Options:
-  -h  --help
-  -d, --dsn=<connection_str>            DB dsn connection string [default: sqlite3://status.db]
-  -c, --connection_url=<url>            Web3 RPC connection URL [default: %s]
-  -n <n>                                limit number of items to load (benchmark mode)
-  -j <n>                                number of RPC data ingest workers, default one per hardware thread. Only used during initialization phase
-  -v, --verbose                         debug output
-  --chunk_size=<n>                      preloaded work chunk size per each worker [default: 100]
-""" % Web3Connector.DEFAULT_URI_WSRPC
-
-from dataclasses import dataclass
-from logging import getLogger, basicConfig
-
-from bofh.model.database import ModelDB, BasicScopedCursor
 
 
 @dataclass
 class Args:
-    status_db_dsn: str = None
+    status_db_dsn: str = BOFH_STATUS_DB_DSN
     verbose: bool = False
     items_limit: int = 0
-    web3_rpc_url: str = None
-    max_workers: int = 0
-    chunk_size: int = 0
-
-    @staticmethod
-    def default(arg, d, suppress_list=None):
-        if suppress_list and arg in suppress_list:
-            arg = None
-        if arg: return arg
-        return d
+    web3_rpc_url: str = BOFH_WEB3_RPC_URL
+    max_workers: int = BOFH_MAX_WORKERS
+    chunk_size: int = 100
+    start_token_address: str = BOFH_START_TOKEN_ADDRESS
+    max_reserves_snapshot_age_secs: int = 7200
+    force_reuse_reserves_snapshot: bool = False
+    do_not_update_reserves_from_chain: bool = False
+    contract_address: str = BOFH_CONTRACT_ADDRESS
+    wallet_address: str = BOFH_WALLET_ADDRESS
 
     @classmethod
     def from_cmdline(cls, docstr):
         from docopt import docopt
         args = docopt(docstr)
-        return cls(
-            status_db_dsn = args["--dsn"]
-            , verbose=bool(cls.default(args["--verbose"], 0))
-            , items_limit=int(cls.default(args["-n"], 0))
-            , web3_rpc_url=cls.default(args["--connection_url"], 0)
-            , max_workers=int(cls.default(args["-j"], 0))
-            , chunk_size=int(cls.default(args["--chunk_size"], 100))
-        )
+        kw = {}
+        for field in fields(cls):
+            k = "--%s" % field.name
+            arg = args.get(k)
+            if arg is None:
+                arg = field.default
+                if arg is MISSING:
+                    raise RuntimeError("missing command line parameter: %s" % k)
+            if arg is not None:
+                arg = field.type(arg)
+            kw[field.name] = arg
+        return cls(**kw)
+
+
+__doc__=f"""Read token metadata like name, symbol decimals, etc, from Web3 RPC. Then update status db.
+
+Usage: bofh.model.read_token_data [options]
+
+Options:
+  -h  --help
+  -d, --status_db_dsn=<connection_str>      DB status dsn connection string. Default is {Args.status_db_dsn}
+  -c, --web3_rpc_url=<url>                  Web3 RPC connection URL. Default is {Args.web3_rpc_url}
+  -j, --max_workers=<n>                     number of RPC data ingest workers, default one per hardware thread. Default is {Args.max_workers}
+  -v, --verbose                             debug output
+  --chunk_size=<n>                          preloaded work chunk size per each worker Default is {Args.chunk_size}
+  --start_token_address=<address>           on-chain address of start token. Default is {Args.start_token_address}
+  --max_reserves_snapshot_age_secs=<s>      max age of usable LP reserves DB snapshot (refuses to preload from DB if older). Default is {Args.max_reserves_snapshot_age_secs}
+  --force_reuse_reserves_snapshot           disregard --max_reserves_snapshot_age_secs (use for debug purposes, avoids download of reserves)       
+  --do_not_update_reserves_from_chain       do not attempt to forward an existing reserves DB snapshot to the latest known block
+  --contract_address=<address>              set contract counterpart address. Default is {Args.contract_address}
+  --wallet_address=<address>                funding wallet address. Default is {Args.wallet_address}
+"""
 
 
 def read_token_data(token_address):
@@ -79,14 +97,36 @@ def read_token_data(token_address):
         return False, token_address, None, None, None
 
 
-class Runner:
+class Runner(TheGraph
+             , EntitiesPreloader
+             , ContractCalling
+             ):
     log = getLogger(__name__)
 
     def __init__(self, args: Args):
+        EntitiesPreloader.__init__(self)
         self.args = args
-        self.db = ModelDB(schema_name="status", cursor_factory=BasicScopedCursor, db_dsn=self.args.status_db_dsn)
+        self.db = ModelDB(schema_name="status", cursor_factory=StatusScopedCursor, db_dsn=self.args.status_db_dsn)
         self.db.open_and_priming()
         self.ioloop = get_event_loop()
+        ContractCalling.__init__(self, args=self.args)
+        TheGraph.__init__(self, self.db)
+
+    @lru_cache
+    def tokens_requiring_fees_ctr(self):
+        with self.db as curs:
+            return curs.execute("SELECT COUNT(1) FROM tokens "
+                                "WHERE NOT disabled AND "
+                                " NOT is_stabletoken AND"
+                                "      fees_ppm IS NULL ").get_int()
+
+    def tokens_requiring_fees(self):
+        with self.db as curs:
+            for i in curs.execute("SELECT address FROM tokens "
+                                  "WHERE NOT disabled AND "
+                                  " NOT is_stabletoken AND"
+                                  "      fees_ppm IS NULL ").get_all():
+                yield i[0]
 
     @lru_cache
     def tokens_requiring_update_ctr(self):
@@ -105,6 +145,31 @@ class Runner:
                                   "   OR name     IS NULL "
                                   "   OR decimals IS NULL )").get_all():
                 yield i[0]
+
+    def read_token_fees(self):
+        tokens_requiring_fees_ctr = self.tokens_requiring_fees_ctr()
+        if not tokens_requiring_fees_ctr:
+            self.log.info("no tokens requiring fee discovery")
+            return
+        self.log.info("%r tokens require fee discovery. Preloading the knowledge graph...", tokens_requiring_fees_ctr)
+        #from IPython import embed
+        #embed()
+        self.load(load_reserves=False)
+        progress = progress_printer(tokens_requiring_fees_ctr
+                                    , "fetching token fees {percent}% ({count} of {tot}"
+                                      " eta={expected_secs:.0f}s at {rate:.0f} items/s) ..."
+                                    , on_same_line=True)
+        missing_ctr = 0
+        for addr in list(self.tokens_requiring_fees()):
+            t = self.graph.lookup_token(addr)
+            paths = list(self.graph.find_paths_to_token(t))
+            progress()
+            return
+            if not paths:
+                missing_ctr+=1
+        self.log.info("out of %u known tokens, %u have no known paths to cross them"
+                      , self.graph.tokens_count()
+                      , missing_ctr)
 
     def read_token_names(self):
         self.log.info("fetching token names...")
@@ -149,7 +214,7 @@ class Runner:
                         break
                 self.log.info("batch completed for a total of %r tokens."
                               " %r tokens correctly updated, "
-                              "while %r were found broken and marked as disabled=1"
+                              "while %r were found broken and marked as disabled"
                               , progress.total
                               , progress.updates
                               , progress.broken)
@@ -161,8 +226,20 @@ class Runner:
 
 def main():
     basicConfig(level="INFO")
-    runner = Runner(Args.from_cmdline(__doc__))
+    log_set_level(log_level.debug)
+    log_register_sink(Loggers.model)
+    args = Args.from_cmdline(__doc__)
+    import coloredlogs
+    coloredlogs.install(level="DEBUG", datefmt='%Y%m%d%H%M%S')
+    if not getattr(args, "verbose", 0):
+        # limit debug log output to bofh.* loggers
+        filter = Filter(name="bofh")
+        for h in getLogger().handlers:
+            h.addFilter(filter)
+
+    runner = Runner(args)
     runner.read_token_names()
+    runner.read_token_fees()
 
 
 if __name__ == '__main__':

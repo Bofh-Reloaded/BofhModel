@@ -109,7 +109,7 @@ Options:
   -v, --verbose                             debug output
   --chunk_size=<n>                          preloaded work chunk size per each worker Default is {Args.chunk_size}
   --pred_polling_interval=<n>               Web3 prediction polling internal in millisecs. Default is {Args.pred_polling_interval}
-  --start_token_address=<address>           on-chain address of start token. Default is WBNB_mainnet
+  --start_token_address=<address>           on-chain address of start token. Default is {Args.start_token_address}
   --max_reserves_snapshot_age_secs=<s>      max age of usable LP reserves DB snapshot (refuses to preload from DB if older). Default is {Args.max_reserves_snapshot_age_secs}
   --force_reuse_reserves_snapshot           disregard --max_reserves_snapshot_age_secs (use for debug purposes, avoids download of reserves)       
   --do_not_update_reserves_from_chain       do not attempt to forward an existing reserves DB snapshot to the latest known block
@@ -314,14 +314,13 @@ def main():
         for h in getLogger().handlers:
             h.addFilter(filter)
     bofh = Runner(args)
-    bofh.load()
-    bofh.start()
+    bofh.load(calculate_paths=False)
     if args.cli:
         from IPython import embed
         while True:
             embed()
-    else:
-        bofh.join()
+    bofh.start()
+    bofh.join()
 
 
 if __name__ == '__main__':

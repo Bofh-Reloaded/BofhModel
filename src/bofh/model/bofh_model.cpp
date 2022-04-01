@@ -1,9 +1,11 @@
 #include "bofh_model.hpp"
+#include "bofh_graph_distance.hpp"
 #include "../commons/bofh_log.hpp"
 #include "bofh_entity_idx.hpp"
 #include "../pathfinder/swaps_idx.hpp"
 #include "../pathfinder/paths.hpp"
 #include "../pathfinder/finder_3way.hpp"
+#include "../pathfinder/finder_all_crossing.hpp"
 #if !defined(NOPYTHON) || !NOPYTHON
 #include <boost/python/extract.hpp>
 #include <boost/python/str.hpp>
@@ -11,6 +13,11 @@
 #include <boost/stacktrace.hpp>
 #endif
 #include <sstream>
+#include <iostream>
+#include <fstream>
+#include <memory>
+#include <list>
+#include <algorithm>
 #include <exception>
 #include <assert.h>
 
@@ -132,6 +139,24 @@ balance_t Token::toWei(double amount) const
     return balance_t(amount * std::pow(10, decimals));
 }
 
+bool Token::isConnected() const
+{
+    return m_distance != std::numeric_limits<unsigned>::max();
+}
+unsigned Token::distance() const
+{
+    return m_distance;
+}
+void Token::set_distance(unsigned val)
+{
+    m_distance = val;
+}
+void Token::unset_distance()
+{
+    m_distance = std::numeric_limits<unsigned>::max();
+}
+
+
 int Token::feesPPM() const
 {
     return m_feesPPM;
@@ -195,6 +220,24 @@ LiquidityPool::reserves_ref LiquidityPool::getReserves() const noexcept
     return reserves_ref{reserves_set, reserve0, reserve1};
 }
 
+LiquidityPool::LiquidityPool(datatag_t tag_
+              , const address_t &address_
+              , TheGraph *parent_
+              , const Exchange* exchange_
+              , Token* token0_
+              , Token* token1_)
+  : Entity(TYPE_LP, tag_, address_, parent_),
+    exchange(exchange_),
+    token0(token0_),
+    token1(token1_)
+{
+    assert(exchange != nullptr);
+    assert(token0 != nullptr);
+    assert(token1 != nullptr);
+    token0->m_pools.emplace_back(this);
+    token1->m_pools.emplace_back(this);
+}
+
 
 std::string LiquidityPool::get_name() const
 {
@@ -240,6 +283,24 @@ void LiquidityPool::set_feesPPM(int val)
     m_feesPPM = val;
     m_hasFees = true;
 }
+
+//bool LiquidityPool::isConnected() const
+//{
+//    return m_distance != std::numeric_limits<unsigned>::max();
+//}
+//unsigned LiquidityPool::distance() const
+//{
+//    return m_distance;
+//}
+//void LiquidityPool::set_distance(unsigned val)
+//{
+//    m_distance = val;
+//}
+//void LiquidityPool::unset_distance()
+//{
+//    m_distance = std::numeric_limits<unsigned>::max();
+//}
+
 
 
 const LiquidityPool *LiquidityPool::get_predicted_state(unsigned key) const
@@ -666,39 +727,24 @@ const LiquidityPool *TheGraph::lookup_lp(datatag_t tag, bool fetch_if_missing)
     return res;
 }
 
-static auto clear_existing_paths_if_any = [](TheGraph *graph)
-{
-    assert(graph);
-    assert(graph->paths_index);
-
-    for (auto p: graph->paths_index->path_idx)
-    {
-        assert(p.second != nullptr);
-        delete p.second;
-    }
-
-    graph->paths_index->path_by_lp_idx.clear();
-    graph->paths_index->path_idx.clear();
-};
-
 void TheGraph::calculate_paths()
 {
     lock_guard_t lock_guard(m_update_mutex);
     using Path = pathfinder::Path;
 
-    clear_existing_paths_if_any(this);
+    clear_paths();
 
     pathfinder::Finder f{this};
 
-    if (start_token == nullptr)
+    if (m_start_token == nullptr)
     {
         log_error("calculate_paths(): start_token not set");
         return;
     }
 
     log_info("calculate_paths() considering start_token %s at %p"
-             , start_token->symbol.c_str()
-             , start_token);
+             , m_start_token->symbol.c_str()
+             , m_start_token);
 
     auto listener = [&](const Path *path)
     {
@@ -708,63 +754,110 @@ void TheGraph::calculate_paths()
                   , (*path)[2]->tokenSrc->tag
                   , (*path)[2]->tokenDest->tag);
         paths_index->add_path(path);
+        return true;
     };
 
-    f.find_all_paths_3way_var(listener, start_token);
+    f.find_all_paths_3way_var(listener, m_start_token);
     log_info("computed: %u paths, %u entries in hot swaps index"
-             , paths_index->path_idx.size()
-             , paths_index->path_by_lp_idx.size());
+             , paths_index->paths_count()
+             , paths_index->matrix_count());
+}
+
+void TheGraph::clear_paths()
+{
+    paths_index->clear();
 }
 
 TheGraph::PathList TheGraph::find_paths_to_token(const Token *token) const
 {
     PathList result;
-    auto swaps = swap_index
-            ->get<idx::by_dest_token>()
-            .equal_range(token);
-    for (auto i = swaps.first; i != swaps.second; ++i)
-    {
-        const LiquidityPool *pool = (*i)->pool;
-        assert(pool != nullptr);
-        auto paths = paths_index->path_by_lp_idx.equal_range(pool);
-        for (auto j = paths.first; j != paths.second; ++j)
-        {
-            const pathfinder::Path *path = j->second;
-            assert(path != nullptr);
-            for (unsigned k = 0; k < path->size(); ++k)
-            {
-                const OperableSwap *swap = (*path)[k];
-                assert(swap != nullptr);
-                if (swap->tokenDest == token)
-                {
-                    result.emplace_back(path);
-                    break;
-                }
-            }
-        }
-    }
+
+//    auto swaps = swap_index
+//            ->get<idx::by_dest_token>()
+//            .equal_range(token);
+//    for (auto i = swaps.first; i != swaps.second; ++i)
+//    {
+//        const LiquidityPool *pool = (*i)->pool;
+//        assert(pool != nullptr);
+//        auto paths = paths_index->path_by_lp_idx.equal_range(pool);
+//        for (auto j = paths.first; j != paths.second; ++j)
+//        {
+//            const pathfinder::Path *path = j->second;
+//            assert(path != nullptr);
+//            for (unsigned k = 0; k < path->size(); ++k)
+//            {
+//                const OperableSwap *swap = (*path)[k];
+//                assert(swap != nullptr);
+//                if (swap->tokenDest == token)
+//                {
+//                    result.emplace_back(path);
+//                    break;
+//                }
+//            }
+//        }
+//    }
+
     return result;
 }
+
+
+
+
+TheGraph::PathList TheGraph::find_paths_crossing_lp(const LiquidityPool *lp
+                                                    , unsigned max_length
+                                                    , unsigned max_count) const
+{
+    if (m_start_token == nullptr)
+    {
+        throw std::runtime_error("start_token is not set");
+    }
+    PathList result;
+
+    paths_index->get_paths_for_lp(result, lp);
+
+    if (result.empty())
+    {
+        auto finder = std::make_unique<pathfinder::AllPathsCrossingPool>(this);
+        auto callback = [&result, this, lp](auto path) -> bool
+        {
+            auto feedback = paths_index->add_path(path);
+            if (!feedback.added)
+            {
+                delete path;
+            }
+            result.emplace_back(feedback.path);
+            paths_index->connect_path_to_lp(feedback.path, lp);
+            return feedback.added;
+        };
+
+        (*finder)(callback, lp, max_length, max_count);
+
+    }
+
+    return result;
+}
+
 
 static void check_constrants_consistency(TheGraph *g, const PathEvalutionConstraints &c)
 {
     assert(g != nullptr);
-    if (g->start_token == nullptr)
+    if (g->m_start_token == nullptr)
     {
         throw std::runtime_error("TheGraph::start_token not set!!");
     }
     log_debug("evaluate_known_paths() seach of swap opportunities starting");
-    log_debug(" \\__ start_token is %1% (%2%)", g->start_token->symbol, g->start_token->address);
+    log_debug(" \\__ start_token is %1% (%2%)"
+              , g->m_start_token->symbol, g->m_start_token->address);
     if (c.initial_balance > 0)
     {
         log_debug(" \\__ initial_balance is %1% (%2% Weis)"
-                  , g->start_token->fromWei(c.initial_balance)
+                  , g->m_start_token->fromWei(c.initial_balance)
                   , c.initial_balance);
     }
     else {
         log_debug(" \\__ no balance provided. Please set "
                   "initial_balance to a meaningful Wei amount of start_token (%1%)"
-                  , g->start_token->symbol);
+                  , g->m_start_token->symbol);
         return;
     }
     if (c.max_lp_reserves_stress > 0)
@@ -972,7 +1065,7 @@ TheGraph::PathResult TheGraph::evaluate_path(const PathEvalutionConstraints &c
             throw ConstraintViolation();
         }
 
-        assert(token == start_token);
+        assert(token == m_start_token);
     }
 
     return result;
@@ -1111,32 +1204,37 @@ static const TheGraph::Path *m_add_path_ll(TheGraph *g
                                      )
 {
     using namespace pathfinder;
-    const Token *token = m_find_start_token(pools);
+//    const Token *token = m_find_start_token(pools);
 
-    const OperableSwap *oswaps[MAX_PATHS];
-    for (unsigned i = 0; i < size; ++i)
-    {
-        const OperableSwap *os;
-        oswaps[i] = os = m_get_swap(token, pools[i]);
-        assert(os->tokenSrc == token);
-        token = os->tokenDest;
-    }
-    std::unique_ptr<TheGraph::Path> res;
-    switch (PathLength(size))
-    {
-    case PATH_3WAY: res.reset(new TheGraph::Path(oswaps[0], oswaps[1], oswaps[2])); break;
-    case PATH_4WAY: res.reset(new TheGraph::Path(oswaps[0], oswaps[1], oswaps[2], oswaps[3])); break;
-    }
-    assert(res != nullptr);
+//    const OperableSwap *oswaps[MAX_PATHS];
+//    for (unsigned i = 0; i < size; ++i)
+//    {
+//        const OperableSwap *os;
+//        oswaps[i] = os = m_get_swap(token, pools[i]);
+//        assert(os->tokenSrc == token);
+//        token = os->tokenDest;
+//    }
+//    std::unique_ptr<TheGraph::Path> res;
+//    switch (PathLength(size))
+//    {
+//    case PATH_3WAY: res.reset(new TheGraph::Path(oswaps[0], oswaps[1], oswaps[2])); break;
+//    case PATH_4WAY: res.reset(new TheGraph::Path(oswaps[0], oswaps[1], oswaps[2], oswaps[3])); break;
+//    }
+//    assert(res != nullptr);
 
-    auto &idx = g->paths_index->path_idx;
-    auto found = idx.find(res->m_hash);
-    if (found != idx.end())
+//    auto &idx = g->paths_index->path_idx;
+//    auto found = idx.find(res->m_hash);
+//    if (found != idx.end())
+//    {
+//        return found->second;
+//    }
+
+    if (g->m_start_token == nullptr)
     {
-        return found->second;
+        throw std::runtime_error("start_token not set");
     }
 
-    return g->paths_index->add_path(res.release());
+    return g->paths_index->add_path(new Path(g->m_start_token, pools, size)).path;
 }
 
 const TheGraph::Path *TheGraph::add_path(const LiquidityPool *p0
@@ -1203,9 +1301,19 @@ std::size_t TheGraph::pools_count() const
 
 std::size_t TheGraph::paths_count() const
 {
-    return paths_index->path_idx.size();
+    return paths_index->paths_count();
 }
 
+Token *TheGraph::get_start_token() const
+{
+    return m_start_token;
+}
+void TheGraph::set_start_token(Token *token)
+{
+    assert(token != nullptr);
+    m_start_token = token;
+    calc_pools_distance_on_tokens(this);
+}
 
 
 } // namespace model
