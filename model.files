@@ -31,6 +31,8 @@ src/bofh/pathfinder/paths.hpp
 src/bofh/pathfinder/paths.cpp
 src/bofh/pathfinder/finder_all_crossing.hpp
 src/bofh/pathfinder/finder_all_crossing.cpp
+src/bofh/pathfinder/finder_to_token.hpp
+src/bofh/pathfinder/finder_to_token.cpp
 src/3rd-party/hash-library/crc32.cpp
 src/3rd-party/hash-library/crc32.h
 src/3rd-party/hash-library/digest.cpp

@@ -31,10 +31,6 @@ void AllPathsCrossingPool::operator()(Path::listener_t callback
         throw std::runtime_error("graph start_token is not set");
     }
 
-    log_info("find paths crossing %1% and circular against token %2%"
-             , target_pool->tag, start_token->tag
-             );
-
     // allocate a path array large enough to comfortably
     // fit 2x the maximum path length
     auto constexpr bunk_size = MAX_PATHS*2+1;
@@ -63,24 +59,10 @@ void AllPathsCrossingPool::operator()(Path::listener_t callback
         for (auto i=path_begin; i!=path_end; ++i)
         {
             if (!txt.empty()) txt += " - ";
-            txt += strfmt("%1%(%2%,%3%-%4%)", (*i)->tag, *i, (*i)->token0, (*i)->token1);
+            txt += strfmt("%1%(%2%-%3%)", (*i)->tag, (*i)->token0->symbol, (*i)->token1->symbol);
         }
         if (txt.empty()) txt += "empty";
-        log_info("path[%1%] = %2%", path_len(), txt);
-    };
-
-    // return rightmost added LP, if any
-    auto get_rightmost = [&]() -> const LiquidityPool *
-    {
-        if (path_begin != path_end) return path_end[-1];
-        return nullptr;
-    };
-
-    // return leftmost added LP, if any
-    auto get_leftmost = [&]() -> const LiquidityPool *
-    {
-        if (path_begin != path_end) return path_begin[0];
-        return nullptr;
+        log_info("target_lp=%3% path[%1%] = %2%", path_len(), txt, target_pool->tag);
     };
 
     // given the @p lp and one of its affering tokens, return the opposite one
@@ -132,11 +114,8 @@ void AllPathsCrossingPool::operator()(Path::listener_t callback
     auto path_appears_circular = [&]() {
         auto a = path_begin[0];
         auto b = path_end[-1];
-        return
-                a->token0 == b->token0
-                || a->token0 == b->token1
-                || a->token1 == b->token0
-                || a->token1 == b->token1;
+        return (a->token0 == start_token || a->token1 == start_token) &&
+               (b->token0 == start_token || b->token1 == start_token);
     };
 
     // emit the generated path if the current one is valid
@@ -145,18 +124,20 @@ void AllPathsCrossingPool::operator()(Path::listener_t callback
         const auto len = path_len();
         if (len >= MIN_PATHS && len <= MAX_PATHS && path_appears_circular())
         {
-            auto candidate = new Path(start_token, path_begin, len);
-            if(callback(candidate))
-            {
-                count++;
+            try {
+                auto candidate = new Path(start_token, path_begin, len);
+                if(callback(candidate))
+                {
+                    count++;
+                }
+    //            if(callback(Path::reversed(candidate)))
+    //            {
+    //                count++;
+    //            }
+            } catch (...) {
+                log_error("failed path:");
+                print_current_path();
             }
-//            if(callback(Path::reversed(candidate)))
-//            {
-//                count++;
-//            }
-        }
-        else {
-            log_info("unable to emit path (bad size):");
         }
     };
 
@@ -174,6 +155,7 @@ void AllPathsCrossingPool::operator()(Path::listener_t callback
                 // do not backtract on the last added path step
                 continue;
             }
+            log_trace("add> tok %4% %1%(%2%-%3%)", lp->tag, lp->token0->symbol, lp->token1->symbol, token->symbol);
             path_end[-1] = lp;
             auto other = lp_out_token(lp, token);
             if (other == start_token)
@@ -197,26 +179,22 @@ void AllPathsCrossingPool::operator()(Path::listener_t callback
     {
         if (path_len() >= MAX_PATHS) return false;
         path_begin--;
-        std::set<const Token *> revisit;
         for (auto lp: best_to_home(token))
         {
             // do not backtrack
             if (already_in_path(lp)) continue;
 
+            log_trace("add< tok %4% %1%(%2%-%3%)", lp->tag, lp->token0->symbol, lp->token1->symbol, token->symbol);
             path_begin[0] = lp;
-            if (lp->token0 == start_token || lp->token1 == start_token)
+            auto other = lp_out_token(lp, token);
+            if (other == start_token)
             {
                 // found it
                 return true;
             }
             else {
-                auto other = lp_out_token(lp, token);
-                revisit.emplace(other);
+                if (extend_left(other)) return true;
             }
-        }
-        for (auto other: revisit)
-        {
-            if (extend_left(other)) return true;;
         }
         path_begin++;
         return false;
@@ -224,7 +202,6 @@ void AllPathsCrossingPool::operator()(Path::listener_t callback
 
     // add target_pool in the middle of the path array (this prepares it
     // to be populated on the left and/or right side)
-    log_info("placing pool %1% in the path", target_pool->tag);
     path_end[0] = target_pool;
     path_end++;
 
@@ -234,9 +211,6 @@ void AllPathsCrossingPool::operator()(Path::listener_t callback
         // target_pool does not swap start_token. This means that it will
         // NOT traversed first or last in the path sequence. Extend leftmost path
         // of the path in order to reach start_token
-        log_info("target_pool %1% does not swap token %2% directly",
-                 target_pool->tag, start_token->tag);
-        log_info("trying to reach start_token by extending leftmost side of the path");
         auto success = extend_left(
                     target_pool->token0->distance() < target_pool->token1->distance()
                     ? target_pool->token0
@@ -248,9 +222,6 @@ void AllPathsCrossingPool::operator()(Path::listener_t callback
                         , start_token->tag);
             return;
         }
-    }
-    else {
-        log_info("target_pool directly exchanges against start_token");
     }
 
     const Token *continuation_token = nullptr;
@@ -268,8 +239,6 @@ void AllPathsCrossingPool::operator()(Path::listener_t callback
         continuation_token = lp_out_token(target_pool, start_token);
     }
     assert(continuation_token != nullptr);
-    log_info("extending current path on the rightmost side, using token %1% (%2%)",
-             continuation_token->tag, continuation_token->symbol);
     extend_right(continuation_token);
 }
 

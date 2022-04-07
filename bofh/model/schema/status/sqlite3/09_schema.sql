@@ -1,5 +1,5 @@
 CREATE TABLE schema_version(version INT);
-INSERT INTO schema_version(version) VALUES (8);
+INSERT INTO schema_version(version) VALUES (9);
 
 -- List of changes:
 -- 00 initial schema

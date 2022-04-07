@@ -150,12 +150,22 @@ Path::Path(value_type v0
 static PathLength m_connect_swaps_from_lp_sequence(Path::base_t &out
                                                    , const model::Token *start_token
                                                    , const model::LiquidityPool *pools[]
-                                                   , std::size_t size)
+                                                   , std::size_t size
+                                                   , bool allow_bad_paths=false)
 {
     assert(pools != nullptr);
-    if (size < MIN_PATHS || size > MAX_PATHS)
+    if (!allow_bad_paths)
     {
-        m_raise_maybe(false, "bad path length");
+        if (size < MIN_PATHS || size > MAX_PATHS)
+        {
+            m_raise_maybe(false, "bad path length");
+        }
+    }
+    else {
+        if (size > MAX_PATHS)
+        {
+            m_raise_maybe(false, "bad path length");
+        }
     }
     const model::LiquidityPool *prev, *next;
     const model::Token *token = start_token;
@@ -179,7 +189,7 @@ static PathLength m_connect_swaps_from_lp_sequence(Path::base_t &out
         }
     }
 
-    if (token != start_token)
+    if (token != start_token && !allow_bad_paths)
     {
         m_raise_maybe(false, "non-circular");
     }
@@ -192,6 +202,16 @@ Path::Path(const model::Token *start_token, const model::LiquidityPool *pools[],
     type = m_connect_swaps_from_lp_sequence(*this, start_token, pools, size);
     m_hash = m_calcPathHash(*this);
 }
+
+Path::Path(const unconnected_path &
+           , const model::Token *start_token
+           , const model::LiquidityPool *pools[]
+           , std::size_t size)
+{
+    type = m_connect_swaps_from_lp_sequence(*this, start_token, pools, size, true);
+    m_hash = m_calcPathHash(*this);
+}
+
 
 const Path *Path::reversed(const Path *p)
 {

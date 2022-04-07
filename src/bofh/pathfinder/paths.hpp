@@ -112,6 +112,15 @@ struct Path: std::array<const OperableSwap *, MAX_PATHS>
     Path(value_type v0, value_type v1, value_type v2, value_type v3);
     Path(const model::Token *start_token, const model::LiquidityPool *pools[], std::size_t size);
 
+    // special API to build short, unconnected or non-circular paths.
+    // This is only being used to generate partial paths that are necessary to quickly
+    // evaluate exchangeability of an unknown token.
+    struct unconnected_path {};
+    Path(const unconnected_path &
+         , const model::Token *start_token
+         , const model::LiquidityPool *pools[]
+         , std::size_t size);
+
     static const Path *reversed(const Path *p);
 
     /**

@@ -314,7 +314,7 @@ def main():
         for h in getLogger().handlers:
             h.addFilter(filter)
     bofh = Runner(args)
-    bofh.load(calculate_paths=False)
+    bofh.load()
     if args.cli:
         from IPython import embed
         while True:

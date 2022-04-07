@@ -6,6 +6,7 @@ from eth_utils import to_checksum_address
 from hexbytes import HexBytes
 from web3.types import TxReceipt
 
+from bofh.contract import SwapInspection
 from bofh.model.modules.loggers import Loggers
 from bofh.utils.deploy_contract import deploy_contract
 from web3.exceptions import ContractLogicError
@@ -148,8 +149,8 @@ class ContractCalling:
                 fees.append(swap.pool.feesPPM())
         return self.pack_args_payload(pools=pools
                                       , fees=fees
-                                      , initialAmount=initialAmount
-                                      , expectedAmount=expectedAmount
+                                      , initial_amount=initialAmount
+                                      , expected_amount=expectedAmount
                                       , stop_after_pool=stop_after_pool)
 
 
@@ -205,20 +206,5 @@ class ContractCalling:
                                                 self.__args.start_token_address)
         log.info("new contract address is established at %s", self.__args.contract_address)
 
-    @staticmethod
-    def pack_args_payload(pools: list, fees: list, initialAmount: int, expectedAmount: int, stop_after_pool=None):
-        assert len(pools) == len(fees)
-        assert len(pools) <= 4
-        args = []
-        for i, (addr, fee) in enumerate(zip(pools, fees)):
-            val = int(str(addr), 16) | (fee << 160)
-            if stop_after_pool == i:
-                val |= (1 << 180) # set this bit. on Debug contracts, it triggers OPT_BREAK_EARLY
-            args.append(val)
-        amounts_word = \
-            ((initialAmount & 0xffffffffffffffffffffffffffffffff) << 0) | \
-            ((expectedAmount & 0xffffffffffffffffffffffffffffffff) << 128)
-        args.append(amounts_word)
-
-        return [args]
+    pack_args_payload = SwapInspection.pack_args_payload
 

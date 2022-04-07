@@ -6,6 +6,7 @@
 #include "../pathfinder/paths.hpp"
 #include "../pathfinder/finder_3way.hpp"
 #include "../pathfinder/finder_all_crossing.hpp"
+#include "../pathfinder/finder_to_token.hpp"
 #if !defined(NOPYTHON) || !NOPYTHON
 #include <boost/python/extract.hpp>
 #include <boost/python/str.hpp>
@@ -580,10 +581,10 @@ const LiquidityPool *TheGraph::add_lp_ll(datatag_t tag
     // create OperableSwap objects
     lp->swaps[0] = OperableSwap::make(token0, token1, lp);
     lp->swaps[1] = OperableSwap::make(token1, token0, lp);
-    for (auto os: lp->swaps)
-    {
-        swap_index->emplace(os);
-    }
+    // for (auto os: lp->swaps)
+    // {
+    //     swap_index->emplace(os);
+    // }
 
     return lp;
 }
@@ -770,32 +771,18 @@ void TheGraph::clear_paths()
 
 TheGraph::PathList TheGraph::find_paths_to_token(const Token *token) const
 {
+    assert(token != nullptr);
     PathList result;
+    constexpr auto max_found = 10;
 
-//    auto swaps = swap_index
-//            ->get<idx::by_dest_token>()
-//            .equal_range(token);
-//    for (auto i = swaps.first; i != swaps.second; ++i)
-//    {
-//        const LiquidityPool *pool = (*i)->pool;
-//        assert(pool != nullptr);
-//        auto paths = paths_index->path_by_lp_idx.equal_range(pool);
-//        for (auto j = paths.first; j != paths.second; ++j)
-//        {
-//            const pathfinder::Path *path = j->second;
-//            assert(path != nullptr);
-//            for (unsigned k = 0; k < path->size(); ++k)
-//            {
-//                const OperableSwap *swap = (*path)[k];
-//                assert(swap != nullptr);
-//                if (swap->tokenDest == token)
-//                {
-//                    result.emplace_back(path);
-//                    break;
-//                }
-//            }
-//        }
-//    }
+    auto finder = std::make_unique<pathfinder::PathsToToken>(this);
+    auto callback = [&result](auto path) -> bool
+    {
+        result.emplace_back(path);
+        return true;
+    };
+
+    (*finder)(callback, token, pathfinder::MAX_PATHS);
 
     return result;
 }

@@ -1,6 +1,12 @@
 from asyncio import get_event_loop
+from collections import defaultdict
 from functools import lru_cache
+from time import time
 
+from eth_utils import to_checksum_address
+from web3.exceptions import ContractLogicError
+
+from bofh.contract import SwapInspection
 from bofh.utils.config_data import BOFH_START_TOKEN_ADDRESS, BOFH_CONTRACT_ADDRESS, BOFH_WALLET_ADDRESS, \
     BOFH_STATUS_DB_DSN, BOFH_WEB3_RPC_URL, BOFH_MAX_WORKERS
 from bofh.utils.misc import progress_printer
@@ -112,20 +118,37 @@ class Runner(TheGraph
         ContractCalling.__init__(self, args=self.args)
         TheGraph.__init__(self, self.db)
 
+    def __sql_tokens_requiring_fee_detection(self, neighbour_token=None):
+        if neighbour_token is None:
+            neighbour_token = self.graph.get_start_token()
+        assert neighbour_token is not None
+        return f"""
+        WHERE NOT disabled 
+        AND fees_ppm IS NULL 
+        AND fees_read_attempt = 0
+        AND (
+            id IN (SELECT token1_id FROM pools WHERE token0_id = {neighbour_token.tag}) 
+            OR 
+            id in (SELECT token0_id FROM pools WHERE token1_id = {neighbour_token.tag})
+        )"""
+
+    def preload(self):
+        try:
+            self.__preloaded
+        except AttributeError:
+            self.load(load_reserves=False)
+            self.__preloaded = 1
+
     @lru_cache
     def tokens_requiring_fees_ctr(self):
         with self.db as curs:
-            return curs.execute("SELECT COUNT(1) FROM tokens "
-                                "WHERE NOT disabled AND "
-                                " NOT is_stabletoken AND"
-                                "      fees_ppm IS NULL ").get_int()
+            return curs.execute("SELECT COUNT(1) FROM tokens " +
+                                self.__sql_tokens_requiring_fee_detection()).get_int()
 
     def tokens_requiring_fees(self):
         with self.db as curs:
-            for i in curs.execute("SELECT address FROM tokens "
-                                  "WHERE NOT disabled AND "
-                                  " NOT is_stabletoken AND"
-                                  "      fees_ppm IS NULL ").get_all():
+            for i in curs.execute("SELECT id FROM tokens "
+                                  + self.__sql_tokens_requiring_fee_detection()).get_all():
                 yield i[0]
 
     @lru_cache
@@ -135,7 +158,8 @@ class Runner(TheGraph
                                 "WHERE NOT disabled AND ("
                                 "      symbol   IS NULL "
                                 "   OR name     IS NULL "
-                                "   OR decimals IS NULL )").get_int()
+                                "   OR decimals IS NULL ) "
+                                "AND NOT fees_read_attempt").get_int()
 
     def tokens_requiring_update(self):
         with self.db as curs:
@@ -143,33 +167,111 @@ class Runner(TheGraph
                                   "WHERE NOT disabled AND ("
                                   "      symbol   IS NULL "
                                   "   OR name     IS NULL "
-                                  "   OR decimals IS NULL )").get_all():
+                                  "   OR decimals IS NULL ) "
+                                  "AND NOT fees_read_attempt").get_all():
                 yield i[0]
 
     def read_token_fees(self):
+        self.preload()
+        self.error_map = defaultdict(lambda: 0)
         tokens_requiring_fees_ctr = self.tokens_requiring_fees_ctr()
         if not tokens_requiring_fees_ctr:
             self.log.info("no tokens requiring fee discovery")
             return
         self.log.info("%r tokens require fee discovery. Preloading the knowledge graph...", tokens_requiring_fees_ctr)
-        #from IPython import embed
-        #embed()
-        self.load(load_reserves=False)
         progress = progress_printer(tokens_requiring_fees_ctr
-                                    , "fetching token fees {percent}% ({count} of {tot}"
+                                    , "fetching token fees {percent}% ({count} of {tot} ({failed} failed)"
                                       " eta={expected_secs:.0f}s at {rate:.0f} items/s) ..."
                                     , on_same_line=True)
-        missing_ctr = 0
-        for addr in list(self.tokens_requiring_fees()):
-            t = self.graph.lookup_token(addr)
-            paths = list(self.graph.find_paths_to_token(t))
-            progress()
-            return
-            if not paths:
-                missing_ctr+=1
+        failed = 0
+        dataset = list(self.tokens_requiring_fees())
+        with self.db as curs, open("report.txt", "w") as fd:
+            for id in dataset:
+                if progress(failed=failed):
+                    self.db.commit()
+                t = self.graph.lookup_token(id)
+                curs.execute("UPDATE tokens SET fees_read_attempt = ? WHERE id = ?", (int(time()), t.tag,))
+                paths = list(self.graph.find_paths_to_token(t))
+                if not paths:
+                    self.log.warning("unable to cross token %r (%s). marking it as non-crossable", t.tag, t.symbol)
+                    failed+=1
+                    continue
+                ok, _, fee_or_err = self.__test_paths(fd, t, paths)
+                if not ok:
+                    error = max(set(fee_or_err), key=fee_or_err.count)
+                    self.log.warning("Unable to operate any exchange against token %r (%s): %s"
+                                     , t.tag, t.symbol, error)
+                    failed+=1
+                    continue
+                fee = fee_or_err
+                assert isinstance(fee, int)
+                try:
+                    if fee < 0:
+                        # go gad on inflationary tokens
+                        raise OverflowError
+                    curs.execute("UPDATE tokens SET fees_ppm = ? WHERE id = ?", (fee, t.tag))
+                except OverflowError:
+                    # I have seen this happen: a token so broken it yields a crazy fee that won't fit
+                    # in an SQLite INT. Let's just mark it as bad and move on.
+                    failed += 1
+                    continue
         self.log.info("out of %u known tokens, %u have no known paths to cross them"
                       , self.graph.tokens_count()
-                      , missing_ctr)
+                      , failed)
+        print(self.error_map)
+        self.log.info("error stats:")
+        for k, v in self.error_map.items():
+            print(f" - {k} --> {v} occurrences")
+
+    def __test_paths(self, fd, token, paths):
+        start_token = self.graph.lookup_token(self.args.start_token_address)
+        if not start_token:
+            raise RuntimeError("unable to lookup token entity: %r" % self.args.start_token_address)
+        address = self.args.contract_address
+        token_balance = self.getTokenBalance(address, start_token)
+        if not token_balance:
+            raise RuntimeError("test contract %s has no token funding" % address)
+        errors = list()
+        for path in paths:
+            ok, err, data = self.__inspect_path(path, initial_amount=10**18)
+            if ok:
+                assert (data
+                        and isinstance(data, list)
+                        and isinstance(data[-1], SwapInspection)
+                        and data[-1].tokenOut == str(token.address)
+                        )
+                si = data[-1]
+                return True, token, self.__calc_token_trasfer_fee(transferredAmountOut=si.transferredAmountOut
+                                                                  , measuredAmountOut=si.measuredAmountOut)
+            else:
+                self.error_map[err] += 1
+                errors.append(err)
+        return False, token, errors
+
+    def __inspect_path(self, path, initial_amount):
+        try:
+            c_address = to_checksum_address(self.args.contract_address)
+            w_address = to_checksum_address(self.args.wallet_address)
+            call_args = SwapInspection.inspection_calldata(path=path, initial_amount=initial_amount)
+            out = self.call(function_name="swapinspect"
+                      , from_address=w_address
+                      , to_address=c_address
+                      , call_args=call_args)
+            return True, None, SwapInspection.from_output(out)
+        except ContractLogicError as err:
+            txt = str(err)
+            txt = txt.replace("Pancake: ", "")
+            txt = txt.replace("BOFH:", "")
+            txt = txt.replace("execution reverted:", "")
+            txt = txt.strip()
+            return False, txt, 0
+
+    def __calc_token_trasfer_fee(self, transferredAmountOut, measuredAmountOut):
+        assert isinstance(transferredAmountOut, int)
+        assert isinstance(measuredAmountOut, int)
+        missing = transferredAmountOut-measuredAmountOut
+        return int(1000000 * missing / transferredAmountOut)
+
 
     def read_token_names(self):
         self.log.info("fetching token names...")

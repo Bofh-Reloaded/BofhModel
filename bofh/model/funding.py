@@ -156,7 +156,7 @@ class Funding(ContractCalling, TheGraph):
                   , to_address=c_address)
         ]
         for c in calls:
-            print(self.call(**c))
+            self.call(**c)
         log.debug("preflight check passed")
 
         log.info("this transfer would move %0.4f%% of current wallet %s balance to the contract", (amount/w_balance)*100, token.symbol)
@@ -191,6 +191,8 @@ class Funding(ContractCalling, TheGraph):
 
     def status(self):
         token = self.graph.lookup_token(self.args.token)
+        if not token:
+            raise RuntimeError("unable to lookup token entity: %r" % self.args.token)
         address = self.args.contract_address
         coin_balance = self.getCoinBalance(address)
         token_balance = self.getTokenBalance(address, token)

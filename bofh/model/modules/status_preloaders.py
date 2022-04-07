@@ -11,7 +11,7 @@ class EntitiesPreloader:
     def __init__(self):
         self.pool_addresses = set()
 
-    def load(self, load_start_token=True, load_pools=True, calculate_paths=True, load_reserves=True):
+    def load(self, load_start_token=True, load_pools=True, load_reserves=True):
         log = Loggers.preloader
         self.preload_exchanges()
         self.preload_tokens()
@@ -28,8 +28,8 @@ class EntitiesPreloader:
             else:
                 log.info("start_token is %s (%s)", start_token.symbol, start_token.address)
                 self.graph.set_start_token(start_token)
-        if calculate_paths:
-            self.graph.calculate_paths()
+        #if calculate_paths:
+        #    self.graph.calculate_paths()
         log.info("  ********************************************")
         log.info("  ***  KNOWLEDGE GRAPH LOAD COMPLETED :-)  ***")
         log.info("  ********************************************")

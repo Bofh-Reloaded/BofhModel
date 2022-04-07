@@ -8,14 +8,13 @@ namespace pathfinder {
 /**
  * Find all paths that cross a specific pool
  */
-struct AllPathsCrossingPool
+struct PathsToToken
 {
-    AllPathsCrossingPool(const model::TheGraph *graph): m_graph(graph) {}
+    PathsToToken(const model::TheGraph *graph): m_graph(graph) {}
 
     void operator()(Path::listener_t callback
-                    , const model::LiquidityPool *pool
+                    , const model::Token *token
                     , unsigned max_length
-                    , unsigned max_count
                     ) const;
 
     const model::TheGraph *m_graph;

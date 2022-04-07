@@ -358,7 +358,8 @@ class StatusScopedCursor(BasicScopedCursor):
                            ", SUBSTR(COALESCE(symbol, ''), 0, ?)"
                            ", decimals"
                            ", is_stabletoken"
-                           ", fees_ppm IS NOT NULL, COALESCE(fees_ppm, 0) "
+                           ", fees_ppm IS NOT NULL"
+                           ", COALESCE(fees_ppm, 0) "
                            "FROM tokens ")
 
     def list_tokens(self):

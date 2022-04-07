@@ -1,5 +1,5 @@
 CREATE TABLE schema_version(version INT);
-INSERT INTO schema_version(version) VALUES (10);
+INSERT INTO schema_version(version) VALUES (11);
 
 -- List of changes:
 -- 00 initial schema
@@ -22,7 +22,8 @@ CREATE TABLE tokens(
     decimals INT DEFAULT NULL,
     symbol TEXT DEFAULT NULL,
     fees_ppm INT DEFAULT NULL,
-    disabled INT NOT NULL DEFAULT 0
+    disabled INT NOT NULL DEFAULT 0,
+    fees_read_attempt INT NOT NULL DEFAULT 0
 );
 
 
