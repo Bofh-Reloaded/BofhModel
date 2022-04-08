@@ -239,6 +239,18 @@ LiquidityPool::LiquidityPool(datatag_t tag_
     token1->m_pools.emplace_back(this);
 }
 
+LiquidityPool::LiquidityPool(const ephemeral_clone_with_predicted_state&
+                             , const LiquidityPool &o)
+    : Entity(TYPE_LP, o.tag, o.address, o.parent),
+      exchange(o.exchange),
+      token0(o.token0),
+      token1(o.token1)
+{
+    assert(exchange != nullptr);
+    assert(token0 != nullptr);
+    assert(token1 != nullptr);
+}
+
 
 std::string LiquidityPool::get_name() const
 {
@@ -323,12 +335,9 @@ void LiquidityPool::set_predicted_reserves(unsigned key
     {
         auto n = m_predicted_state.emplace(std::piecewise_construct
                                            , std::forward_as_tuple(key)
-                                           , std::forward_as_tuple(tag
-                                                                   , address
-                                                                   , parent
-                                                                   , exchange
-                                                                   , token0
-                                                                   , token1));
+                                           , std::forward_as_tuple(
+                                               ephemeral_clone_with_predicted_state()
+                                               , *this));
         i = n.first;
         parent->predicted_snapshot_idx.emplace(key, this);
     }
@@ -811,14 +820,26 @@ TheGraph::PathList TheGraph::find_paths_crossing_lp(const LiquidityPool *lp
             if (!feedback.added)
             {
                 delete path;
+                path = nullptr;
             }
             result.emplace_back(feedback.path);
             paths_index->connect_path_to_lp(feedback.path, lp);
+
+            if (path != nullptr)
+            {
+                path = Path::reversed(path);
+                feedback = paths_index->add_path(path);
+                if (!feedback.added)
+                {
+                    delete path;
+                }
+                result.emplace_back(feedback.path);
+                paths_index->connect_path_to_lp(feedback.path, lp);
+            }
             return feedback.added;
         };
 
         (*finder)(callback, lp, max_length, max_count);
-
     }
 
     return result;
@@ -1065,16 +1086,23 @@ TheGraph::PathResultList TheGraph::evaluate_paths_of_interest(const PathEvalutio
     check_constrants_consistency(this, c);
     TheGraph::PathResultList res;
 
+    unsigned path_discovery_limit = std::numeric_limits<unsigned>::max();
+    if (c.max_paths_per_lp != 0)
+    {
+        path_discovery_limit = c.max_paths_per_lp;
+    }
+    unsigned max_path_len = pathfinder::MAX_PATHS;
+    if (c.max_path_len != 0) max_path_len = c.max_path_len;
 
     auto range = predicted_snapshot_idx.equal_range(prediction_snapshot_key);
     for (auto iter = range.first; iter != range.second; ++iter)
     {
         auto pool = iter->second;
-        auto r = paths_index->path_by_lp_idx.equal_range(pool);
-        for (auto i = r.first; i != r.second; i++)
+
+        auto paths = find_paths_crossing_lp(pool, max_path_len, path_discovery_limit);
+        for (auto path: paths)
         {
             try {
-                const pathfinder::Path *path = i->second;
                 auto attack_plan = evaluate_path(c, path, prediction_snapshot_key);
                 if (attack_plan.failed) continue;
                 assert(attack_plan.final_token() != nullptr);
@@ -1225,6 +1253,12 @@ static const TheGraph::Path *m_add_path_ll(TheGraph *g
 }
 
 const TheGraph::Path *TheGraph::add_path(const LiquidityPool *p0
+                                         , const LiquidityPool *p1)
+{
+    const LiquidityPool *pools[] = {p0, p1};
+    return m_add_path_ll(this, pools, sizeof(pools)/sizeof(pools[0]));
+}
+const TheGraph::Path *TheGraph::add_path(const LiquidityPool *p0
                                          , const LiquidityPool *p1
                                          , const LiquidityPool *p2)
 {
@@ -1240,6 +1274,13 @@ const TheGraph::Path *TheGraph::add_path(const LiquidityPool *p0
     return m_add_path_ll(this, pools, sizeof(pools)/sizeof(pools[0]));
 }
 
+const TheGraph::Path *TheGraph::add_path(datatag_t p0
+                               , datatag_t p1)
+{
+    return add_path(lookup_lp(p0)
+                    , lookup_lp(p1)
+                    );
+}
 const TheGraph::Path *TheGraph::add_path(datatag_t p0
                                , datatag_t p1
                                , datatag_t p2)

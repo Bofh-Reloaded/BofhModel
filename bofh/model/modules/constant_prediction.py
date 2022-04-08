@@ -54,6 +54,8 @@ class ConstantPrediction:
         # await self.polling_started.wait()
         if constraint is None:
             constraint = self.get_constraints()
+        constraint.max_paths_per_lp = 1000
+        constraint.max_path_len = 3
 
         log.info("entering prediction polling loop...")
         server = Server(self.args.web3_rpc_url)
@@ -65,6 +67,7 @@ class ConstantPrediction:
 
         events = 0
         attacks = 0
+        stop_after_attacks = 1
         blockNumber = 0
 
         try:
@@ -105,11 +108,14 @@ class ConstantPrediction:
                                                                          , contract=contract
                                                                          , origin="pred")
                                 if new_entry:
+                                    if stop_after_attacks and attacks >= stop_after_attacks:
+                                        continue
                                     attacks += 1
-                                    self.execute_attack(attack_plan.tag)
+                                    self.execute_attack(attack_plan)
                                 else:
-                                    log.debug("match having path id %r is already in mute_cache. "
-                                              "activation inhibited", attack_plan.id())
+                                    pass
+                                    #log.debug("match having path id %r is already in mute_cache. "
+                                    #          "activation inhibited", attack_plan.id())
                         except:
                             log.exception("Error during execution of TheGraph::evaluate_paths_of_interest()")
                     finally:

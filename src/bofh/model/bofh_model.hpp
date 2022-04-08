@@ -240,6 +240,14 @@ struct LiquidityPool: Entity, Ref<LiquidityPool>
                   , Token* token0_
                   , Token* token1_);
 
+    // specialized constructor that is only used to temporarily represent LPs
+    // in their future predicted state.
+    struct ephemeral_clone_with_predicted_state {};
+    LiquidityPool(const ephemeral_clone_with_predicted_state&
+                  , const LiquidityPool &o);
+
+
+
     void setReserves(const balance_t &reserve0, const balance_t &reserve1);
     const balance_t getReserve(const Token *token) const noexcept;
     reserves_ref getReserves() const noexcept;
@@ -468,12 +476,16 @@ struct TheGraph: boost::noncopyable, Ref<TheGraph>
     const Path *lookup_path(std::size_t id) const;
     const Path *lookup_path(std::size_t id, bool fetch_if_missing) const;
     const Path *add_path(const LiquidityPool *p0
+                         , const LiquidityPool *p1);
+    const Path *add_path(const LiquidityPool *p0
                          , const LiquidityPool *p1
                          , const LiquidityPool *p2);
     const Path *add_path(const LiquidityPool *p0
                          , const LiquidityPool *p1
                          , const LiquidityPool *p2
                          , const LiquidityPool *p3);
+    const Path *add_path(datatag_t p0
+                         , datatag_t p1);
     const Path *add_path(datatag_t p0
                          , datatag_t p1
                          , datatag_t p2);

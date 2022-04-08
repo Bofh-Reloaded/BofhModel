@@ -328,7 +328,7 @@ class StatusScopedCursor(BasicScopedCursor):
     def get_topic_vals_by_addr(self, addr):
         return self.execute(self.TOKENS_SELECT_TUPLE + "WHERE address = ?", (self.MAX_TOKEN_NAME_LEN, self.MAX_TOKEN_SYMBOL_LEN, norm_address(addr),)).get()
 
-    def get_lp_vals_by_addr(self, id):
+    def get_lp_vals(self, id):
         return self.execute("SELECT id, address, exchange_id, token0_id, token1_id"
                             ", fees_ppm IS NOT NULL, COALESCE(fees_ppm, 0) "
                             "FROM pools WHERE id = ?", (id,)).get()
@@ -349,8 +349,13 @@ class StatusScopedCursor(BasicScopedCursor):
                                 "   SELECT MAX(id) FROM attacks WHERE path_id = ?) "
                                 "ORDER BY id", (str(path_hash),)).get_all())
 
-    def count_tokens(self):
-        return self.execute("SELECT COUNT(1) FROM tokens WHERE NOT disabled").get_int()
+    def count_tokens(self, include_disabled=True, only_inspected_tokens=False):
+        sql = "SELECT COUNT(1) FROM tokens WHERE 1=1"
+        if not include_disabled:
+            sql += " AND NOT disabled"
+        if only_inspected_tokens:
+            sql += " AND fees_ppm IS NOT NULL"
+        return self.execute(sql).get_int()
 
     TOKENS_SELECT_TUPLE = ("SELECT id"
                            ", address"
@@ -362,8 +367,13 @@ class StatusScopedCursor(BasicScopedCursor):
                            ", COALESCE(fees_ppm, 0) "
                            "FROM tokens ")
 
-    def list_tokens(self):
+    def list_tokens(self, include_disabled=True, only_inspected_tokens=False):
         assert self.conn is not None
+        sql = self.TOKENS_SELECT_TUPLE + "WHERE 1=1"
+        if not include_disabled:
+            sql += " AND NOT disabled"
+        if only_inspected_tokens:
+            sql += " AND fees_ppm IS NOT NULL"
         self.execute(self.TOKENS_SELECT_TUPLE + "WHERE NOT disabled", (self.MAX_TOKEN_NAME_LEN, self.MAX_TOKEN_SYMBOL_LEN))
             # note: using COALESCE() bc many tokens simply does not have, nor will have, a known name
             # The token name is just used for logging purposes though. It's just a human label attribute.

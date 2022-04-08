@@ -204,7 +204,57 @@ class Runner(TheGraph
                 log.debug("match having path id %r is already in mute_cache. "
                           "activation inhibited", attack_plan.id())
 
+    def preflight_check(self, attack_plan):
+        try:
+            c_address = to_checksum_address(self.args.contract_address)
+            w_address = to_checksum_address(self.args.wallet_address)
+            call_args = self.path_attack_payload(attack_plan=attack_plan
+                                                 , allow_net_losses=False
+                                                 , allow_break_even=True)
+            final_amount = self.call(function_name="multiswapd"
+                      , from_address=w_address
+                      , to_address=c_address
+                      , call_args=call_args)
+            return True, None, final_amount
+
+        except ContractLogicError as err:
+            txt = str(err)
+            if txt.find(":") > 0:
+                txt = txt.split(":", 1)[1]
+            txt = txt.strip()
+            return False, txt, 0
+
     def execute_attack(self, attack_plan):
+        good, err, final_amount = self.preflight_check(attack_plan)
+        if not good:
+            return good, err, final_amount
+        try:
+            log.info("engaging execution of attack %r, path id %r --> %s ..."
+                     , attack_plan.tag
+                     , attack_plan.id()
+                     , attack_plan.path.get_symbols() )
+            c_address = to_checksum_address(self.args.contract_address)
+            w_address = to_checksum_address(self.args.wallet_address)
+            call_args = self.path_attack_payload(attack_plan=attack_plan
+                                                 , allow_net_losses=False
+                                                 , allow_break_even=True)
+            txRecepit = self.transact_and_wait(function_name="multiswapd"
+                      , from_address=w_address
+                      , to_address=c_address
+                      , call_args=call_args)
+            return True, txRecepit
+        except ContractLogicError as err:
+            txt = str(err)
+            if txt.find(":") > 0:
+                txt = txt.split(":", 1)[1]
+            txt = txt.strip()
+            return False, txt
+
+    def execute_attack_(self, attack_plan):
+        good, err, final_amount = self.preflight_check(attack_plan)
+        if good:
+            pass
+
         return
         try:
             with self.attacks_db as curs:
@@ -314,7 +364,7 @@ def main():
         for h in getLogger().handlers:
             h.addFilter(filter)
     bofh = Runner(args)
-    bofh.load()
+    bofh.load(only_inspected_tokens=True)
     if args.cli:
         from IPython import embed
         while True:

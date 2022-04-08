@@ -136,7 +136,10 @@ class Runner(TheGraph
         try:
             self.__preloaded
         except AttributeError:
-            self.load(load_reserves=False)
+            self.load(load_reserves=False
+                      , ignore_existing_tokens=True
+                      , include_disabled_tokens=True
+                      , ignore_bad_pools=True)
             self.__preloaded = 1
 
     @lru_cache
@@ -185,7 +188,7 @@ class Runner(TheGraph
                                     , on_same_line=True)
         failed = 0
         dataset = list(self.tokens_requiring_fees())
-        with self.db as curs, open("report.txt", "w") as fd:
+        with self.db as curs:
             for id in dataset:
                 if progress(failed=failed):
                     self.db.commit()
@@ -196,7 +199,7 @@ class Runner(TheGraph
                     self.log.warning("unable to cross token %r (%s). marking it as non-crossable", t.tag, t.symbol)
                     failed+=1
                     continue
-                ok, _, fee_or_err = self.__test_paths(fd, t, paths)
+                ok, _, fee_or_err = self.__test_paths(t, paths)
                 if not ok:
                     error = max(set(fee_or_err), key=fee_or_err.count)
                     self.log.warning("Unable to operate any exchange against token %r (%s): %s"
@@ -223,7 +226,7 @@ class Runner(TheGraph
         for k, v in self.error_map.items():
             print(f" - {k} --> {v} occurrences")
 
-    def __test_paths(self, fd, token, paths):
+    def __test_paths(self, token, paths):
         start_token = self.graph.lookup_token(self.args.start_token_address)
         if not start_token:
             raise RuntimeError("unable to lookup token entity: %r" % self.args.start_token_address)
@@ -271,7 +274,6 @@ class Runner(TheGraph
         assert isinstance(measuredAmountOut, int)
         missing = transferredAmountOut-measuredAmountOut
         return int(1000000 * missing / transferredAmountOut)
-
 
     def read_token_names(self):
         self.log.info("fetching token names...")

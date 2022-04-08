@@ -206,5 +206,5 @@ class ContractCalling:
                                                 self.__args.start_token_address)
         log.info("new contract address is established at %s", self.__args.contract_address)
 
-    pack_args_payload = SwapInspection.pack_args_payload
+    pack_args_payload = staticmethod(SwapInspection.pack_args_payload)
 

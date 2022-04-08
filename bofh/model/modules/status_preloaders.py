@@ -11,12 +11,20 @@ class EntitiesPreloader:
     def __init__(self):
         self.pool_addresses = set()
 
-    def load(self, load_start_token=True, load_pools=True, load_reserves=True):
+    def load(self, load_start_token=True
+             , load_pools=True
+             , load_reserves=True
+             , only_inspected_tokens=False
+             , ignore_existing_tokens=False
+             , include_disabled_tokens=False
+             , ignore_bad_pools=False):
         log = Loggers.preloader
         self.preload_exchanges()
-        self.preload_tokens()
+        self.preload_tokens(only_inspected_tokens=only_inspected_tokens
+                            , ignore_existing=ignore_existing_tokens
+                            , include_disabled=include_disabled_tokens)
         if load_pools:
-            self.preload_pools()
+            self.preload_pools(ignore_bad_pools=ignore_bad_pools)
             if load_reserves:
                 self.preload_balances()
         if load_start_token:
@@ -45,23 +53,31 @@ class EntitiesPreloader:
                 ctr += 1
         log.info("EXCHANGE set loaded, size is %r items", ctr)
 
-    def preload_tokens(self):
+    def preload_tokens(self, only_inspected_tokens=False
+                       , ignore_existing=False
+                       , include_disabled=False):
         log = Loggers.preloader
         with self.db as curs:
-            ctr = curs.count_tokens()
+            ctr = curs.count_tokens(only_inspected_tokens=only_inspected_tokens
+                                    , include_disabled=include_disabled)
             print_progress = progress_printer(ctr, "preloading tokens {percent}% ({count} of {tot}"
                                                    " eta={eta_hr} at {rate:.0f} items/s) ..."
                                               , on_same_line=True)
             with print_progress:
-                for args in curs.list_tokens():
-                    tok = self.graph.add_token(*args)
+                for id, addr, *args in curs.list_tokens(only_inspected_tokens=only_inspected_tokens
+                                                        , include_disabled=include_disabled):
+                    tok = self.graph.add_token(id, addr, *args)
                     if tok is None:
+                        if ignore_existing:
+                            tok = self.graph.lookup_token(addr)
+                            assert tok is not None
+                            return tok
                         raise RuntimeError(
                             "integrity error: token address is already not of a token: id=%r, %r" % (id, args))
                     print_progress()
             log.info("TOKENS set loaded, size is %r items", print_progress.ctr)
 
-    def preload_pools(self):
+    def preload_pools(self, ignore_bad_pools=False):
         log = Loggers.preloader
         with self.db as curs:
             ctr = curs.count_pools()
@@ -73,11 +89,12 @@ class EntitiesPreloader:
                 for id, address, *args in curs.list_pools():
                     print_progress()
                     pool = self.graph.add_lp(id, address, *args)
-                    if pool is None:
-                        log.debug("integrity error: unable to load: id=%r, %r", id, address)
-                        bad_pools.append([id])
+                    if pool is not None:
+                        self.pool_addresses.add(address)
                         continue
-                    self.pool_addresses.add(address)
+                    if not ignore_bad_pools:
+                        log.debug("integrity error: unable to load pool: id=%r, %r", id, address)
+                        bad_pools.append([id])
                 if bad_pools:
                     curs.mark_pool_disabled_many(bad_pools)
 

@@ -17,7 +17,8 @@ from bofh_model_ext import log_set_level, log_level, log_register_sink
 
 # add bofh.contract/contracts to get_abi() seach path:
 from bofh.utils.config_data import BOFH_ATTACKS_DB_DSN, BOFH_STATUS_DB_DSN, BOFH_WEB3_RPC_URL, BOFH_CONTRACT_ADDRESS, \
-    BOFH_WALLET_ADDRESS, BOFH_WALLET_PASSWD, BOFH_ATTACK_INITIAL_AMOUNT_MIN, BOFH_ATTACK_INITIAL_AMOUNT_MAX
+    BOFH_WALLET_ADDRESS, BOFH_WALLET_PASSWD, BOFH_ATTACK_INITIAL_AMOUNT_MIN, BOFH_ATTACK_INITIAL_AMOUNT_MAX, \
+    BOFH_START_TOKEN_ADDRESS
 
 
 @dataclass
@@ -29,6 +30,7 @@ class Args:
     contract_address: str = BOFH_CONTRACT_ADDRESS
     wallet_address: str = BOFH_WALLET_ADDRESS
     wallet_password: str = BOFH_WALLET_PASSWD
+    start_token_address: str = BOFH_START_TOKEN_ADDRESS
     dry_run: bool = False
     logfile: str = None
     loglevel_runner: str = "INFO"
@@ -98,6 +100,7 @@ Options:
   -v, --verbose                           debug output
   --wallet_address=<address>              funding wallet address. Default is {Args.wallet_address}
   --wallet_password=<pass>                funding wallet address. Default is {Args.wallet_password}
+  --start_token_address=<address>         on-chain address of start token. Default is {Args.start_token_address}
   
   -l, --list                              print LIST of financial attacks.
   When using --list, these options are also apply:
@@ -156,7 +159,9 @@ def prompt(args: Args, msg):
             return True
         raise ManagedAbort("Bailing out due to user choice")
 
+
 class Reserves: pass
+
 
 class Attack(ContractCalling, TheGraph):
     def __init__(self, args: Args):
@@ -171,6 +176,10 @@ class Attack(ContractCalling, TheGraph):
         self.attacks_db.open_and_priming()
         ContractCalling.__init__(self, args=args)
         TheGraph.__init__(self, self.db, attacks_db=self.attacks_db)
+        start_token = self.graph.lookup_token(self.args.start_token_address)
+        if start_token is None:
+            raise RuntimeError("unable to load start_token %s", self.args.start_token_address)
+        self.graph.set_start_token(start_token)
         #if self.args.fetch_reserves:
         #    # override reserves fetch routine
         #    self.graph.set_fetch_lp_reserves_tag_cb(self.fetch_reserves)
@@ -234,7 +243,6 @@ class Attack(ContractCalling, TheGraph):
         if self.args.initial_amount_max:
             res.initial_balance_max = self.args.initial_amount_max
         res.initial_balance = amountIn
-        res.optimal_amount_search_sections=10000
         return res
 
     def evaluate_path(self, attack_id, path, amountIn):
@@ -262,10 +270,10 @@ class Attack(ContractCalling, TheGraph):
 
         if self.args.untouched:
             wheres_or.append("id NOT IN (SELECT fk_attack FROM attack_outcomes)")
-        if self.args.failed:
-            wheres_or.append("id IN (SELECT fk_attack FROM attack_outcomes WHERE outcome = 'failed')")
-        if self.args.successful:
-            wheres_or.append("id IN (SELECT fk_attack FROM attack_outcomes WHERE outcome = 'ok')")
+        #if self.args.failed:
+        #    wheres_or.append("id IN (SELECT fk_attack FROM attack_outcomes WHERE outcome = 'failed')")
+        #if self.args.successful:
+        #    wheres_or.append("id IN (SELECT fk_attack FROM attack_outcomes WHERE outcome = 'ok')")
 
         where = "WHERE 1=1"
         if wheres_or:
@@ -315,7 +323,12 @@ class Attack(ContractCalling, TheGraph):
                         row.append("OK")
                     else:
                         row.append("ERR: %s"%err)
-                table.append(row)
+                    if self.args.successful:
+                        if good:
+                            print(yield_ratio, self.args.yield_min)
+                            table.append(row)
+                    else:
+                        table.append(row)
             if self.args.order_by == "yield":
                 table.sort(key=lambda a: a[3] != "FAIL" and float(a[3]) or 0)
                 if not self.args.asc:
@@ -432,6 +445,7 @@ class Attack(ContractCalling, TheGraph):
                 weis = f" ({amountInIssued} weis)"
             print(f"       |     \\___ the swaps sends in {self.amount_hr(amountInIssued, token_in)}{weis} of {token_in.symbol}")
             if amountInIssued != amountInMeasured:
+                print(amountInIssued, amountInMeasured)
                 if self.args.weis:
                     weis = f" ({amountInMeasured} weis)"
                 print(f"       |     |       \\___ {fees(amountInMeasured, amountInIssued)} of funds are burned in "
@@ -477,20 +491,22 @@ class Attack(ContractCalling, TheGraph):
         path = self.graph.lookup_path(path_id)
         self.describe(attack_id)
         prompt(self.args, f"Execute attack {attack_id}?")
-        initial_token = path.initial_token()
-        constraint = self.get_constraint(initial_token, amountIn)
-        attack_plan = path.estimate(constraint, False)
-        amountIn = int(str(attack_plan.initial_balance()))
-        amountOut = int(str(attack_plan.final_balance()))
-        hr_amountin = self.amount_hr(amountIn, initial_token)
-        hr_amountout = self.amount_hr(amountOut, initial_token)
-        log.info(f"prospected attack balance for attack is {hr_amountin} {initial_token.symbol} ({amountIn} weis), "
-                 f"final balance would be {hr_amountout} {initial_token.symbol}")
+        if False:
+            initial_token = path.initial_token()
+            constraint = self.get_constraint(initial_token, amountIn)
+            attack_plan = path.estimate(constraint, False)
+            amountIn = int(str(attack_plan.initial_balance()))
+            amountOut = int(str(attack_plan.final_balance()))
+            hr_amountin = self.amount_hr(amountIn, initial_token)
+            hr_amountout = self.amount_hr(amountOut, initial_token)
+            log.info(f"prospected attack balance for attack is {hr_amountin} {initial_token.symbol} ({amountIn} weis), "
+                     f"final balance would be {hr_amountout} {initial_token.symbol}")
         res = input(f"Override attack balance? [{amountIn}]")
         if res:
             amountIn = eval(res)
             hr_amountin = self.amount_hr(amountIn, initial_token)
             log.info(f"new attack balance is {hr_amountin} {initial_token.symbol} ({amountIn} weis)")
+        attack_plan = self.evaluate_path(attack_id, path, amountIn=amountIn)
         log.info("performing preflight check...")
         good, err, final_balance = self.preflight_check(attack_plan)
         if not good:

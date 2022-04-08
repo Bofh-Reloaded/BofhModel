@@ -68,6 +68,18 @@ void AllPathsCrossingPool::operator()(Path::listener_t callback
     // given the @p lp and one of its affering tokens, return the opposite one
     auto lp_out_token = [](const LiquidityPool *lp, const Token *in_token)
     {
+        if (lp->token0 != in_token && lp->token1 != in_token)
+        {
+            log_error("broken token-lp connectivity: pool %1%(@%5%) is expected "
+                      "to affer to token %2%(@%6%) but doesn't. "
+                      "Instead it affers to tokens %3%(@%7%) and %4%(@%8%)",
+                      lp->tag, in_token->tag,
+                      lp->token0->tag, lp->token1->tag
+                      ,
+                      lp, in_token,
+                      lp->token0, lp->token1
+                      );
+        }
         assert(lp->token0 == in_token || lp->token1 == in_token);
         return lp->token0 == in_token ? lp->token1 : lp->token0;
     };

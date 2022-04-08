@@ -10,7 +10,7 @@ from bofh.utils.web3 import Web3Connector, JSONRPCConnector, method_id, encode_u
 
 __doc__="""Start model runner.
 
-Usage: bofh.model.download_exchange [options] <exchange_name> <factory_address> <fees_ppm>
+Usage: bofh.model.download_exchange [options] (--all-known | <exchange_name> <factory_address> <fees_ppm>)
 
 options:
   -h  --help
@@ -21,11 +21,13 @@ options:
 """ % (Web3Connector.DEFAULT_URI_WSRPC, optimal_cpu_threads())
 
 from dataclasses import dataclass
-from logging import getLogger, basicConfig
+from logging import getLogger, basicConfig, Filter
 
 from bofh.model.database import ModelDB, StatusScopedCursor
 from bofh.model.modules.graph import TheGraph
 from bofh.model.modules.contract_calls import ContractCalling
+from bofh.model.modules.status_preloaders import EntitiesPreloader
+
 
 @dataclass
 class Args:
@@ -36,6 +38,7 @@ class Args:
     exchange_name: str = None
     factory_address: str = None
     fees_ppm: int = 0
+    all_known: bool = False
 
     @staticmethod
     def default(arg, d, suppress_list=None):
@@ -53,9 +56,10 @@ class Args:
             , verbose=bool(cls.default(args["--verbose"], 0))
             , web3_rpc_url=cls.default(args["--connection_url"], 0)
             , max_workers=int(cls.default(args["-j"], 0))
-            , exchange_name=args["<exchange_name>"]
-            , factory_address=args["<factory_address>"]
-            , fees_ppm=int(args["<fees_ppm>"])
+            , exchange_name=args.get("<exchange_name>")
+            , factory_address=args.get("<factory_address>")
+            , fees_ppm=int(args.get("<fees_ppm>") or 0)
+            , all_known=args.get("--all-known")
         )
 
 
@@ -112,7 +116,7 @@ def do_work(a):
             pass
 
 
-class Runner(TheGraph, ContractCalling):
+class Runner(TheGraph, ContractCalling, EntitiesPreloader):
     log = getLogger(__name__)
 
     def __init__(self, args: Args):
@@ -121,70 +125,103 @@ class Runner(TheGraph, ContractCalling):
         self.db.open_and_priming()
         TheGraph.__init__(self, self.db)
         ContractCalling.__init__(self, self.args)
+        EntitiesPreloader.__init__(self)
 
     def add_unknown_token(self, addr):
         with self.db as curs:
             tag = curs.add_token(addr, ignore_duplicates=True)
-            return self.graph.add_token(tag, addr, "", "", 18, False, 0)
+            return self.graph.add_token(tag, addr, "", "", 18, False, True, 0)
+
+    def new_exchange(self):
+        with self.db as curs:
+            exchange_id = curs.add_exchange(self.args.factory_address, self.args.exchange_name, self.args.fees_ppm, ignore_duplicates=True)
+            yield exchange_id, self.args.exchange_name, self.args.factory_address
+
+    def known_exchanges(self):
+        with self.db as curs:
+            ids = list(curs.execute("SELECT id, name, router_address FROM exchanges ORDER BY id").get_all())
+        for exchange_id, name, factory_address in ids:
+            yield exchange_id, name, factory_address
+
+    def exchange_set(self):
+        if self.args.all_known:
+            for i in self.known_exchanges():
+                yield i
+        else:
+            for i in self.new_exchange():
+                yield i
 
     def __call__(self):
         self.graph.set_fetch_token_addr_cb(self.add_unknown_token)
         class PoolFailed(RuntimeError): pass
         with self.db as curs:
-            exchange_id = curs.add_exchange(self.args.factory_address, self.args.exchange_name, self.args.fees_ppm, ignore_duplicates=True)
-            factory_addr = to_checksum_address(self.args.factory_address)
-            self.log.info("reaching out to factory at address %s", factory_addr)
-            factory = self.w3.eth.contract(address=factory_addr, abi=get_abi("IGenericFactory"))
-            pairs_nr = factory.functions.allPairsLength().call()
-            self.log.info("according to factory, %r pairs exist", pairs_nr)
-            start_nr = curs.get_exchange_pools_count(exchange_id)
-            self.log.info("%r pairs are already in our knowledge graph", start_nr)
-            dl_count = pairs_nr - start_nr
-            if dl_count == 0:
-                self.log.info("no new pools to download")
-                return
+            for exchange_id, name, factory_addr in self.exchange_set():
+                self.log.info("downloading updated data from exchange %s (factory address %s)", name, factory_addr)
+                #exchange_id = curs.add_exchange(self.args.factory_address,
+                # self.args.exchange_name, self.args.fees_ppm, ignore_duplicates=True)
+                factory_addr = to_checksum_address(factory_addr)
+                factory = self.w3.eth.contract(address=factory_addr, abi=get_abi("IGenericFactory"))
+                pairs_nr = factory.functions.allPairsLength().call()
+                self.log.info("according to factory, %r pairs exist", pairs_nr)
+                start_nr = curs.get_exchange_pools_count(exchange_id)
+                self.log.info("%r pairs are already in our knowledge graph", start_nr)
+                dl_count = pairs_nr - start_nr
+                if dl_count == 0:
+                    self.log.info("no new pools to download")
+                    continue
 
-            with progress_printer(dl_count, "downloading pairs {percent}% ({count} of {tot}"
-                                            " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
-                                            , on_same_line=True) as progress:
-                with Web3PoolExecutor(
-                        connection_uri=self.args.web3_rpc_url
-                        , max_workers=self.args.max_workers) as executor:
-                    def sequence():
-                        for i in range(start_nr, pairs_nr):
-                            yield factory_addr, i, False
-                    for res in executor.map(do_work, sequence(), chunksize=100):
-                        try:
-                            if progress():
-                                self.db.commit()
-                            if not res:
-                                # the call failed
-                                continue
-                            pool_id, pool_addr, token0, token1, reserve0, reserve1, blocknr = res
-                            if token0 == token1:
-                                self.log.warning("pool %s appears to be circular on token %s: skipped", pool_addr,
-                                                 token0)
-                                continue
-                            tids = []
-                            for addr in token0, token1:
-                                tok = self.graph.lookup_token(addr)
-                                if tok is None:
-                                    raise PoolFailed(pool_addr)
-                                tids.append(tok.tag)
-                            curs.add_swap(address=pool_addr
-                                                , exchange_id=exchange_id
-                                                , token0_id=tids[0]
-                                                , token1_id=tids[1]
-                                                , ignore_duplicates=True)
-                        except PoolFailed as err:
-                            self.log.error("giving up un pool %s due to error", err)
-                            pass
+                with progress_printer(dl_count, "downloading pairs {percent}% ({count} of {tot}"
+                                                " eta={eta_secs:.0f}s at {rate:.0f} items/s) ..."
+                                                , on_same_line=True) as progress:
+                    with Web3PoolExecutor(
+                            connection_uri=self.args.web3_rpc_url
+                            , max_workers=self.args.max_workers) as executor:
+                        def sequence():
+                            for i in range(start_nr, pairs_nr):
+                                yield factory_addr, i, False
+                        for res in executor.map(do_work, sequence(), chunksize=100):
+                            try:
+                                if progress():
+                                    self.db.commit()
+                                if not res:
+                                    # the call failed
+                                    continue
+                                pool_id, pool_addr, token0, token1, reserve0, reserve1, blocknr = res
+                                if token0 == token1:
+                                    self.log.warning("pool %s appears to be circular on token %s: skipped", pool_addr,
+                                                     token0)
+                                    continue
+                                tids = []
+                                for addr in token0, token1:
+                                    tok = self.graph.lookup_token(addr)
+                                    if tok is None:
+                                        raise PoolFailed(pool_addr)
+                                    tids.append(tok.tag)
+                                curs.add_swap(address=pool_addr
+                                              , exchange_id=exchange_id
+                                              , token0_id=tids[0]
+                                              , token1_id=tids[1]
+                                              , ignore_duplicates=True)
+                            except PoolFailed as err:
+                                self.log.error("giving up un pool %s due to error", err)
+                                pass
 
 
 def main():
     basicConfig(level="INFO")
     args = Args.from_cmdline(__doc__)
+    import coloredlogs
+    coloredlogs.install(level="DEBUG", datefmt='%Y%m%d%H%M%S')
+    if not getattr(args, "verbose", 0):
+        # limit debug log output to bofh.* loggers
+        filter = Filter(name="bofh")
+        for h in getLogger().handlers:
+            h.addFilter(filter)
     runner = Runner(args)
+    runner.load(load_pools=False
+                , load_reserves=False
+                , include_disabled_tokens=True
+                , load_start_token=False)
     #runner.preload_existing_from_db()
     runner()
 

@@ -253,10 +253,10 @@ std::string Path::get_symbols() const
 
 bool Path::check_consistency(bool no_except) const
 {
-    if (size() < 3)
+    if (size() < MIN_PATHS)
     {
         return m_raise_maybe(no_except
-                             , "path too short. size must be >= 3");
+                             , "path too short. size must be >= 2");
     }
     if (initial_token() != final_token())
     {
@@ -332,17 +332,24 @@ PathResult Path::evaluate(const PathEvalutionConstraints &c
         }
 
         balance_t current_balance = c.initial_balance;
-        unsigned int i = 0;
-        auto swap = get(i);
-        assert(swap != nullptr);
-        result.set_issued_balance_before_step(i, current_balance);
-        current_balance = swap->tokenSrc->transferResult(c.initial_balance);
-        result.set_measured_balance_before_step(i, current_balance);
+//        unsigned int i = 0;
+//        auto swap = get(i);
+//        assert(swap != nullptr);
+//        result.set_issued_balance_before_step(i, current_balance);
+//        current_balance = swap->tokenSrc->transferResult(c.initial_balance);
+//        if (current_balance != c.initial_balance)
+//        {
+//            auto txt = strfmt("path enter token %1% has been detected "
+//                              "as deflationary!!", swap->tokenSrc->symbol);
+//            log_error("%1%", txt);
+//            throw std::runtime_error(txt);
+//        }
+//        result.set_measured_balance_before_step(i, current_balance);
 
         // walk the swap path:
-        for (; i < size(); ++i)
+        for (auto i = 0; i < size(); ++i)
         {
-            swap = get(i);
+            auto swap = get(i);
             assert(swap != nullptr);
             auto pool = swap->pool;
             if (prediction_snapshot_key)
@@ -357,7 +364,7 @@ PathResult Path::evaluate(const PathEvalutionConstraints &c
             assert(swap->tokenSrc != nullptr);
 
             result.set_issued_balance_before_step(i, current_balance);
-            current_balance = swap->tokenSrc->transferResult(c.initial_balance);
+            current_balance = swap->tokenSrc->transferResult(current_balance);
             result.set_measured_balance_before_step(i, current_balance);
 
             auto reserves = pool->getReserves();
@@ -377,7 +384,11 @@ PathResult Path::evaluate(const PathEvalutionConstraints &c
                     pool->SwapExactTokensForTokens(swap->tokenSrc
                                                    , current_balance);
             result.set_issued_balance_after_step(i, current_balance);
-            current_balance = swap->tokenDest->transferResult(current_balance);
+            if (i == size()-1)
+            {
+                // last swap: also factor-in final outgoing transfer fees
+                current_balance = swap->tokenDest->transferResult(current_balance);
+            }
             result.set_measured_balance_after_step(i, current_balance);
         }
     }
@@ -394,7 +405,7 @@ PathResult Path::evaluate_max_yield(const PathEvalutionConstraints &c
 {
     auto amount_min = c.initial_balance_min;
     auto amount_max = c.initial_balance_max;
-    const auto gap_min = amount_min / 1000000;
+    const auto gap_min = amount_min / 1000;
     auto c0 = c;
 
     // yield_result represents a gain or a loss if a certain balance amount.

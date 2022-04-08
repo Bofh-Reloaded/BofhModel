@@ -52,11 +52,6 @@ struct PathEvalutionConstraints {
     balance_t initial_balance_max = 0;
 
     /**
-     * @brief optimal_amount_search_sections
-     */
-    unsigned int optimal_amount_search_sections = 1000;
-
-    /**
      * @brief max_lp_reserves_stress
      *
      * specifies the maximum reserves stress that the path
@@ -131,6 +126,24 @@ struct PathEvalutionConstraints {
      * @default 0 (no constraint)
      */
     unsigned int limit=0;
+
+    /**
+     * @brief max path discovery per LP
+     *
+     * limit to the amount of examined paths for each crossed LP.
+     * This can be used to boost time path discovery speed.
+     *
+     * @default 0 (no constraint)
+     */
+    unsigned int max_paths_per_lp = 0;
+
+
+    /**
+     * @brief max number of swaps per path
+     * @default 0 (maximum span)
+     */
+    unsigned int max_path_len=0;
+
 
     void check_consistency() const;
 };
